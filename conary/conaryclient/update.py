@@ -381,12 +381,13 @@ class ClientUpdate:
             if ignorePin:
                 return ( False, ) * len(neededList)
 
-            l = [ (x[0], x[1], x[3]) for x in neededList if x[1] is not None ]
+            l = [ (x[0], x[1][0], x[1][1])
+                        for x in neededList if x[1][0] is not None ]
             l.reverse()
             lockList = self.db.trovesArePinned(l)
             r = []
             for item in neededList:
-                if item[1] is not None:
+                if item[1][1] is not None:
                     r.append(lockList.pop())
                 else:
                     r.append(False)
@@ -607,10 +608,31 @@ class ClientUpdate:
                     newTrv.addTrove(name, newInfo[0], newInfo[1])
 
             finalTrvCs, fileList, neededTroveList = newTrv.diff(oldTrv)
-            for (name, oldVer, newVer, oldFla, newFla) in neededTroveList:
+            for (name, (oldVer, oldFla), (newVer, newFla), isAbs) in \
+                                            neededTroveList:
                 newJob.add((name, (oldVer, oldFla), (newVer, newFla), False))
 
         # def _mergeGroupChanges -- main body begins here
+
+        availableTroves, referencedTroves = self.db.db.getCompleteTroveSet()
+        existsTrv = trove.Trove("@update", versions.NewVersion(), 
+                                deps.DependencySet(), None)
+
+        [ existsTrv.addTrove(*x) for x in availableTroves ]
+        [ existsTrv.addTrove(*x) for x in referencedTroves ]
+
+        availableTrove = trove.Trove("@update", versions.NewVersion(),
+                                     deps.DependencySet(), None)
+        for trvCs in uJob.getTroveSource().csList[0].iterNewTroveList():
+            availableTrove.addTrove(trvCs.getName(), trvCs.getNewVersion(),
+                                    trvCs.getNewFlavor())
+
+        job = availableTrove.diff(existsTrv)[2]
+
+        from conary import lib
+        lib.epdb.st()
+
+        # ---------------- ORIGINAL CODE
             
         # jobQueue is (job, ignorePins)
         jobQueue = []
@@ -823,8 +845,9 @@ class ClientUpdate:
             pinned = _lockedList(neededTroveList, ignorePin)
 
             log.debug("iterating through referenced troves (if any)")
-            for (name, oldVersion, newVersion, oldFlavor, newFlavor), \
-                    oldIsPinned in itertools.izip(neededTroveList, pinned):
+            for (name, (oldVersion, oldFlavor), (newVersion, newFlavor), 
+                            unneededAbsoluteFlag), oldIsPinned \
+                                    in itertools.izip(neededTroveList, pinned):
                 if (name, newVersion, newFlavor) not in alreadyInstalled:
                     if newVersion is None:
                         # add this job to the keeplist to do erase recursion
