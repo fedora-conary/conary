@@ -248,11 +248,13 @@ class ClientUpdate:
         return (depList, suggMap, cannotResolve, changeSetList)
 
     def _processRedirects(self, uJob, jobSet, recurse):
-        # this returns redirectHack, which maps targets of redirections
-        # to the sources of those redirections
+        """
+        Looks for redirects in the change set, and returns a list of troves
+        which need to be included in the update.  This returns redirectHack,
+        which maps targets of redirections to the sources of those 
+        redirections.
+        """
 
-        # Looks for redirects in the change set, and returns a list of
-        # troves which need to be included in the update. 
         troveSet = {}
         redirectHack = {}
 
@@ -964,6 +966,7 @@ class ClientUpdate:
             assert(not notFound)
             uJob.getTroveSource().addChangeSet(cs)
             transitiveClosure.update(cs.getJobSet(primaries = False))
+            splittable = False
             del cs
 
         redirectHack = self._processRedirects(uJob, jobSet, recurse) 
