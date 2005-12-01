@@ -54,6 +54,11 @@ CLIENT_VERSIONS = [ 36, 37 ]
 
 class _Method(xmlrpclib._Method, xmlshims.NetworkConvertors):
 
+    def __init__(self, send, name, host, pwCallback):
+        xmlrpclib._Method.__init__(self, send, name)
+        self.__host = host
+        self.__pwCallback = pwCallback
+
     def __repr__(self):
         return "<netclient._Method(%s, %r)>" % (self._Method__send, self._Method__name) 
 
@@ -63,14 +68,31 @@ class _Method(xmlrpclib._Method, xmlshims.NetworkConvertors):
     def __call__(self, *args):
         return self.doCall(CLIENT_VERSIONS[-1], *args)
 
-    def doCall(self, clientVersion, *args):
-        newArgs = ( clientVersion, ) + args
+    def __doCall(self, clientVersion, argList):
+        newArgs = ( clientVersion, ) + argList
 
-        isException, result = self.__send(self.__name, newArgs)
+        try:
+            isException, result = self.__send(self.__name, newArgs)
+        except xmlrpclib.ProtocolError, e:
+            if e.errcode == 403:
+                raise errors.InsufficientPermission(e.url.split("/")[2])
+                
 	if not isException:
 	    return result
         else:
             self.handleError(result)
+
+    def doCall(self, clientVersion, *args):
+        try:
+            return self.__doCall(clientVersion, args)
+        except errors.InsufficientPermission:
+            # no password was specified -- prompt for it
+            if not self.__pwCallback():
+                raise
+        except:
+            raise
+
+        return self.__doCall(clientVersion, args)
 
     def handleError(self, result):
 	exceptionName = result[0]
@@ -104,8 +126,28 @@ class _Method(xmlrpclib._Method, xmlshims.NetworkConvertors):
 
 class ServerProxy(xmlrpclib.ServerProxy):
 
+    def __passwordCallback(self):
+        if self.__pwCallback is None:
+            return False
+
+        l = self.__host.split('@')
+
+        if len(l) != 2 or l[0][-1] != ':':
+            return False
+
+        password = self.__pwCallback(l[0][:-1], l[1])
+        l[0] = l[0] + password
+        self.__host = '@'.join(l)
+
+        return True
+
     def __getattr__(self, name):
-        return _Method(self.__request, name)
+        return _Method(self.__request, name, self.__host, 
+                       self.__passwordCallback)
+
+    def __init__(self, url, transporter, pwCallback):
+        xmlrpclib.ServerProxy.__init__(self, url, transporter)
+        self.__pwCallback = pwCallback
 
 class ServerCache:
 
@@ -140,6 +182,9 @@ class ServerCache:
 
         userInfo = self.userMap.find(serverName)
 
+        if userInfo and userInfo[1] is None:
+            userInfo = (userInfo[0], "")
+
         if url is None:
             if userInfo is None:
                 url = "http://%s/conary/" % serverName
@@ -155,7 +200,7 @@ class ServerCache:
         protocol, uri = urllib.splittype(url)
         transporter = transport.Transport(https = (protocol == 'https'))
 
-        server = ServerProxy(url, transporter)
+        server = ServerProxy(url, transporter, self.pwPrompt)
         self.cache[serverName] = server
 
         try:
@@ -191,10 +236,11 @@ class ServerCache:
 
 	return server
 
-    def __init__(self, repMap, userMap):
+    def __init__(self, repMap, userMap, pwPrompt):
 	self.cache = {}
 	self.map = repMap
 	self.userMap = userMap
+	self.pwPrompt = pwPrompt
 
 class NetworkRepositoryClient(xmlshims.NetworkConvertors,
 			      repository.AbstractRepository, 
@@ -1287,11 +1333,15 @@ class NetworkRepositoryClient(xmlshims.NetworkConvertors,
             raise errors.CommitError('Error uploading to repository: '
                                      '%s (%s)' %(r.status, r.reason))
 
-    def __init__(self, repMap, userMap, localRepository = None):
+    def __init__(self, repMap, userMap, localRepository = None, 
+                 pwPrompt = None):
         # the local repository is used as a quick place to check for
         # troves _getChangeSet needs when it's building changesets which
         # span repositories. it has no effect on any other operation.
-	self.c = ServerCache(repMap, userMap)
+        if pwPrompt is None:
+            pwPrompt = lambda x, y: None
+
+	self.c = ServerCache(repMap, userMap, pwPrompt)
         self.localRep = localRepository
 
         trovesource.SearchableTroveSource.__init__(self)
