@@ -187,7 +187,7 @@ class DisplayConfig:
         return self.showBuildReqs
 
     def printTroveHeader(self):
-        return self.info or self.showBuildReqs or self.deps or not self.needFiles()
+        return self.info or self.showBuildReqs or self.deps or self.iterTroves() or not self.needFiles()
 
     def printSimpleHeader(self):
         return not self.info and not self.showBuildReqs
@@ -205,7 +205,7 @@ class DisplayConfig:
         return self.info
 
     def printFiles(self):
-        return self.ls or self.ids or self.sha1s or self.tags or self.iterChildren
+        return self.ls or self.ids or self.sha1s or self.tags or self.iterTroves()
 
     def isVerbose(self):
         return not self.iterFiles()
@@ -518,19 +518,14 @@ def displayJobs(dcfg, formatter, jobs, prepare=True, jobNum=0, total=0):
     if jobNum and total:
         print formatter.formatJobNum(index, totalJobs)
     
-    if not dcfg.needTroves():
-        for ln in formatter.formatJobTups(jobs):
-            print ln
+    for job, comps in formatter.compressJobList(jobs):
+        if dcfg.printTroveHeader():
+            for ln in formatter.formatJobHeader(job, comps):
+                print ln
 
-    else:
-        for job, comps in formatter.compressJobList(jobs):
-            if dcfg.printTroveHeader():
-                for ln in formatter.formatJobHeader(job, comps):
-                    print ln
-
-            if dcfg.printFiles():
-                for ln in formatter.formatJobFiles(job):
-                    print ln
+        if dcfg.printFiles():
+            for ln in formatter.formatJobFiles(job):
+                print ln
 
 
 class JobDisplayConfig(DisplayConfig):
