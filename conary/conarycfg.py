@@ -60,7 +60,7 @@ class CfgUserInfoItem(CfgType):
         elif displayOptions.get('hidePasswords'):
             return '%s %s <password>' % (serverGlob, user)
         else:
-            return '%s %s <password>' % (serverGlob, user, password)
+            return '%s %s %s' % (serverGlob, user, password)
 
 class CfgUserInfo(CfgList):
     def __init__(self, default=[]):
@@ -141,7 +141,7 @@ class CfgFingerPrint(CfgType):
         return val
             
     
-CfgInstallLabelPath = CfgLineList(CfgLabel, ' ')
+CfgInstallLabelPath = CfgLineList(CfgLabel)
     
 
 class ConaryContext(ConfigSection):
@@ -166,7 +166,7 @@ class ConaryContext(ConfigSection):
     user                  =  CfgUserInfo
 
     def _resetSigMap(self):
-        self.signatureKeyMap = None
+        self.signatureKeyMap = []
 
     def __init__(self, *args, **kw):
         ConfigSection.__init__(self, *args, **kw)
@@ -196,6 +196,7 @@ class ConaryConfiguration(SectionedConfigFile):
     macros                =  CfgDict(CfgString)
     quiet		  =  CfgBool
     pinTroves		  =  CfgRegExpList
+    pubRing               =  (CfgPathList, ['/etc/conary/pubring.gpg'])
     root                  =  (CfgPath, '/')
     sourceSearchDir       =  (CfgPath, '.')
     threaded              =  (CfgBool, True)
@@ -207,7 +208,6 @@ class ConaryConfiguration(SectionedConfigFile):
                                             '~/.conary/use'))
 
     _sectionType          =  ConaryContext
-
 
     def __init__(self, readConfigFiles=True):
 	SectionedConfigFile.__init__(self)

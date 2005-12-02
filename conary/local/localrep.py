@@ -17,9 +17,8 @@ import sha
 import zlib
 from StringIO import StringIO
 
-from conary import datastore
 from conary.lib import openpgpfile
-from conary.repository import repository
+from conary.repository import errors, repository
 
 class LocalRepositoryChangeSetJob(repository.ChangeSetJob):
 
@@ -74,7 +73,9 @@ class LocalRepositoryChangeSetJob(repository.ChangeSetJob):
 	self.oldFile(pathId, fileId, fileObj)
 
     def checkTroveSignatures(self, trv, threshold, keyCache=None):
-        trv.verifyDigitalSignatures(threshold, keyCache)
+        trust, missingKeys = trv.verifyDigitalSignatures(threshold, keyCache)
+        if missingKeys:
+            raise openpgpfile.KeyNotFound(missingKeys)
 
     # If retargetLocal is set, then localCs is for A->A.local whlie
     # origJob is A->B, so localCs needs to be changed to be B->B.local.
@@ -188,7 +189,7 @@ class SqlDataStore:
             digest = sha.new()
             digest.update(rawData)
             if digest.hexdigest() != hash:
-                raise datastore.IntegrityError
+                raise errors.IntegrityError
 
             cu.execute("INSERT INTO DataStore VALUES(?, 1, ?)",
                        hash, data)

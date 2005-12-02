@@ -18,14 +18,15 @@ import os
 import shutil
 
 #conary
-from conary import datastore, trove, versions
+from conary import trove, versions
 from conary.build import tags
 from conary.callbacks import UpdateCallback
 from conary.conarycfg import RegularExpressionList
 from conary.deps import deps
 from conary.lib import log, util
 from conary.local import localrep, sqldb, schema, update
-from conary.repository import changeset, errors, filecontents, filecontainer
+from conary.repository import changeset, datastore, errors, filecontents, \
+                              filecontainer
 from conary.repository import repository, trovesource
 
 OldDatabaseSchema = schema.OldDatabaseSchema
@@ -637,7 +638,11 @@ class Database(SqlDbRepository):
     # name looks like "r.%d"
     def removeRollback(self, name):
 	rollback = int(name[2:])
-	shutil.rmtree(self.rollbackCache + "/%d" % rollback)
+        try:
+            shutil.rmtree(self.rollbackCache + "/%d" % rollback)
+        except OSError, e:
+            if e.errno == 2:
+                pass
 	if rollback == self.lastRollback:
 	    self.lastRollback -= 1
 	    self.writeRollbackStatus()

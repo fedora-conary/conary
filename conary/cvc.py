@@ -35,6 +35,7 @@ from conary.build import errors as builderrors
 from conary.lib import cfg
 from conary.lib import log
 from conary.lib import openpgpfile
+from conary.lib import openpgpkey
 from conary.lib import options
 from conary.lib import util
 from conary.local import database
@@ -124,6 +125,7 @@ def realMain(cfg, argv=sys.argv):
     cfgMap["build-label"] = "buildLabel"
     cfgMap["signature-key"] = "signatureKey"
     cfgMap["trust-threshold"] = "trustThreshold"
+    cfgMap["pubring"] = "pubRing"
 
     (NO_PARAM,  ONE_PARAM)  = (options.NO_PARAM, options.ONE_PARAM)
     (OPT_PARAM, MULT_PARAM) = (options.OPT_PARAM, options.MULT_PARAM)
@@ -188,6 +190,10 @@ def realMain(cfg, argv=sys.argv):
     # set the build flavor here, just to set architecture information 
     # which is used when initializing a recipe class
     use.setBuildFlagsFromFlavor(None, cfg.buildFlavor, error=False)
+
+    keyCache = openpgpkey.getKeyCache()
+    keyCache.setPublicPath(cfg.pubRing)
+
     if 'profile' in argSet:
 	del argSet['profile']
 	import hotshot
