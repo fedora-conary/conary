@@ -264,6 +264,7 @@ def findOpenPGPKey(server, keyId, pubRing):
                   '--no-mdc-warning', '--no-default-keyring', '--batch',
                   '--no-permission-warning', '--keyserver',
                   '%sgetOpenPGPKey?search=%s' % (server, keyId),
+                  '--keyserver-options', 'timeout=3',
                   '--recv-key', keyId)
     os.wait()
     try:
