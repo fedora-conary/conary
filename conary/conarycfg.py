@@ -167,6 +167,7 @@ class ConaryContext(ConfigSection):
     installLabelPath      =  CfgInstallLabelPath
     name                  =  None
     repositoryMap         =  CfgRepoMap
+    root                  =  CfgPath
     signatureKey          =  CfgFingerPrint
     signatureKeyMap       =  CfgFingerPrintMap
     user                  =  CfgUserInfo
