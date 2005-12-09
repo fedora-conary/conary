@@ -93,6 +93,9 @@ baseMacros = {
     'target'		: '%(targetarch)s-unknown-linux',
     'host'		: '%(targetarch)s-unknown-linux',
     'build'		: '%(targetarch)s-unknown-linux',
+    'buildcc'           : '%(cc)s',
+    'buildcxx'          : '%(cxx)s',
+
 }
 
 crossMacros = {
@@ -598,6 +601,9 @@ class _AbstractPackageRecipe(Recipe):
                  architecture.
         """
         def _parseArch(archSpec):
+            if isinstance(archSpec, deps.DependencySet):
+                return archSpec, None, None
+
             if '-' in archSpec:
                 arch, vendor, hostOs = archSpec.split('-')
             else:

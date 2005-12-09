@@ -1,10 +1,14 @@
 Changes in 0.80.1:
   o Client Changes:
-    * user names and passwords are no longer allowed in repository maps
-      (user configuration entries must be used instead)
+    * User names and passwords are no longer allowed in repository maps;
+      "user" configuration entries must be used instead.
+    * The clone command now allows you to clone a binary onto the same
+      branch, without having to reclone the source.
   o Building packages:
     * Java dependency generation is now enabled; Java dependency enforcement
       is still disabled.
+    * The skipMissingSubDir keyword argument now actually works correctly
+      when the subdirectory is missing.
 
 Changes in 0.80.0:
   o Client Changes:
