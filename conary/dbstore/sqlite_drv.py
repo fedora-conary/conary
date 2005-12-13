@@ -21,7 +21,7 @@ from base_drv import BaseDatabase, BaseCursor
 import sqlerrors
 
 class Cursor(BaseCursor):
-    type = "sqlite"
+    driver = "sqlite"
 
     # this is basically the BaseCursor's execute with special handling
     # for start_transaction
@@ -86,7 +86,7 @@ class Cursor(BaseCursor):
         return ret
 
 class Database(BaseDatabase):
-    type = "sqlite"
+    driver = "sqlite"
     alive_check = "select count(*) from sqlite_master"
     cursorClass = Cursor
     basic_transaction = "begin immediate"

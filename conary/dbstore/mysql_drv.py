@@ -18,7 +18,7 @@ from base_drv import BaseDatabase, BindlessCursor
 import sqlerrors
 
 class Cursor(BindlessCursor):
-    type = "mysql"
+    driver = "mysql"
     def execute(self, sql, *params, **kw):
         if kw.has_key("start_transaction"):
             del kw["start_transaction"]
@@ -36,7 +36,7 @@ class Database(BaseDatabase):
     alive_check = "select version(), current_date()"
     basic_transaction = "begin"
     cursorClass = Cursor
-    type = "mysql"
+    driver = "mysql"
 
     def connect(self, **kwargs):
         assert(self.database)

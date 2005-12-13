@@ -159,7 +159,7 @@ class BaseDatabase:
     alive_check = "select 1 where 1 = 1"
     basic_transaction = "begin transaction"
     cursorClass = BaseCursor
-    type = "base"
+    driver = "base"
 
     def __init__(self, db):
         assert(db)
@@ -297,7 +297,7 @@ class Callable:
 # A class for configuration of a database driver
 class CfgDriver(cfg.CfgType):
 
-    def parseString(self, curVal, str):
+    def parseString(self, str):
         s = str.split()
         if len(s) != 2:
             raise ParseError, "database driver and path expected"
