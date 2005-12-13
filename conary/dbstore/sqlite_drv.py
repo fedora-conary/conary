@@ -21,13 +21,40 @@ from base_drv import BaseDatabase, BaseCursor
 import sqlerrors
 
 class Cursor(BaseCursor):
+    type = "sqlite"
+
+    # this is basically the BaseCursor's execute with special handling
+    # for start_transaction
+    def _execute(self, sql, *args, **kw):
+        assert(len(sql) > 0)
+        assert(self.dbh and self._cursor)
+        self.description = None
+        # force dbi compliance here. we prefer args over the kw
+        if len(args) == 0:
+            return self._cursor.execute(sql, **kw)
+        if len(args) == 1 and isinstance(args[0], dict):
+            kw.update(args[0])
+            return self._cursor.execute(sql, **kw)
+        # special case the start_transaction parameter
+        st = kw.get("start_transaction", True)
+        if kw.has_key("start_transaction"):
+            del kw["start_transaction"]
+        if len(kw):
+            raise sqlerrors.CursorError(
+                "Do not pass both positional and named bind arguments",
+                *args, **kw)
+        if len(args) == 1:
+            return self._cursor.execute(sql, args[0], start_transaction = st)
+        kw["start_transaction"] = st
+        return self._cursor.execute(sql, *args, **kw)
+
     def execute(self, sql, *params, **kw):
         #logMe(3, "SQL:", sql, params, kw)
         try:
             inAutoTrans = False
             if not self.dbh.inTransaction:
                 inAutoTrans = True
-            ret = BaseCursor.execute(self, sql, *params, **kw)
+            ret = self._execute(sql, *params, **kw)
             # commit any transactions which were opened automatically
             # by the sqlite3 bindings and left hanging:
             if inAutoTrans and self.dbh.inTransaction:
@@ -49,6 +76,7 @@ class Database(BaseDatabase):
     alive_check = "select count(*) from sqlite_master"
     cursorClass = Cursor
     basic_transaction = "begin immediate"
+    VIRTUALS = [ ":memory:" ]
 
     def connect(self, timeout=10000):
         assert(self.database)
@@ -63,11 +91,18 @@ class Database(BaseDatabase):
                 raise sqlerrors.DatabaseLocked(e)
             raise
         self.loadSchema()
+        if self.database in self.VIRTUALS:
+            self.inode = (None, None)
+            self.closed = False
+            return True
 	sb = os.stat(self.database)
         self.inode= (sb.st_dev, sb.st_ino)
+        self.closed = False
         return True
 
     def reopen(self):
+        if self.database in self.VIRTUALS:
+            return False
         sb = os.stat(self.database)
         inode= (sb.st_dev, sb.st_ino)
 	if self.inode != inode:
@@ -115,4 +150,12 @@ class Database(BaseDatabase):
         if doAnalyze:
             cu.execute('ANALYZE')
             self.loadSchema()
+
+    def transaction(self, name = None):
+        try:
+            return BaseDatabase.transaction(self, name)
+        except sqlite3.ProgrammingError, e:
+            if str(e) == 'attempt to write a readonly database':
+                raise sqlerrors.ReadOnlyDatabase
+            raise
 
