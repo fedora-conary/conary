@@ -1040,7 +1040,8 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
                 except:
                     # something went wrong.  make sure that we roll
                     # back any pending change
-                    self.cache.db.rollback()
+                    if self.cache.db and self.cache.db.inTransaction:
+                        self.cache.db.rollback()
                     raise
                 size = cs.writeToFile(path, withReferences = True)
                 self.cache.setEntrySize(key, size)
@@ -1368,7 +1369,7 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
 
     def changePGPKeyOwner(self, authToken, label, user, key):
         logMe(1, authToken[0], label, user, key)
-        if (not self.auth.checkIsFullAdmin(*authToken)):
+        if not self.auth.checkIsFullAdmin(authToken[0], authToken[1]):
             raise errors.InsufficientPermission
         if user:
             uid = self.auth.getUserIdByName(user)
@@ -1492,7 +1493,6 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
             self.cache = cacheset.NullCacheSet(self.tmpPath)
 
         self.open()
-
 
 class ClosedRepositoryServer(xmlshims.NetworkConvertors):
     def callWrapper(self, *args):
