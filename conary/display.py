@@ -55,7 +55,8 @@ def displayTroves(dcfg, formatter, troveTups):
                          walkTroves=dcfg.walkTroves(),
                          iterTroves=dcfg.iterTroves(),
                          needTroves = dcfg.needTroves(),
-                         needFiles = dcfg.needFiles())
+                         needFiles = dcfg.needFiles(),
+                         getPristine = dcfg.getPristine())
     if dcfg.hideComponents():
         iter = skipComponents(iter, dcfg.getPrimaryTroves())
 
@@ -80,7 +81,7 @@ def skipComponents(tupList, primaryTroves=[]):
 
 def iterTroveList(troveSource, troveTups, walkTroves=False, 
                   iterTroves=False, needTroves=False, 
-                  needFiles=False):
+                  needFiles=False, getPristine=True):
     """
     Given a troveTup list, iterate over those troves and their child troves
     as specified by parameters
@@ -101,7 +102,13 @@ def iterTroveList(troveSource, troveTups, walkTroves=False,
     assert(not (walkTroves and iterTroves))
 
     if needTroves or walkTroves or iterTroves:
-        troves = troveSource.getTroves(troveTups, withFiles=needFiles)
+
+        if not getPristine:
+            kw = {'pristine' : False}
+        else:
+            kw = {}
+
+        troves = troveSource.getTroves(troveTups, withFiles=needFiles, **kw)
     else:
         troves = [None] * len(troveTups)
     
@@ -236,6 +243,9 @@ class DisplayConfig:
 
     def needFileObjects(self):
         return self.needFiles() and self.isVerbose()
+
+    def getPristine(self):
+        return True
 
     #### Recursion
     #### Whether to recursively descend into child troves, iterate
@@ -535,7 +545,7 @@ def displayJobs(dcfg, formatter, jobs, prepare=True, jobNum=0, total=0):
     if jobNum and total:
         print formatter.formatJobNum(index, totalJobs)
     
-    for job, comps in formatter.compressJobList(jobs):
+    for job, comps in formatter.compressJobList(sorted(jobs)):
         if dcfg.printTroveHeader():
             for ln in formatter.formatJobHeader(job, comps):
                 print ln
@@ -549,13 +559,14 @@ class JobDisplayConfig(DisplayConfig):
     
     def __init__(self, *args, **kw):
         self.showChanges = kw.pop('showChanges', False)
+        self.compressJobList = kw.pop('compressJobs', True)
         DisplayConfig.__init__(self, *args, **kw)
 
     def compressJobs(self):
         """ compress jobs so that updates of components are displayed with 
             the update of their package
         """
-        return True
+        return self.compressJobList and not self.needFiles()
 
     def needOldFileObjects(self):
         """ If true, we're going to display information about the old  
@@ -576,6 +587,9 @@ class JobDisplayConfig(DisplayConfig):
              this job.
         """
         return self.showChanges or DisplayConfig.printFiles(self)
+
+    def printTroveHeader(self):
+        return self.showChanges or DisplayConfig.printTroveHeader(self)
 
 
 class JobTupFormatter(TroveFormatter):
@@ -608,6 +622,12 @@ class JobTupFormatter(TroveFormatter):
     def compressJobList(self, jobTups):
         """ Compress component display
         """
+        compressJobs = self.dcfg.compressJobs()
+        if not compressJobs:
+            for jobTup in jobTups:
+                yield jobTup, []
+            return
+
         compsByJob = {}
         for jobTup in jobTups:  
             name = jobTup[0]
