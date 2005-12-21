@@ -232,6 +232,9 @@ class HttpRequests(SimpleHTTPRequestHandler):
 	    return None
         logMe(3, "returned from", method)
 
+        usedAnonymous = result[0]
+        result = result[1:]
+
 	resp = xmlrpclib.dumps((result,), methodresponse=1)
         logMe(3, "encoded xml-rpc response to %d bytes" % (len(resp),))
 
@@ -242,6 +245,9 @@ class HttpRequests(SimpleHTTPRequestHandler):
             self.send_header('Content-encoding', 'deflate')
 	self.send_header("Content-type", "text/xml")
 	self.send_header("Content-length", str(len(resp)))
+        if usedAnonymous:
+            self.send_header("X-Conary-UsedAnonymous", '1')
+
 	self.end_headers()
 	self.wfile.write(resp)
         logMe(3, "sent response to client", len(resp), "bytes")
@@ -315,7 +321,7 @@ def usage():
     print "              --tmp-dir <path>"
     sys.exit(1)
 
-def addUser(cfg, userName, otherArgs):
+def addUser(cfg, userName, otherArgs, admin=False):
     if len(otherArgs) != 2:
         usage()
 
@@ -336,8 +342,12 @@ def addUser(cfg, userName, otherArgs):
     cfg.contentsDir = otherArgs[1] + '/contents'
 
     netRepos = ResetableNetworkRepositoryServer(cfg, '')
+
+    # never give anonymous write access by default
+    write = userName != 'anonymous'
     netRepos.auth.addUser(userName, pw1)
-    netRepos.auth.addAcl(userName, None, None, True, False, True)
+    # user/group, trovePattern, label, write, capped, admin
+    netRepos.auth.addAcl(userName, None, None, write, False, admin)
 
 if __name__ == '__main__':
     argDef = {}
@@ -355,6 +365,7 @@ if __name__ == '__main__':
     # magically handled by processArgs
     argDef["config-file"] = options.ONE_PARAM
     argDef['add-user'] = options.ONE_PARAM
+    argDef['admin'] = options.NO_PARAM
     argDef['help'] = options.ONE_PARAM
 
     try:
@@ -371,7 +382,8 @@ if __name__ == '__main__':
         usage()
 
     if argSet.has_key('add-user'):
-        sys.exit(addUser(cfg, argSet['add-user'], otherArgs))
+        admin = 'admin' in argSet
+        sys.exit(addUser(cfg, argSet['add-user'], otherArgs, admin=admin))
 
     if not os.path.isdir(FILE_PATH):
 	print FILE_PATH + " needs to be a directory"

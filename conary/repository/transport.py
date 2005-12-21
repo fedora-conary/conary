@@ -102,10 +102,13 @@ class XMLOpener(urllib.FancyURLopener):
         errcode, errmsg, headers = h.getreply()
         if errcode == 200:
             fp = h.getfile()
+            usedAnonymous = 'X-Conary-UsedAnonymous' in headers
+
             encoding = headers.get('Content-encoding', None)
             if encoding == 'deflate':
                 fp = StringIO(zlib.decompress(fp.read()))
-            return urllib.addinfourl(fp, headers, fullUrl)
+
+            return usedAnonymous, urllib.addinfourl(fp, headers, fullUrl)
         else:
 	    raise xmlrpclib.ProtocolError(url, errcode, errmsg, headers)
 
@@ -165,8 +168,10 @@ class Transport(xmlrpclib.Transport):
             opener.addheader('X-Conary-Entitlement', self.entitlement)
 
 	opener.addheader('User-agent', self.user_agent)
-	response = opener.open(''.join([self._protocol(), '://', host, handler]), request_body)
+	usedAnonymous, response = opener.open(''.join([self._protocol(), '://', host, handler]), request_body)
         
-	return self.parse_response(response)
+        resp = self.parse_response(response)
+        rc = ( [ usedAnonymous ] + resp[0], )
+	return rc
 
     
