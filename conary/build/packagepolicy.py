@@ -1081,6 +1081,7 @@ class DanglingSymlinks(policy.Policy):
 
     def doFile(self, path):
 	d = self.macros.destdir
+        l = len(d)
 	f = util.joinPaths(d, path)
         recipe = self.recipe
 	if os.path.islink(f):
@@ -1090,6 +1091,8 @@ class DanglingSymlinks(policy.Policy):
                           ' should probably be relative', path, contents)
 		return
 	    abscontents = util.joinPaths(os.path.dirname(path), contents)
+            # now resolve any intermediate symlinks
+            abscontents = os.path.realpath(d+abscontents)[l:]
 	    if abscontents in recipe.autopkg.pathMap:
 		componentMap = recipe.autopkg.componentMap
 		if componentMap[abscontents] != componentMap[path] and \
@@ -2345,20 +2348,36 @@ class Requires(_addInfo, _BuildPackagePolicy):
                 # no perl == bootstrap, but print warning
                 self.dbg('Unable to find perl interpreter, disabling perl: requirements')
                 self.perlReqs = False
-                return
+                return []
+            # get the base directory where conary lives.  In a checked
+            # out version, this would be .../conary/conary/build/package.py
+            # chop off the last 3 directories to find where
+            # .../conary/Scandeps and .../conary/scripts/perlreqs.pl live
             basedir = '/'.join(sys.modules[__name__].__file__.split('/')[:-3])
-            localcopy = '/'.join((basedir, 'conary/ScanDeps'))
-            if os.path.exists(localcopy):
-                scandeps = localcopy
+            scandeps = '/'.join((basedir, 'conary/ScanDeps'))
+            if os.path.exists(scandeps):
                 perlreqs = '%s/scripts/perlreqs.pl' % basedir
             else:
-                # not %(libdir)s
-                scandeps = '/usr/lib/conary/ScanDeps'
-                perlreqs = '/usr/libexec/conary/perlreqs.pl'
+                # we assume that conary is installed in
+                # $prefix/$libdir/python?.?/site-packages.  Use this
+                # assumption to find the prefix for
+                # /usr/lib/conary and /usr/libexec/conary
+                regexp = re.compile(r'(.*)/lib(64){0,1}/python[1-9].[0-9]/site-packages')
+                match = regexp.match(basedir)
+                if not match:
+                    # our regexp didn't work.  fall back to hardcoded
+                    # paths
+                    prefix = '/usr'
+                else:
+                    prefix = match.group(1)
+                # we don't use %(libdir)s, because ScanDeps is not
+                # architecture specific.
+                scandeps = '%s/lib/conary/ScanDeps' %prefix
+                perlreqs = '%s/libexec/conary/perlreqs.pl' %prefix
             self.perlReqs = '%s -I%s %s %s' %(
                 self.perlPath, scandeps, self.perlIncPath, perlreqs)
         if self.perlReqs is False:
-            return
+            return []
 
         p = os.popen('%s %s' %(self.perlReqs, fullpath))
         reqlist = [x.strip().split('//') for x in p.readlines()]
@@ -2449,7 +2468,8 @@ class Requires(_addInfo, _BuildPackagePolicy):
         if (path.endswith('.pl') or path.endswith('.pm') or
             (f.inode.perms() & 0111 and m and m.name == 'script'
              and '/bin/perl' in m.contents['interpreter'])):
-            for req in self._getPerlReqs(path, fullpath):
+            perlReqs = self._getPerlReqs(path, fullpath)
+            for req in perlReqs:
                 self._addRequirement(path, req, [], pkg,
                                      deps.PerlDependencies)
 
@@ -2479,8 +2499,8 @@ class Requires(_addInfo, _BuildPackagePolicy):
         if self._checkInclusion(info, path):
             if info[0] == '/':
                 depClass = deps.FileDependencies
-            elif info.startswith('file:'):
-                info = info.split('file:', 1)[1].strip()
+            elif info.startswith('file:') and info[5:].strip()[0] == '/':
+                info = info[5:].strip()
                 depClass = deps.FileDependencies
             elif info.startswith('soname:'):
                 if not m or m.name != 'ELF':

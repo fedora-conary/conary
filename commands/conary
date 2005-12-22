@@ -75,6 +75,7 @@ def usage(rc = 1):
     print "                 --flavors"
     print "                 --full-versions"
     print '                 --install-label <label>'
+    print '                 --interactive'
     print "                 --pubring <path>"
     print "                 --root <root>"
     print "                 --context <context>"
@@ -139,13 +140,28 @@ def realMain(cfg, argv=sys.argv):
     argDef = {}
     cfgMap = {}
 
-    cfgMap["build-label"] = "buildLabel"
-    cfgMap["exclude-troves"] = "excludeTroves"
-    cfgMap["trust-threshold"] = "trustThreshold"
-    cfgMap["pubring"] = "pubRing"
-
     (NO_PARAM,  ONE_PARAM)  = (options.NO_PARAM, options.ONE_PARAM)
     (OPT_PARAM, MULT_PARAM) = (options.OPT_PARAM, options.MULT_PARAM)
+
+    cfgMap["build-label"] = "buildLabel", ONE_PARAM
+    cfgMap["exclude-troves"] = "excludeTroves", ONE_PARAM
+    cfgMap["trust-threshold"] = "trustThreshold", ONE_PARAM
+    cfgMap["pubring"] = "pubRing", ONE_PARAM
+    cfgMap["root"] = "root", ONE_PARAM
+
+    cfgMap['interactive'] = 'interactive', NO_PARAM
+    cfgMap['full-versions'] = 'fullVersions', NO_PARAM
+    cfgMap['flavors'] = 'fullFlavors', NO_PARAM
+    cfgMap['components'] = 'showComponents', NO_PARAM
+
+
+    for name, (cfgName, paramType) in cfgMap.items():
+        # if it's a NO_PARAM
+        if paramType == NO_PARAM:
+            negName = 'no-' + name
+            argDef[negName] = paramType
+            cfgMap[negName] = (cfgName, paramType)
+        argDef[name] = paramType
 
     argDef["all"] = NO_PARAM
     argDef["buildreqs"] = NO_PARAM
@@ -156,8 +172,6 @@ def realMain(cfg, argv=sys.argv):
     argDef["deps"] = NO_PARAM
     argDef["diff"] = NO_PARAM
     argDef["from-file"] = MULT_PARAM
-    argDef["flavors"] = NO_PARAM
-    argDef["full-versions"] = NO_PARAM
     argDef["ids"] = NO_PARAM
     argDef["info"] = NO_PARAM
     argDef["install-label"] = MULT_PARAM
@@ -189,7 +203,7 @@ def realMain(cfg, argv=sys.argv):
     argDef["signatures"] = NO_PARAM
 
     try:
-        argSet, otherArgs = options.processArgs(argDef, cfgMap, cfg, usage,
+        argSet, otherArgs = options.processArgs(argDef, {}, cfg, usage,
                                                 argv=argv)
     except options.OptionError, e:
         print >> sys.stderr, e
@@ -205,15 +219,6 @@ def realMain(cfg, argv=sys.argv):
         print constants.version
         sys.exit(0)
 
-    if argSet.pop('components', False):
-        cfg.showComponents = True
-
-    if argSet.pop('full-versions', False):
-        cfg.fullVersions = True
-
-    if argSet.pop('flavors', False):
-        cfg.fullFlavors = True
-
     context = cfg.context
     if os.path.exists('CONARY'):
         state = checkin.ConaryStateFromFile('CONARY')
@@ -227,9 +232,18 @@ def realMain(cfg, argv=sys.argv):
     if context:
         cfg.setContext(context)
 
-    root = argSet.pop('root', '')
-    if root:
-        cfg.root = root
+
+    # command line configuration overrides contexts.
+    for (arg, (name, paramType)) in cfgMap.items():
+        value = argSet.pop(arg, None)
+        if value is not None:
+            if arg.startswith('no-'):
+                value = not value
+
+	    cfg.configLine("%s %s" % (name, value))
+
+    for line in argSet.pop('config', []):
+        cfg.configLine(line)
 
     l = []
     for labelStr in argSet.get('install-label', []):
