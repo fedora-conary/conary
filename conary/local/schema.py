@@ -241,6 +241,7 @@ def createRequiresTable(db, cu, name, isTemp):
                start_transaction = startTrans)
     cu.execute("CREATE INDEX %(name)sIdx2 ON %(name)s(depId)" % d,
                start_transaction = startTrans)
+    # XXX: do we really need this index?
     cu.execute("CREATE INDEX %(name)sIdx3 ON %(name)s(depNum)" % d,
                start_transaction = startTrans)
 
