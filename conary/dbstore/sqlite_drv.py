@@ -20,7 +20,7 @@ from conary import sqlite3
 from conary.lib.tracelog import logMe
 
 from base_drv import BaseDatabase, BaseCursor, BaseSequence, BaseKeywordDict
-import sqlerrors
+import sqlerrors, sqllib
 
 class KeywordDict(BaseKeywordDict):
     keys = BaseKeywordDict.keys
@@ -165,9 +165,11 @@ class Database(BaseDatabase):
             raise
         # add a regexp funtion to enable SELECT FROM bar WHERE bar REGEXP .*
         self.dbh.create_function('regexp', 2, _regexp)
-        # add the serialized timestampt function
+        # add the serialized timestamp function
         self.dbh.create_function("unix_timestamp", 0, _timestamp)
         self.loadSchema()
+        # reset the tempTables since we just lost them because of the (re)connect
+        self.tempTables = sqllib.CaselessDict()
         if self.database in self.VIRTUALS:
             self.inode = (None, None)
             self.closed = False

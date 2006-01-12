@@ -17,7 +17,7 @@ import MySQLdb as mysql
 from MySQLdb import converters
 from base_drv import BaseDatabase, BindlessCursor, BaseSequence, BaseBinary
 from base_drv import BaseKeywordDict
-import sqlerrors
+import sqlerrors, sqllib
 
 # modify the default conversion dictionary
 conversions = converters.conversions.copy()
@@ -113,6 +113,8 @@ class Database(BaseDatabase):
         self.characterSet = cu.fetchone()[0]
         cu.execute("set character set %s" % self.characterSet)
         self.loadSchema(cu)
+        # reset the tempTables since we just lost them because of the (re)connect
+        self.tempTables = sqllib.CaselessDict()
         self.closed = False
         return True
 
@@ -130,46 +132,26 @@ class Database(BaseDatabase):
         BaseDatabase.loadSchema(self)
         if cu is None:
             cu = self.cursor()
-        cu.execute("""
-        SELECT
-            table_type as type, table_name as name,
-            table_name as tname
-        FROM information_schema.tables
-        WHERE table_type in ('VIEW', 'BASE TABLE')
-        AND table_schema = ?
-        """, self.dbName)
-        ret = cu.fetchall()
-        cu.execute("""
-        SELECT DISTINCT
-            'INDEX' as type, index_name as name, table_name as tname
-        FROM information_schema.statistics
-        WHERE table_schema = ?
-        """, self.dbName)
-        ret += cu.fetchall()
-        cu.execute("""
-        SELECT
-            'TRIGGER' as type, trigger_name as name, event_object_table as tname
-        FROM information_schema.triggers
-        WHERE event_object_schema = ?
-        """, self.dbName)
-        ret += cu.fetchall()
-        for (objType, name, tableName) in ret:
+        cu.execute("SHOW FULL TABLES")
+        for (name, objType) in cu:
             if objType == "BASE TABLE":
-                if tableName.endswith("_sequence"):
-                    self.sequences.setdefault(tableName[:-len("_sequence")], None)
+                if name.endswith("_sequence"):
+                    seqName = name[:-len("_sequence")]
+                    self.sequences[seqName] = True
                 else:
-                    self.tables.setdefault(tableName, [])
+                    self.tables[name] = []
             elif objType == "VIEW":
                 self.views[name] = True
-            elif objType == "INDEX":
-                assert(self.tables.has_key(tableName))
-                self.tables.setdefault(tableName, []).append(name)
-            elif objType == "TRIGGER":
-                self.triggers[name] = tableName
+        for tableName in self.tables.keys():
+            cu.execute("SHOW INDEX FROM %s" % tableName)
+            self.tables[tableName] = [ x[2] for x in cu ]
+        cu.execute("SHOW TRIGGERS")
+        for row in cu:
+            (name, event, tableName) = row[:3]
+            self.triggers[name] = tableName
         if not len(self.tables):
             return self.version
         version = self.getVersion()
-
         return version
 
     # A trigger that syncs up a column to the timestamp
