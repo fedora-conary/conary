@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2004-2005 rPath, Inc.
+# Copyright (c) 2004-2006 rPath, Inc.
 #
 # This program is distributed under the terms of the Common Public License,
 # version 1.0. A copy of this license should have been distributed with this
@@ -459,9 +459,10 @@ def cookGroupObject(repos, db, cfg, recipeClass, sourceVersion, macros={},
                             weakRef=not explicit, *troveTup)
 
 	# add groups which were newly created by this group. 
-	for name, byDefault in group.iterNewGroupList():
+	for name, byDefault, explicit in group.iterNewGroupList():
 	    grpTrv.addTrove(name, targetVersion, grpFlavor, 
-                            byDefault = byDefault)
+                            byDefault = byDefault, 
+                            weakRef = not explicit)
 
         grpDiff = grpTrv.diff(None, absolute = 1)[0]
         changeSet.newTrove(grpDiff)
