@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2004-2005 rPath, Inc.
+# Copyright (c) 2004-2006 rPath, Inc.
 #
 # This program is distributed under the terms of the Common Public License,
 # version 1.0. A copy of this license should have been distributed with this
@@ -208,6 +208,7 @@ class ConaryConfiguration(SectionedConfigFile):
     debugRecipeExceptions =  (CfgBool, False)
     defaultMacros         =  (CfgPathList, ('/etc/conary/macros',
                                             '~/.conary/macros'))
+    enforceManagedPolicy  =  (CfgBool, True)
     entitlementDirectory  =  (CfgPath, '/etc/conary/entitlements')
     fullVersions          =  CfgBool
     fullFlavors           =  CfgBool
@@ -219,6 +220,9 @@ class ConaryConfiguration(SectionedConfigFile):
     macros                =  CfgDict(CfgString)
     quiet		  =  CfgBool
     pinTroves		  =  CfgRegExpList
+    policyDirs            =  (CfgPathList, ('/usr/lib/conary/policy',
+                                            '/etc/conary/policy',
+                                            '~/.conary/policy'))
     pubRing               =  (CfgPathList, [ \
         ('/etc/conary/pubring.gpg',
          '~/.gnupg/pubring.gpg')[int(bool(os.getuid()))]])
