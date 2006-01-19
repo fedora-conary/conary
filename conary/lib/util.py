@@ -105,7 +105,7 @@ errorMessage = '''
 ***
 *** To report this error, please run the following script:
 ***
-*** conary-debug %(command)s
+*** conary-debug "%(command)s"
 ***
 *******************************************************************
 
@@ -176,7 +176,7 @@ def _handle_rc(rc, cmd):
 
 def execute(cmd, destDir=None, verbose=True):
     if verbose:
-	log.debug(cmd)
+	log.info(cmd)
     if destDir:
 	rc = os.system('cd %s; %s' %(destDir, cmd))
     else:
