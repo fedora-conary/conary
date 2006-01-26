@@ -1,4 +1,7 @@
 Changes in 0.94:
+  o Bug Fixes
+    * getNewTroveList() could return duplicate troves
+
   o Client changes:
     * Reworked query/repquery/showcs command line options.  See man page for
       details.
