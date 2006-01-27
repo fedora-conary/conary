@@ -1252,8 +1252,20 @@ class MigrateTo_13(SchemaMigration):
         self.db.dropIndex("FileStreams", "FileStreamsIdx")
         logMe(3, "Recreating the fileId index...")
         createTroves(self.db)
+
         # XXX: flavorId = 0 is now ''
         self.cu.execute("UPDATE Flavors SET flavor = '' WHERE flavorId = 0")
+
+        logMe(3, "Emptying out redirects...")
+        self.cu.execute("""
+        CREATE TEMPORARY TABLE Redirects AS
+        SELECT instanceId FROM Instances WHERE isRedirect = 1""")
+        # IN syntax leaves a lot to be desired with MySQL
+        for instanceId in self.cu:
+            cu2.execute("DELETE FROM TroveTroves WHERE instanceId=?", instnaceId)
+            cu2.execute("DELETE FROM TroveInfo WHERE instanceId=? AND "
+                        "infoType=?", instanceId, trove._TROVEINFO_TAG_SIGS)
+        # all done for migration to 13
         return self.Version
 
 # sets up temporary tables for a brand new connection
