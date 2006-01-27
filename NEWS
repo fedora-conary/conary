@@ -1,3 +1,15 @@
+Changes in 0.94:
+  o Bug Fixes
+    * A bug in getNewTroveList() that could cause duplicate
+      troves to be returned has been fixed.
+
+  o Client changes:
+    * The query/repquery/showcs command line options have been
+      reworked.  See the conary man page for details.
+    * "conary emerge" can now be performed on a recipe file.
+      Previously you were required to emerge from a repository. (bug
+      #526)
+
 Changes in 0.93:
   o Bug Fixes
     * A bug in the "conary verify" code sometimes resulted in an
