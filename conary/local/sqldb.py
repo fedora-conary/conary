@@ -772,8 +772,7 @@ order by
                     WHERE
                         troveName = ? AND
                         version = ? AND
-                        flavor %s AND
-                        isPresent=1
+                        flavor %s
                 """ % flavorStr, instanceId, flags, name,
                         newVersion.asString())
 
