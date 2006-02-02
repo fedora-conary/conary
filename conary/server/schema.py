@@ -1199,7 +1199,6 @@ class MigrateTo_13(SchemaMigration):
             where a.fileId = b.fileId
               and a.streamId < b.streamId
               and a.fileId is not null
-              and a.stream != b.stream
         """)
         # all the duplicate fileIds that have a streamId not in the
         # origs table are dupes
@@ -1211,7 +1210,10 @@ class MigrateTo_13(SchemaMigration):
         """)
         cu2 = self.db.cursor()
         for (streamId, fileId, stream) in self.cu:
-            file = files.ThawFile(self.cu.frombinary(stream), None)
+            if stream is not None:
+                file = files.ThawFile(self.cu.frombinary(stream), None)
+            else:
+                file = None
             # select all other streams with the same streamId
             cu2.execute("""
             SELECT fs.streamId, fs.stream
@@ -1220,6 +1222,9 @@ class MigrateTo_13(SchemaMigration):
               AND fs.streamId != ?
             """, (fileId, streamId))
             for (dupStreamId, dupStream) in cu2:
+                if file is None: # match None with None only
+                    assert (dupStream is None)
+                    continue
                 file2 = files.ThawFile(cu2.frombinary(dupStream), None)
                 file2.inode.mtime.set(file.inode.mtime())
                 assert (file == file2)
@@ -1383,6 +1388,14 @@ def setupTempTables(db):
             fileId      %(BINARY20)s
         ) %(TABLEOPTS)s""" % db.keywords)
         db.tempTables["getFilesTbl"] = True
+    if "itf" not in db.tempTables:
+        cu.execute("""
+        CREATE TEMPORARY TABLE itf(
+            item        VARCHAR(254),
+            version     VARCHAR(767),
+            fullVersion VARCHAR(767)
+        ) %(TABLEOPTS)s""" % db.keywords)
+        db.tempTables["itf"] = True
     if "gtvlTbl" not in db.tempTables:
         cu.execute("""
         CREATE TEMPORARY TABLE gtvlTbl(
