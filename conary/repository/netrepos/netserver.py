@@ -230,9 +230,9 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
             except sqlerrors.DatabaseLocked, e:
                 # deadlock occured; we rollback and try again
                 log.error("Deadlock id %d while calling %s: %s",
-                          attempt, methodname, str(e,args))
+                          attempt, methodname, str(e.args))
                 self.log(1, "Deadlock id %d while calling %s: %s" %(
-                    attempt, methodname, str(e,args)))
+                    attempt, methodname, str(e.args)))
                 if attempt < self.deadlockRetry:
                     self.db.rollback()
                     attempt += 1
