@@ -178,6 +178,8 @@ class ClientUpdate:
         # def _resolveDependencies() begins here
 
         troveSource = uJob.getSearchSource()
+        if useRepos:
+            troveSource = trovesource.stack(troveSource, self.repos)
 
         pathIdx = 0
         (depList, cannotResolve, changeSetList, keepList) = \
@@ -192,14 +194,10 @@ class ClientUpdate:
             depList = []
             cannotResolve = []
 
-        resolveSource = uJob.getSearchSource()
-        if useRepos:
-            resolveSource = trovesource.stack(resolveSource, self.repos)
-            
 
         while depList and self.cfg.installLabelPath and pathIdx < len(self.cfg.installLabelPath):
             nextCheck = [ x[1] for x in depList ]
-            sugg = resolveSource.resolveDependencies(
+            sugg = troveSource.resolveDependencies(
                             self.cfg.installLabelPath[pathIdx], 
                             nextCheck)
 
@@ -804,6 +802,9 @@ class ClientUpdate:
                 # this loop).
                 if newInfo in alreadyInstalled:
                     # No need to install it twice
+                    # but count it as 'added' for the purposes of
+                    # whether or not to recurse
+                    jobAdded = True
                     break
                 elif newInfo in ineligible:
                     break
@@ -1632,7 +1633,7 @@ conary erase '%s=%s[%s]'
                 foundCollection = False
 
                 count += len(jobList)
-                isInfo = -1                 # neither true nor false
+                isInfo = None                 # neither true nor false
                 for job in jobList:
                     (name, (oldVersion, oldFlavor),
                            (newVersion, newFlavor), absolute) = job
@@ -1641,10 +1642,10 @@ conary erase '%s=%s[%s]'
                         foundCollection = True
 
                     if name.startswith('info-'):
-                        assert(isInfo or isInfo == -1)
+                        assert(isInfo is True or isInfo is None)
                         isInfo = True
                     else:
-                        assert(not isInfo or isInfo == -1)
+                        assert(isInfo is False or isInfo is None)
                         isInfo = False
 
                 if not isInfo and newJobIsInfo is True:
@@ -1653,13 +1654,11 @@ conary erase '%s=%s[%s]'
                     # a separate job from the last one.
                     uJob.addJob(newJob)
                     count = len(jobList)
-                    newJob = jobList[:]             # make a copy
-                    newJobIsInfo = -1
+                    newJob = list(jobList)             # make a copy
                     newJobIsInfo = False
                 else:
                     newJobIsInfo = isInfo
-
-                newJob += jobList
+                    newJob += jobList
 
                 if (foundCollection or 
                     (updateThreshold and (count >= updateThreshold))): 
