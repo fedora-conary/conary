@@ -39,13 +39,13 @@ def makeImportedModule(name, pathname, desc, scope):
                 file = open(pathname, 'U')
             except:
                 file = None
-            
+
             try:
                 mod = imp.load_module(name, file, pathname, desc)
             finally:
                 if file is not None:
                     file.close()
-            
+
             sys.modules[name] = mod
 
         scope[name] = mod
@@ -61,14 +61,16 @@ def makeImportedModule(name, pathname, desc, scope):
         names = [ '.'.join(moduleParts[-x:]) for x in range(len(moduleParts)) ]
         for modulePart in names:
             if modulePart in local_scope:
-                if local_scope[modulePart].__class__.__name__ == 'ModuleProxy':
+                if (hasattr(local_scope[modulePart], '__class__') 
+                    and local_scope[modulePart].__class__.__name__ == 'ModuleProxy'):
                     # FIXME: this makes me cringe, but I haven't figured out a
                     # better way to ensure that the module proxy we're 
                     # looking at is actually a proxy for this module
                     if pathname in repr(local_scope[modulePart]):
                         local_scope[modulePart] = mod
             if modulePart in global_scope:
-                if global_scope[modulePart].__class__.__name__ == 'ModuleProxy':
+                if (hasattr(global_scope[modulePart], '__class__')
+                    and global_scope[modulePart].__class__.__name__ == 'ModuleProxy'):
                     if pathname in repr(global_scope[modulePart]):
                         global_scope[modulePart] = mod
 
@@ -106,16 +108,16 @@ class OnDemandLoader(object):
         self.pathname = pathname
         self.desc = desc
         self.scope = scope
-        
+
     def load_module(self, fullname):
-	if fullname in __builtins__:
+        if fullname in __builtins__:
             try:
                 mod = imp.load_module(self.name, self.file, 
                                       self.pathname, self.desc)
             finally:
                 if self.file:
                     self.file.close()
-	    sys.modules[fullname] = mod
+            sys.modules[fullname] = mod
         else:
             if self.file:
                 self.file.close()
@@ -136,7 +138,7 @@ class OnDemandImporter(object):
             mod = sys.modules.get(fullname, False)
             if mod is None or mod and isinstance(mod, types.ModuleType):
                 return mod
-        
+
         frame = sys._getframe(1)
         global_scope = frame.f_globals
         # this is the scope in which import <fullname> was called
