@@ -1077,6 +1077,8 @@ Cannot apply a relative changeset to an incomplete trove.  Please upgrade conary
                 pathId = err.pathId
                 # look up the trove and file that caused the pathId 
                 # conflict.  
+                conflict1 = conflict2 = None
+
                 for myTrove in self.iterNewTroveList():
                     files = (myTrove.getNewFileList() 
                              + myTrove.getChangedFileList())
@@ -1091,7 +1093,8 @@ Cannot apply a relative changeset to an incomplete trove.  Please upgrade conary
                     if conflict2:
                         conflict2 = conflict2[0]
                         break
-                assert(conflict1 and conflict2)
+                if not (conflict1 and conflict2):
+                    raise
                 raise PathIdsConflictError(pathId, myTrove, conflict1,
                                                    otherTrove, conflict2)
 
@@ -1129,17 +1132,23 @@ Cannot apply a relative changeset to an incomplete trove.  Please upgrade conary
 class ChangeSetFromFile(ReadOnlyChangeSet):
 
     def __init__(self, fileName, skipValidate = 1):
-        if type(fileName) is str:
-            try:
-                f = open(fileName, "r")
-            except IOError, err:
-                raise errors.ConaryError("Error opening changeset '%s': %s" % (fileName, err.strerror))
-            csf = filecontainer.FileContainer(f)
-        else:
-            csf = filecontainer.FileContainer(fileName)
+        try:
+            if type(fileName) is str:
+                try:
+                    f = open(fileName, "r")
+                except IOError, err:
+                    raise errors.ConaryError(
+                                "Error opening changeset '%s': %s" % 
+                                    (fileName, err.strerror))
+                csf = filecontainer.FileContainer(f)
+            else:
+                csf = filecontainer.FileContainer(fileName)
 
-	(name, tagInfo, control) = csf.getNextFile()
-        assert(name == "CONARYCHANGESET")
+            (name, tagInfo, control) = csf.getNextFile()
+            assert(name == "CONARYCHANGESET")
+        except filecontainer.BadContainer:
+            raise filecontainer.BadContainer(
+                        "File %s is not a valid conary changeset." % fileName)
 
 	start = gzip.GzipFile(None, 'r', fileobj = control).read()
 	ReadOnlyChangeSet.__init__(self, data = start)
