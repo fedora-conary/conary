@@ -338,7 +338,11 @@ def cookObject(repos, cfg, recipeClass, sourceVersion,
     (cs, built, cleanup) = ret
 
     # sign the changeset
-    signatureKey = selectSignatureKey(cfg, sourceVersion.branch().label())
+    if targetLabel:
+        signatureLabel = targetLabel
+    else:
+        signatureLabel = sourceVersion.branch().label()
+    signatureKey = selectSignatureKey(cfg, signatureLabel)
     signAbsoluteChangeset(cs, signatureKey)
 
     if changeSetFile:
@@ -772,8 +776,9 @@ def _cookPackageObject(repos, cfg, recipeClass, sourceVersion, prep=True,
                 # is finished
             else:
                 raise
-        logBuildEnvironment(logFile, sourceVersion, policyTroves,
-                            recipeObj.macros, cfg)
+        if logBuild:
+            logBuildEnvironment(logFile, sourceVersion, policyTroves,
+                                recipeObj.macros, cfg)
     try:
         bldInfo.begin()
         bldInfo.destdir = destdir
@@ -833,10 +838,7 @@ def _cookPackageObject(repos, cfg, recipeClass, sourceVersion, prep=True,
         if cfg.debugRecipeExceptions:
             traceback.print_exception(*sys.exc_info())
             debugger.post_mortem(sys.exc_info()[2])
-        if isinstance(msg, CookError):
-            raise
-        else:
-            raise CookError(str(msg))
+        raise
 
     if logBuild and recipeObj._autoCreatedFileCount:
         logFile.close()
@@ -1047,7 +1049,8 @@ def guessSourceVersion(repos, name, versionStr, buildLabel,
             state = conaryState.getSourceState()
             if state.getName() == srcName and \
                             state.getVersion() != versions.NewVersion():
-                if state.getVersion().trailingRevision().version != versionStr:
+                stateVer = state.getVersion().trailingRevision().version
+                if versionStr and stateVer != versionStr:
                     return state.getVersion().branch().createVersion(
                                 versions.Revision('%s-1' % (versionStr)))
                 return state.getVersion()
@@ -1149,7 +1152,17 @@ def cookItem(repos, cfg, item, prep=0, macros={},
 	    log.error('Error setting build flag values: %s' % msg)
 	    sys.exit(1)
 	try:
-	    loader = loadrecipe.RecipeLoader(recipeFile, cfg=cfg, repos=repos)
+            # make a guess on the branch to use since it can be important
+            # for loading superclasses.
+            sourceVersion = guessSourceVersion(repos, pkgname,
+                                               None, cfg.buildLabel)
+            if sourceVersion:
+                branch = sourceVersion.branch()
+            else:
+                branch = None
+
+	    loader = loadrecipe.RecipeLoader(recipeFile, cfg=cfg, repos=repos,
+                                             branch=branch)
             version = None
 	except builderrors.RecipeFileError, msg:
 	    raise CookError(str(msg))

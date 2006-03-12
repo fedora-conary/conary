@@ -852,7 +852,7 @@ def buildGroups(recipeObj, cfg, repos, callback):
         if group.depCheck:
             callback.done()
             log.info('Checking for dependency closure...')
-            failedDeps = checkGroupDependencies(group, cfg, callback)
+            failedDeps = checkGroupDependencies(group, cfg, cache, callback)
             if failedDeps:
                 raise GroupDependencyFailure(group.name, failedDeps)
 
@@ -1272,12 +1272,13 @@ def resolveGroupDependencies(group, cache, cfg, repos, labelPath, flavor,
     client = conaryclient.ConaryClient(cfg)
 
     if group.checkOnlyByDefaultDeps:
-        troveList = list(group.iterDefaultTroveList())
+        troveList = group.iterDefaultTroveList()
     else:
-        troveList = list(group.iterTroveList())
+        troveList = group.iterTroveList()
     
     # build a list of the troves that we're checking so far
-    troves = [ (n, (None, None), (v, f), True) for (n,v,f) in troveList]
+    troves = [ (n, (None, None), (v, f), True) for (n,v,f) in troveList
+                if not ((n,v,f) in cache and cache.isRedirect((n,v,f)))]
 
     updJob, suggMap = client.updateChangeSet(troves, recurse = False,
                                              resolveDeps = True,
@@ -1320,15 +1321,15 @@ def resolveGroupDependencies(group, cache, cfg, repos, labelPath, flavor,
     cache.cacheTroves(neededTups)
     callback.done()
 
-def checkGroupDependencies(group, cfg, callback):
+def checkGroupDependencies(group, cfg, cache, callback):
     callback.groupCheckingDependencies()
-
     if group.checkOnlyByDefaultDeps:
         troveList = group.iterDefaultTroveList()
     else:
         troveList = group.iterTroveList()
 
-    jobSet = [ (n, (None, None), (v, f), False) for (n,v,f) in troveList]
+    jobSet = [ (n, (None, None), (v, f), False) for (n,v,f) in troveList
+                if not ((n,v,f) in cache and cache.isRedirect((n,v,f))) ]
 
     cfg = copy.deepcopy(cfg)
     cfg.dbPath = ':memory:'

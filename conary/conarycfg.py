@@ -114,9 +114,12 @@ class CfgFlavor(CfgType):
 
     def parseString(self, val):
         try:
-            return deps.parseFlavor(val)
+            f = deps.parseFlavor(val)
         except Exception, e:
             raise ParseError, e
+        if f is None:
+            raise ParseError, 'Invalid flavor %s' % val
+        return f
 
     def format(self, val, displayOptions=None):
         val = ', '.join(deps.formatFlavor(val).split(','))
@@ -174,6 +177,7 @@ class ConaryContext(ConfigSection):
     contact               =  None
     excludeTroves         =  CfgRegExpList
     flavor                =  CfgList(CfgFlavor)
+    lookaside             =  CfgPath
     installLabelPath      =  CfgInstallLabelPath
     name                  =  None
     repositoryMap         =  CfgRepoMap
@@ -285,6 +289,8 @@ class ConaryConfiguration(SectionedConfigFile):
         return True
 
     def getContext(self, name):
+        if not self.hasSection(name):
+            return False
         return self.getSection(name)
 
     def displayContext(self, out=None):
