@@ -36,7 +36,7 @@ _thisFile = os.path.basename(sys.modules[__name__].__file__)
 _LOG = None
 
 # Maximum str(arg) length for fully printing complex datatypes
-MaxArgLen = 100
+MaxArgLen = 1024
 
 # we log time in milliseconds
 def logTime():
@@ -105,7 +105,8 @@ class FileLog(NullLog):
             return ret
         # otherwise, of this takes too much space, just print it's length
         if type(val) in set([list,tuple,dict]) and len(ret) > MaxArgLen:
-            ret = "len(%s)=%d" % (type(val), len(val))
+            if len(val) > 1:
+                ret = "len(%s)=%d" % (type(val), len(val))
         return ret
 
     # python cookbooks are great

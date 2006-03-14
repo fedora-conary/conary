@@ -1149,9 +1149,11 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
         newChgSetList = []
         allFilesNeeded = []
 
-        self.log(2, chgSetList, "recurse=%s withFiles=%s withFileContents=%s" % (
+        # try to log more information about these requests
+        self.log(2, [x[0] for x in chgSetList],
+                 list(set([x[2][0] for x in chgSetList])),
+                 "recurse=%s withFiles=%s withFileContents=%s" % (
             recurse, withFiles, withFileContents))
-
         # XXX all of these cache lookups should be a single operation through a
         # temporary table
 	for (name, (old, oldFlavor), (new, newFlavor), absolute) in chgSetList:
