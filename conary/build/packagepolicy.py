@@ -1542,7 +1542,7 @@ class Provides(policy.Policy):
     NAME
     ====
 
-    B{C{r.Provides()}} - Drives provides mechanism
+    B{C{r.Provides()}} - Creates dependency provision
 
     SYNOPSIS
     ========
@@ -1552,17 +1552,28 @@ class Provides(policy.Policy):
     DESCRIPTION
     ===========
 
-    The C{r.Provides()} policy marks files as providing certain
-    features, or characteristics, or to avoid marking a file as providing
-    things, such as for package-private plugin modules installed in system
-    library directories.
+    The C{r.Provides()} policy marks files as providing certain features,
+    or characteristics, and can be called to explicitly provide things
+    that cannot be automatically discovered, or to override automatic
+    discover and prefent marking a file as providing things, such as
+    for package-private plugin modules installed in system library
+    directories.
 
-    A C{provision} may be a file, soname or an ABI; Provisions that begin with
-    'file' are files, those that start with 'soname:' are sonames, and those
-    that start with 'abi:' are ABIs. Other prefixes are reserved.
+    A C{I{provision}} may be C{'file'} to mark a file as providing its
+    filename, or a dependency type.  You can create a file, soname or
+    ABI C{I{provision}} manually; all other types are only automatically
+    discovered.  Provisions that begin with C{file} are files, those that
+    start with C{soname:} are sonames, and those that start with C{abi:}
+    are ABIs.  Other prefixes are reserved.
+    
+    Soname provisions are normally discovered automatically; they need
+    to be provided manually only in two cases:
+      - If a shared library was not built with a soname at all.
+      - If a symbolic link to a shared library needs to provide its name
+        as a soname.
 
-    Note: Use {Cr.ComponentProvides}, and not C{r.Provides} to add capability
-    flags to components.
+    Note: Use {Cr.ComponentProvides} rather than C{r.Provides} to add
+    capability flags to components.
 
     EXAMPLES
     ========
@@ -1571,6 +1582,11 @@ class Provides(policy.Policy):
 
     Demonstrates using C{r.Provides} to specify the file provision
     C{/usr/sbin/sendmail}.
+
+    C{r.Provides('soname: libperl.so', '%(libdir)s/perl5/.*/CORE/libperl.so')}
+
+    Demonstrates synthesizing a shared library provision for all the
+    libperl.so symlinks.
     """
     bucket = policy.PACKAGE_CREATION
 
@@ -1917,7 +1933,7 @@ class Requires(_addInfo):
     NAME
     ====
 
-    B{C{r.Requires()}} - Drives requirements mechanism
+    B{C{r.Requires()}} - Creates dependency requirements
 
     SYNOPSIS
     ========
@@ -1929,7 +1945,7 @@ class Requires(_addInfo):
 
     The C{r.Requires()} policy adds requirements for a file.
     You can pass in exceptions that should not have automatic requirement
-    discovering done, such as example shell scripts outside of C{%(docdir)s}.
+    discovery done, such as example shell scripts outside of C{%(docdir)s}.
 
     Note: Components are the only troves which can be required.
 
