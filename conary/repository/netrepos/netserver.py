@@ -1704,42 +1704,8 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
         self.log(2, mark)
         userGroupIds = self.auth.getAuthGroups(cu, authToken)
 
-        # compute the max number of troves with the same mark for
-        # dynamic sizing; the client can get stuck if we keep
-        # returning the same subset because of a LIMIT too low
-        cu.execute("""
-        SELECT MAX(c) + 1 AS lim
-        FROM (
-           SELECT COUNT(instanceId) AS c
-           FROM Instances
-           WHERE Instances.isPresent = 1
-             AND Instances.changed <= ?
-           GROUP BY changed
-           HAVING c>1
-        ) AS lims""", mark)
-        lim = cu.fetchall()[0][0]
-        if lim is None or lim < 1000:
-            lim = 1000 # for safety and efficiency
-
-        # To avoid using a LIMIT value too low on the big query below,
-        # we need to find out how many distinct permissions will
-        # likely grant access to a trove for this user
-        cu.execute("""
-        SELECT COUNT(*) AS perms
-        FROM UserGroups
-        JOIN Permissions USING(userGroupId)
-        WHERE UserGroups.canMirror = 1
-          AND UserGroups.userGroupId in (%s)
-        """ % (",".join("%d" % x for x in userGroupIds),))
-        permCount = cu.fetchall()[0][0]
-        if permCount == 0:
-	    raise errors.InsufficientPermission
-        if permCount is None:
-            permCount = 1
-
-        # multiply LIMIT by permCount so that after duplicate
-        # elimination we are sure to return at least 'lim' troves
-        # back to the client
+        # Since signatures are small blobs, it doesn't make a lot
+        # of sense to use a LIMIT on this query...
         query = """
         SELECT UP.permittedTrove, item, version, flavor, Instances.changed
         FROM Instances
@@ -1768,18 +1734,13 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
           AND TroveInfo.changed >= ?
           AND TroveInfo.infoType = ?
         ORDER BY TroveInfo.changed
-        LIMIT %d
-        """ % (",".join("%d" % x for x in userGroupIds), lim * permCount)
+        """ % (",".join("%d" % x for x in userGroupIds), )
         cu.execute(query, mark, mark, trove._TROVEINFO_TAG_SIGS)
 
         l = set()
         for pattern, name, version, flavor, mark in cu:
             if self.auth.checkTrove(pattern, name):
                 l.add((mark, (name, version, flavor)))
-            if len(l) > lim:
-                # flush the cursor
-                junk = cu.fetchall()
-                break
         return list(l)
 
     def getTroveSigs(self, authToken, clientVersion, infoList):
@@ -1794,24 +1755,28 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
             if not self.auth.check(authToken, write = False, trove = name,
                        label = self.toVersion(version).branch().label()):
                 raise errors.InsufficientPermission
+
+            # When a mirror client is doing a full sig sync it is
+            # likely they'll ask for signatures of troves that are not
+            # signed. We return "" in that case.
             cu.execute("""
-                    SELECT data FROM Items
-                        JOIN Instances USING (itemId)
-                        JOIN Versions USING (versionId)
-                        JOIN Flavors ON
-                            Instances.flavorId = Flavors.flavorId
-                        JOIN TroveInfo ON
-                            Instances.instanceId = TroveInfo.instanceId
-                        WHERE
-                            TroveInfo.infoType = ? AND
-                            item = ? AND
-                            version = ? AND
-                            flavor = ?
-                    """, trove._TROVEINFO_TAG_SIGS, name, version, flavor)
+            SELECT TroveInfo.data
+              FROM Items
+              JOIN Instances USING (itemId)
+              JOIN Versions USING (versionId)
+              JOIN Flavors ON Instances.flavorId = Flavors.flavorId
+              LEFT OUTER JOIN TroveInfo ON
+                   Instances.instanceId = TroveInfo.instanceId
+                   AND TroveInfo.infoType = ?
+             WHERE item = ? AND version = ? AND flavor = ?
+               """, trove._TROVEINFO_TAG_SIGS, name, version, flavor)
             try:
-                result.append(cu.next()[0])
+                data = cu.fetchall()[0][0]
+                if data is None:
+                    data = ""
+                result.append(data)
             except:
-                raise errors.TroveMissing(name, version = version)
+                raise errors.TroveMissing(name, version = self.toVersion(version))
 
         return [ base64.encodestring(x) for x in result ]
 
