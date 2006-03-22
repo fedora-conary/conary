@@ -364,7 +364,7 @@ class ClientUpdate:
                                     if x[3])
         assert(len(relativePrimaries) + len(absolutePrimaries) +
                len(erasePrimaries) == len(primaryJobList))
-        
+
         log.debug('_mergeGroupChanges(recurse=%s,'
                       ' checkPrimaryPins=%s,'
                       ' installMissingRefs=%s, '
@@ -377,9 +377,15 @@ class ClientUpdate:
 
         troveSource = uJob.getTroveSource()
 
+
         # ineligible needs to be a transitive closure when recurse is set
         if recurse:
             ineligible = _troveTransitiveClosure(self.db, ineligible)
+
+        for job in erasePrimaries:
+            # an erase primary can't be part of an update (but their children
+            # can, so add this after we've recursed)
+            ineligible.add((job[0], job[1][0], job[1][1]))
 
         # Build the trove which contains all of the absolute change sets
         # we may need to install. Build a set of all of the trove names
@@ -833,6 +839,7 @@ followLocalChanges: %s
                                 # child troves for updates either.
                                 log.debug('SKIP: not installing branch switch')
                                 recurseThis = False 
+                                alreadyInstalled.add(replacedInfo)
                                 break
 
                 # below are checks to see if a fresh install should completed.
@@ -1745,7 +1752,7 @@ conary erase '%s=%s[%s]'
                     if name.startswith('info-'):
                         assert(isInfo is True or isInfo is None)
                         isInfo = True
-                        if not isInfo:
+                        if not infoName:
                             infoName = name.split(':')[0]
                     else:
                         assert(isInfo is False or isInfo is None)
