@@ -793,11 +793,6 @@ class ChangesetFilesTroveSource(SearchableTroveSource):
                         newCs.newTrove(trvCs)
                         keep = True
 
-                # we generate our own deletions. we don't need to get them
-                # from the original changeset
-                for info in subCs.getOldTroveList():
-                    newCs.delOldTrove(*info)
-
                 if keep:
                     mergedCs.merge(subCs)
 
