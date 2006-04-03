@@ -753,11 +753,19 @@ class DependencyChecker:
 
                 newNodeId = self._addJob(job)
 
+                provides = trv.getProvides()
+                # this reduces the size of our tables by removing things
+                # which this trove both provides and requires conary 1.0.11
+                # and later remove these from troves at build time
+                requires = trv.getRequires() - provides
+
                 self.workTables._populateTmpTable(depList = self.depList,
                                                   troveNum = -newNodeId,
-                                                  requires = trv.getRequires(),
-                                                  provides = trv.getProvides(),
+                                                  requires = requires,
+                                                  provides = provides,
                                                   multiplier = -1)
+
+                del provides, requires
 
                 if job[1][0] is not None:
                     self.workTables.removeTrove((job[0], job[1][0], job[1][1]),
@@ -1077,13 +1085,13 @@ class DependencyTables:
         depList, cu = self._resolve(depSetList, selectTemplate)
 
         result = {}
-        depSolutions = {}
+        depSolutions = [ [] for x in xrange(len(depList)) ]
         for depId, troveId in cu:
             depId = -depId
-            depSolutions.setdefault(depId, []).append(troveId)
+            depSolutions[depId].append(troveId)
 
-        for depId, sols in depSolutions.iteritems():
-            if not sols:
+        for depId, sols in enumerate(depSolutions):
+            if not depId:
                 continue
             self._addResult(depId, sols, depList, depSetList, result)
 
