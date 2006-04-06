@@ -22,6 +22,8 @@ rollbacks)
 @var REPLACEFILES: Flag constant value.  If set, a file that is in
 the way of a newly created file will be overwritten.  Otherwise an error
 is produced.
+@var IGNOREINTIALCONTENTS: Flag constant value.  If set, the initialContents
+flag for files is ignored.
 """
 import errno
 import itertools
@@ -43,7 +45,8 @@ MERGE = 1 << 0
 REPLACEFILES = 1 << 1
 IGNOREUGIDS = 1 << 2
 MISSINGFILESOKAY = 1 << 3
-        
+IGNOREINITIALCONTENTS = 1 << 4
+
 class FilesystemJob:
     """
     Represents a set of actions which need to be applied to the filesystem.
@@ -627,8 +630,11 @@ class FilesystemJob:
                 fsTrove.addFile(pathId, headPath, headFileVersion, headFileId)
                 continue
 
-            try:
-                s = os.lstat(headRealPath)
+            s = util.lstat(headRealPath)
+            if s is None:
+                # the path doesn't exist, carry on with the restore
+                pass
+            else:
                 # if this file is a directory and the file on the file
                 # system is a directory, we're OK
                 if (isinstance(headFile, files.Directory)
@@ -650,7 +656,8 @@ class FilesystemJob:
                                    troveCs.getName(),
                                    troveCs.getNewVersion(),
                                    troveCs.getNewFlavor()))
-                elif (headFile.flags.isInitialContents()  and 
+                elif (not(flags & IGNOREINITIALCONTENTS) and
+                      headFile.flags.isInitialContents() and
                       not self.removes.has_key(headRealPath)):
                     # don't replace InitialContents files if they already
                     # have contents on disk
@@ -697,10 +704,6 @@ class FilesystemJob:
                                troveCs.getNewFlavor()))
                         fullyUpdated = False
                         continue
-
-            except OSError:
-                # the path doesn't exist, carry on with the restore
-                pass
 
 	    self._restore(headFile, headRealPath, "creating %s")
 	    fsTrove.addFile(pathId, headPath, headFileVersion, headFileId)
@@ -910,7 +913,9 @@ class FilesystemJob:
                    headFile.contents.sha1() != baseFile.contents.sha1()
                 ):
 
-                if not forceUpdate and headFile.flags.isInitialContents():
+                if not(flags & IGNOREINITIALCONTENTS) and \
+                   not forceUpdate and \
+                   headFile.flags.isInitialContents():
 		    log.debug("skipping new contents of InitialContents file"
                               "%s" % finalPath)
 		elif forceUpdate or (flags & REPLACEFILES) or \
