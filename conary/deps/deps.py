@@ -28,6 +28,8 @@ DEP_CLASS_CIL           = 9
 DEP_CLASS_JAVA          = 10
 DEP_CLASS_PYTHON        = 11
 DEP_CLASS_PERL          = 12
+DEP_CLASS_RUBY          = 13
+DEP_CLASS_PHP           = 14
 
 DEP_CLASS_NO_FLAGS      = 0
 DEP_CLASS_HAS_FLAGS     = 1
@@ -127,6 +129,12 @@ class Dependency(BaseDependency):
 	
     def __eq__(self, other):
 	return other.name == self.name and other.flags == self.flags
+
+    def __cmp__(self, other):
+	return (cmp(self.name, other.name) 
+                or cmp(sorted(self.flags.iteritems()),
+                       sorted(other.flags.iteritems())))
+        
 
     def __str__(self):
 	if self.flags:
@@ -666,6 +674,24 @@ class PerlDependencies(DependencyClass):
     flags = DEP_CLASS_OPT_FLAGS
 _registerDepClass(PerlDependencies)
 
+class RubyDependencies(DependencyClass):
+
+    tag = DEP_CLASS_RUBY
+    tagName = "ruby"
+    justOne = False
+    depClass = Dependency
+    flags = DEP_CLASS_OPT_FLAGS
+_registerDepClass(RubyDependencies)
+
+class PhpDependencies(DependencyClass):
+
+    tag = DEP_CLASS_PHP
+    tagName = "php"
+    justOne = False
+    depClass = Dependency
+    flags = DEP_CLASS_OPT_FLAGS
+_registerDepClass(PhpDependencies)
+
 class FileDependencies(DependencyClass):
 
     tag = DEP_CLASS_FILES
@@ -718,10 +744,17 @@ class DependencySet(object):
         for dep in deps:
             c.addDep(dep)
 
-    def iterDeps(self):
-        for depClass in self.members.itervalues():
-            for dep in depClass.members.itervalues():
-                yield depClass.__class__, dep
+    def iterDeps(self, sort=False):
+        # since this is in an tight loop in some places, avoid overhead
+        # of continual checks on the sort variable.
+        if sort:
+            for _, depClass in sorted(self.members.iteritems()):
+                for _, dep in sorted(depClass.members.iteritems()):
+                    yield depClass.__class__, dep
+        else:
+            for depClass in self.members.itervalues():
+                for dep in depClass.members.itervalues():
+                    yield depClass.__class__, dep
 
     def iterDepsByClass(self, depClass):
         if depClass.tag in self.members:
@@ -799,6 +832,13 @@ class DependencySet(object):
             c = members.__class__
             if tag in self.members:
 		self.members[tag].union(members, mergeType = mergeType)
+
+                # If we're dropping conflicts, we might drop this class
+                # of troves all together.
+                if (mergeType == DEP_MERGE_TYPE_DROP_CONFLICTS
+                    and c.justOne and not 
+                    self.members[tag].members.values()[0].flags):
+                    del self.members[tag]
 	    else:
                 for dep in members.members.itervalues():
                     a(c, dep)
@@ -1021,6 +1061,10 @@ def mergeFlavorList(flavors, mergeType=DEP_MERGE_TYPE_NORMAL):
                     depsByName.setdefault(dep.name, []).append(dep)
         for depList in depsByName.itervalues():
             dep = _mergeDeps(depList, mergeType)
+            if (depClass.justOne
+                and mergeType == DEP_MERGE_TYPE_DROP_CONFLICTS and 
+                not dep.flags):
+                continue
             a(depClass, dep)
     return finalDep
 
@@ -1233,6 +1277,30 @@ def flavorDifferences(flavors, strict=True):
     return diffs
 
 
+def compatibleFlavors(flavor1, flavor2):
+    """
+        Return True if flavor1 does not have any flavor that switches
+        polarity from ~foo to ~!foo, or foo to !foo, and flavor1 
+        does not have any architectures not in flavor2 and vice versa.
+    """
+    for depClass in flavor1.members.values():
+        otherDepClass = flavor2.members.get(depClass.tag, None)
+        if otherDepClass is None:
+            continue
+
+        for name, dep in depClass.members.iteritems():
+            otherDep = otherDepClass.members.get(name, None)
+            if otherDep is None:
+                if depClass.justOne:
+                    continue
+                return False
+            for flag, sense in dep.flags.iteritems():
+                otherSense = otherDep.flags.get(flag, None)
+                if otherSense is None:
+                    continue
+                if toStrongMap[sense] != toStrongMap[otherSense]:
+                    return False
+    return True
 
 dependencyCache = util.ObjectCache()
 

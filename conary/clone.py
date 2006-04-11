@@ -13,10 +13,12 @@
 #
 import itertools
 
+from conary import errors
 from conary import versions
 from conary.conaryclient import ConaryClient, cmdline
 from conary.build.cook import signAbsoluteChangeset
 from conary.conarycfg import selectSignatureKey
+from conary.deps import deps
 
 def displayCloneJob(cs):
     
@@ -30,18 +32,43 @@ def displayCloneJob(cs):
         print "%sClone  %-20s (%s)" % (indent, csTrove.getName(), newInfo)
 
 def CloneTrove(cfg, targetBranch, troveSpecList, updateBuildInfo = True,
-               info = False):
+               info = False, cloneSources = False):
     client = ConaryClient(cfg)
     repos = client.getRepos()
 
     targetBranch = versions.VersionFromString(targetBranch)
 
     troveSpecs = [ cmdline.parseTroveSpec(x) for x in troveSpecList]
-    cloneSources = repos.findTroves(cfg.installLabelPath, 
-                                    troveSpecs, cfg.flavor)
-    cloneSources = list(itertools.chain(*cloneSources.itervalues()))
 
-    okay, cs = client.createCloneChangeSet(targetBranch, cloneSources,
+    componentSpecs = [ x[0] for x in troveSpecs 
+                       if ':' in x[0] and x[0].split(':')[1] != 'source']
+    if componentSpecs:
+        raise errors.ParseError('Cannot clone components: %s' % ', '.join(componentSpecs))
+
+
+    trovesToClone = repos.findTroves(cfg.installLabelPath, 
+                                    troveSpecs, cfg.flavor)
+    trovesToClone = list(itertools.chain(*trovesToClone.itervalues()))
+
+    if cloneSources:
+        binaries = [ x for x in trovesToClone if not x[0].endswith(':source')]
+        seen = set(binaries)
+        while binaries:
+            troves = repos.getTroves(binaries, withFiles=False)
+            binaries = []
+            for trove in troves:
+                trovesToClone.append((trove.getSourceName(),
+                                      trove.getVersion().getSourceVersion(),
+                                      deps.DependencySet()))
+                for troveTup in trove.iterTroveList(strongRefs=True,
+                                                    weakRefs=True):
+                    if troveTup not in seen:
+                        binaries.append(troveTup)
+            seen.update(binaries)
+
+        trovesToClone = list(set(trovesToClone))
+
+    okay, cs = client.createCloneChangeSet(targetBranch, trovesToClone,
                                            updateBuildInfo=updateBuildInfo)
     if not okay:
         return

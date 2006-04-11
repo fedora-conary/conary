@@ -22,6 +22,8 @@ rollbacks)
 @var REPLACEFILES: Flag constant value.  If set, a file that is in
 the way of a newly created file will be overwritten.  Otherwise an error
 is produced.
+@var IGNOREINTIALCONTENTS: Flag constant value.  If set, the initialContents
+flag for files is ignored.
 """
 import errno
 import itertools
@@ -36,13 +38,15 @@ from conary.build import tags
 from conary.callbacks import UpdateCallback
 from conary.deps import deps
 from conary.lib import log, patch, sha1helper, util
+from conary.local.errors import *
 from conary.repository import changeset, filecontents
 
 MERGE = 1 << 0
 REPLACEFILES = 1 << 1
 IGNOREUGIDS = 1 << 2
 MISSINGFILESOKAY = 1 << 3
-        
+IGNOREINITIALCONTENTS = 1 << 4
+
 class FilesystemJob:
     """
     Represents a set of actions which need to be applied to the filesystem.
@@ -80,15 +84,66 @@ class FilesystemJob:
             l = self.tagRemoves.setdefault(tag, [])
             l.append(target)
 
-    def userRemoval(self, troveName, troveVersion, troveFlavor, pathId):
-        l = self.userRemovals.setdefault(
-                    (troveName, troveVersion, troveFlavor), [])
-        l.append(pathId)
+    def userRemoval(self, troveName, troveVersion, troveFlavor, pathId,
+                    replaced = False):
+        # replaced is True if this is an automatic replacement and False if
+        # it's the result of a preexisting replacement (True gets it into
+        # the replacement changeset, False leaves it out)
+        d = self.userRemovals.setdefault(
+                    (troveName, troveVersion, troveFlavor), {})
+        d[pathId] = replaced
+
+    def createRemoveRollback(self):
+        cs = changeset.ChangeSet()
+
+        # Returns a changeset which undoes the user removals 
+        for (info, fileDict) in self.userRemovals.iteritems():
+            if sum(fileDict.itervalues()) == 0:
+                # skip the rest of this processing if there are no files
+                # to handle (it's likely that the trove referred to here
+                # isn't in the database yet)
+                continue
+
+            localTrove = self.db.getTrove(*info)
+            updatedTrove = localTrove.copy()
+            localTrove.changeVersion(
+                localTrove.getVersion().createBranch(
+                        label = versions.LocalLabel(), withVerRel = True))
+            hasChanges = False
+            for (pathId, replaced) in fileDict.iteritems():
+                if not replaced: continue
+                path, fileId = updatedTrove.getFile(pathId)[0:2]
+                stream = self.db.getFileStream(fileId)
+                cs.addFile(None, fileId, stream)
+
+                if files.frozenFileHasContents(stream):
+                    flags = files.frozenFileFlags(stream)
+                    # this file is seen as *added* in the rollback
+                    cs.addFileContents(pathId, changeset.ChangedFileTypes.file,
+                       filecontents.FromFilesystem(util.joinPaths(self.root,
+                                                                  path)),
+                       flags.isConfig())
+
+                updatedTrove.removeFile(pathId)
+                hasChanges = True
+
+            if not hasChanges: continue
+
+            # this is a rollback so the diff is backwards
+            trvCs = localTrove.diff(updatedTrove)[0]
+            cs.newTrove(trvCs)
+
+        return cs
+
+    def pathRemoved(self, info, pathId):
+        d = self.userRemovals.get(info, None)
+        if d is None: return False
+        return pathId in d
 
     def iterUserRemovals(self):
-	for ((troveName, troveVersion, troveFlavor), pathIdList) in \
-					    self.userRemovals.iteritems():
-	    yield (troveName, troveVersion, troveFlavor, pathIdList)
+	for ((troveName, troveVersion, troveFlavor), fileDict) \
+                                        in self.userRemovals.iteritems():
+	    yield (troveName, troveVersion, troveFlavor, fileDict)
 
     def _createFile(self, target, str, msg):
 	self.newFiles.append((target, str, msg))
@@ -532,6 +587,10 @@ class FilesystemJob:
 	@param root: root directory to apply changes to (this is ignored for
 	source management, which uses the cwd)
 	@type root: str
+        @param removalHints: set of (name, version, flavor) tuples which
+        are being removed as part of this operation; troves which are
+        scheduled to be removed won't generate file conflicts with new
+        troves
 	@param flags: flags which modify update behavior.  See L{update}
         module variable summary for flags definitions.
 	@type flags: int bitfield
@@ -571,8 +630,11 @@ class FilesystemJob:
                 fsTrove.addFile(pathId, headPath, headFileVersion, headFileId)
                 continue
 
-            try:
-                s = os.lstat(headRealPath)
+            s = util.lstat(headRealPath)
+            if s is None:
+                # the path doesn't exist, carry on with the restore
+                pass
+            else:
                 # if this file is a directory and the file on the file
                 # system is a directory, we're OK
                 if (isinstance(headFile, files.Directory)
@@ -588,38 +650,60 @@ class FilesystemJob:
                       and os.listdir(headRealPath)):
                     # this is a non-empty directory that's in the way of
                     # a new file.  Even --replace-files can't help here
-                    self.errors.append("non-empty directory %s is in "
-                                   "the way of a newly created "
-                                   "file in %s=%s[%s]" % (
+                    self.errors.append(
+                               DirectoryInWayError(
                                    util.normpath(headRealPath),
-                                   troveCs.getName(), 
-                                   troveCs.getNewVersion().asString(),
-                                   deps.formatFlavor(troveCs.getNewFlavor())))
-                elif (headFile.flags.isInitialContents()  and 
+                                   troveCs.getName(),
+                                   troveCs.getNewVersion(),
+                                   troveCs.getNewFlavor()))
+                elif (not(flags & IGNOREINITIALCONTENTS) and
+                      headFile.flags.isInitialContents() and
                       not self.removes.has_key(headRealPath)):
                     # don't replace InitialContents files if they already
                     # have contents on disk
                     fullyUpdated = False
                     continue
                 elif not self.removes.has_key(headRealPath):
-                    inWay = (flags & REPLACEFILES) == 0
-                    for info in self.db.iterFindPathReferences(headPath):
-                        if (flags & REPLACEFILES) or info[0:3] in removalHints:
-                            self.userRemoval(*info)
-                            inWay = False
+                    fileConflict = True
 
-                    if inWay:
-                        self.errors.append("%s is in the way of a newly " 
-                           "created file in %s=%s[%s]" % (  
-                               util.normpath(headRealPath), 
-                               troveCs.getName(), 
-                               troveCs.getNewVersion().asString(),
-                               deps.formatFlavor(troveCs.getNewFlavor())))
+                    if removalHints:
+                        # Don't go through the database if we know removalHints
+                        # won't help avoid this conflict. This avoids calling
+                        # iterFindPathReferences() against a network server
+                        # for source control operations
+                        for info in self.db.iterFindPathReferences(
+                                            headPath, justPresent = True):
+                            if info[0:3] in removalHints:
+                                fileConflict = False
+
+                    if fileConflict and \
+                                hasattr(self.db, 'iterFindPathReferences'):
+                        # For system updates, we should look through the
+                        # database for file conflicts and handle those. For
+                        # source updates, we just give up.
+                            existingFile = files.FileFromFilesystem(
+                                headRealPath, pathId)
+                            fileConflict = \
+                                    not silentlyReplace(headFile, existingFile)
+
+                    if fileConflict and (flags & REPLACEFILES):
+                        # --replace-files was specified
+                        fileConflict = False
+
+                    if not fileConflict:
+                        # mark the file as replaced in anything which used
+                        # to own it
+                        for info in self.db.iterFindPathReferences(
+                                    headPath, justPresent = True):
+                            self.userRemoval(replaced = True, *info)
+                    else:
+                        self.errors.append(FileInWayError(
+                               util.normpath(headRealPath),
+                               troveCs.getName(),
+                               troveCs.getNewVersion(),
+                               troveCs.getNewFlavor()))
                         fullyUpdated = False
                         continue
-            except OSError:
-                # the path doesn't exist, carry on with the restore
-                pass
 
 	    self._restore(headFile, headRealPath, "creating %s")
 	    fsTrove.addFile(pathId, headPath, headFileVersion, headFileId)
@@ -634,10 +718,11 @@ class FilesystemJob:
 	for (pathId, headPath, headFileId, headFileVersion), baseFile \
                 in itertools.izip(troveCs.getChangedFileList(), baseFileList):
 	    if not fsTrove.hasFile(pathId):
-		# the file was removed from the local system; this change
-		# wins
-		self.userRemoval(troveCs.getName(), troveCs.getNewVersion(),
-                                 troveCs.getNewFlavor(), pathId)
+		# the file was removed from the local system; we're not
+		# putting it back
+                self.userRemoval(troveCs.getName(), troveCs.getNewVersion(), 
+                                 troveCs.getNewFlavor(), pathId,
+                                 replaced = False)
 		continue
 
 	    (fsPath, fsFileId, fsVersion) = fsTrove.getFile(pathId)
@@ -673,8 +758,8 @@ class FilesystemJob:
 		else:
 		    pathOkay = False
 		    finalPath = fsPath	# let updates work still
-		    self.errors.append("path conflict for %s (%s on head)" % 
-                                       (util.normpath(fsPath), headPath))
+                    self.errors.append(
+                        PathConflictError(util.normpath(fsPath), headPath))
 
             # final path is the path to use w/o the root
             # real path is the path to use w/ the root
@@ -755,16 +840,12 @@ class FilesystemJob:
                             newLocation = os.path.abspath(os.path.join(
                                 os.path.dirname(finalPath), headFile.target()))
                             self.errors.append(
-                                '%s changed from a directory to '
-                                'a symbolic link.  To apply this changeset, '
-                                'first manually move %s to %s, then run '
-                                '"ln -s %s %s".' %(finalPath, finalPath,
-                                                   newLocation,
-                                                   headFile.target(),
-                                                   finalPath))
+                                DirectoryToSymLinkError(finalPath,
+                                                        newLocation,
+                                                        headFile.target()))
                         else:
-                            self.errors.append("%s changed from a directory to "
-                                               "a non-directory" %finalPath)
+                            self.errors.append(
+                                DirectoryToNonDirectoryError(finalPath))
                         continue
                     else:
                         # someone changed the filesystem so we're replacing
@@ -791,7 +872,7 @@ class FilesystemJob:
                     fileTypeError = True
 
             if fileTypeError:
-                self.errors.append("file type of %s changed" % finalPath)
+                self.errors.append(FileTypeChangedError(finalPath))
                 continue
 
             # if we're forcing an update, we don't need to merge this
@@ -815,8 +896,8 @@ class FilesystemJob:
 			attributesChanged = True
 		    else:
 			contentsOkay = False
-			self.errors.append("file attributes conflict for %s"
-						% util.normpath(realPath))
+                        self.errors.append(FileAttributesConflictError(
+                                                util.normpath(realPath)))
 		else:
 		    # this forces the change to apply
 		    fsFile.twm(headChanges, fsFile, 
@@ -832,7 +913,9 @@ class FilesystemJob:
                    headFile.contents.sha1() != baseFile.contents.sha1()
                 ):
 
-                if not forceUpdate and headFile.flags.isInitialContents():
+                if not(flags & IGNOREINITIALCONTENTS) and \
+                   not forceUpdate and \
+                   headFile.flags.isInitialContents():
 		    log.debug("skipping new contents of InitialContents file"
                               "%s" % finalPath)
 		elif forceUpdate or (flags & REPLACEFILES) or \
@@ -893,37 +976,34 @@ class FilesystemJob:
 		    # it changed in both the filesystem and the repository; our
 		    # only hope is to generate a patch for what changed in the
 		    # repository and try and apply it here
-                    if not changeSet.configFileIsDiff(pathId):
-			self.errors.append("unexpected content type for %s" % 
-						finalPath)
-			contentsOkay = False
-		    else:
-                        (headFileContType,
-                         headFileContents) = changeSet.getFileContents(pathId)
+                    assert(changeSet.configFileIsDiff(pathId))
 
-			cur = open(realPath, "r").readlines()
-			diff = headFileContents.get().readlines()
-			(newLines, failedHunks) = patch.patch(cur, diff)
+                    (headFileContType,
+                     headFileContents) = changeSet.getFileContents(pathId)
 
-			cont = filecontents.FromString("".join(newLines))
-                        # XXX update fsFile.contents.{sha1,size}?
-			self._restore(fsFile, realPath, 
-			      "merging changes from repository into %s",
-			      contentsOverride = cont)
-			beenRestored = True
+                    cur = open(realPath, "r").readlines()
+                    diff = headFileContents.get().readlines()
+                    (newLines, failedHunks) = patch.patch(cur, diff)
 
-			if failedHunks:
-			    self._createFile(
-                                realPath + ".conflicts", 
-                                "".join([x.asString() for x in failedHunks]),
-                                "conflicts from merging changes from " 
-                                "head into %s saved as %s.conflicts" % 
-                            (util.normpath(realPath), util.normpath(realPath)))
+                    cont = filecontents.FromString("".join(newLines))
+                    # XXX update fsFile.contents.{sha1,size}?
+                    self._restore(fsFile, realPath, 
+                          "merging changes from repository into %s",
+                          contentsOverride = cont)
+                    beenRestored = True
 
-			contentsOkay = True
+                    if failedHunks:
+                        self._createFile(
+                            realPath + ".conflicts", 
+                            "".join([x.asString() for x in failedHunks]),
+                            "conflicts from merging changes from " 
+                            "head into %s saved as %s.conflicts" % 
+                        (util.normpath(realPath), util.normpath(realPath)))
+
+                    contentsOkay = True
 		else:
-		    self.errors.append(
-                      "file contents conflict for %s" % util.normpath(realPath))
+                    self.errors.append(FileContentsConflictError(
+                                              util.normpath(realPath)))
 		    contentsOkay = False
             elif headFile.hasContents and headFile.linkGroup():
                 # the contents haven't changed, but the link group has changed.
@@ -1542,10 +1622,11 @@ def userAction(root, userFileList):
         f.setdefault('COMMENT', '')
         f.setdefault('HOMEDIR', '/')
         f.setdefault('SHELL', '/sbin/nologin')
+        f.setdefault('PASSWORD', '*')
         if f['USER'] not in passwd:
             passwd.addLine([
                 f['USER'],
-                '*',
+                f['PASSWORD'],
                 f['PREFERRED_UID'],
                 f['GROUPID'],
                 f['COMMENT'],
@@ -1757,3 +1838,15 @@ class TagCommand:
                 (id, status) = os.waitpid(pid, 0)
                 if not os.WIFEXITED(status) or os.WEXITSTATUS(status):
                     log.error("%s failed", command[0])
+
+def silentlyReplace(newF, oldF):
+    # Can the file already on the disk (oldF) be replaced with the new file
+    # (newF) without telling the user it happened
+    if newF.__class__ != oldF.__class__:
+        return False
+    elif isinstance(newF, files.SymbolicLink) and newF.target == oldF.target:
+        return True
+    elif isinstance(newF, files.RegularFile) and newF.contents == oldF.contents:
+        return True
+
+    return False

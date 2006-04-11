@@ -38,16 +38,46 @@ class Hunk:
 
 	return result
 
-    def countConflicts(self, src, srcLine):
+    def countConflicts(self, src, origSrcLine):
+        # returns -1 if the patch was already applied, or the number of lines
+        # which conflict
 	conflicts = 0
 	srcLen = len(src)
-	for line in self.lines:
-	    if line[0] == " " or line[0] == "-":
-		if srcLine >= srcLen:
-		    conflicts += 1
-		elif src[srcLine] != line[1:]: 
-		    conflicts += 1
-		srcLine += 1
+        srcLine = origSrcLine
+        for line in self.lines:
+            if line[0] == " ":
+                if srcLine >= srcLen:
+                    conflicts += 1
+                elif src[srcLine] != line[1:]: 
+                    conflicts += 1
+                srcLine += 1
+            elif line[0] == "-":
+                # - lines need to be exact matches; we don't want to erase
+                # a line which has been changed. Return that every line
+                # conflicts to ensure we don't apply this.
+                if srcLine >= srcLen:
+                    conflicts = len(self.lines)
+                elif src[srcLine] != line[1:]:
+                    conflicts = len(self.lines)
+                srcLine += 1
+
+        if conflicts:
+            # has this patch already been applied?
+            applied = True
+            srcLine = origSrcLine
+            for line in self.lines:
+                if line[0] == " " or line[0] == "+":
+                    if srcLine >= srcLen:
+                        applied = False
+                        break
+                    elif src[srcLine] != line[1:]: 
+                        applied = False
+                        break
+
+                    srcLine += 1
+
+            if applied:
+                return -1
 
 	return conflicts
 
@@ -168,6 +198,11 @@ def patch(oldLines, unifiedDiff):
 		break
 
 	conflictCount = best[0]
+        
+        if conflictCount == -1:
+            # this hunk has already been applied; skip it
+            continue
+
 	if conflictCount and (hunk.contextCount - conflictCount) < 2:
 	    failedHunks.append(hunk)
 	    continue

@@ -21,12 +21,13 @@ import shutil
 #conary
 from conary import trove, versions
 from conary.build import tags
-from conary.errors import ConaryError, DatabaseError
+from conary.errors import ConaryError, DatabaseError, DatabasePathConflicts
 from conary.callbacks import UpdateCallback
 from conary.conarycfg import RegularExpressionList
 from conary.deps import deps
 from conary.lib import log, util
 from conary.local import localrep, sqldb, schema, update
+from conary.local.errors import *
 from conary.repository import changeset, datastore, errors, filecontents
 from conary.repository import repository, trovesource
 
@@ -52,6 +53,10 @@ class Rollback:
         if not self.count:
             return (None, None)
         return self._getChangeSets(self.count - 1)
+
+    def getLocalChangeset(self, i):
+        local = changeset.ChangeSetFromFile(self.localName % (self.dir, i))
+        return local
 
     def removeLast(self):
         if self.count == 0:
@@ -298,15 +303,15 @@ class SqlDbRepository(trovesource.SearchableTroveSource,
 	return self.db.iterFilesWithTag(tag)
 
     def addFileVersion(self, troveId, pathId, fileObj, path, fileId, version,
-                       fileStream = None):
+                       fileStream = None, isPresent = True):
 	self.db.addFile(troveId, pathId, fileObj, path, fileId, version,
-                        fileStream = fileStream)
+                        fileStream = fileStream, isPresent = isPresent)
 
     def addTrove(self, trove, pin = False):
 	return self.db.addTrove(trove, pin = pin)
 
     def addTroveDone(self, troveInfo):
-        self.db.addTroveDone(troveInfo)
+        return self.db.addTroveDone(troveInfo)
 
     def pinTroves(self, troveList, pin):
         troves = self.getTroves(troveList)
@@ -419,14 +424,40 @@ class Database(SqlDbRepository):
         return resultDict
 
     def depCheck(self, jobSet, troveSource, findOrdering = False):
-        return self.db.depCheck(jobSet, troveSource, 
-                                findOrdering = findOrdering)
+        """
+        Check the database for closure against the operations in
+        the passed changeSet.
+
+        @param jobSet: The jobs which define the dependency check
+        @type jobSet: set
+        @param troveSource: Trove source troves in the job are
+                            available from
+        @type troveSource: AbstractTroveSource:
+        @param findOrdering: If true, a reordering of the job is
+                             returned which preserves dependency
+                             closure at each step.
+        @param findOrdering: boolean
+        @rtype: tuple of dependency failures for new packages and
+                dependency failures caused by removal of existing
+                packages
+        """
+
+        checker = self.dependencyChecker(troveSource)
+        checker.addJobs(jobSet)
+        unsatisfiedList, unresolveableList, changeSetList = \
+                checker.check(findOrdering = findOrdering)
+        checker.done()
+
+        return (unsatisfiedList, unresolveableList, changeSetList)
+
+    def dependencyChecker(self, troveSource):
+        return self.db.dependencyChecker(troveSource)
 
     # local changes includes the A->A.local portion of a rollback; if it
     # doesn't exist we need to compute that and save a rollback for this
     # transaction
     def commitChangeSet(self, cs, uJob,
-                        isRollback = False, toStash = True,
+                        isRollback = False, updateDatabase = True,
                         replaceFiles = False, tagScript = None,
 			test = False, justDatabase = False, journal = None,
                         localRollbacks = False, callback = UpdateCallback(),
@@ -437,7 +468,7 @@ class Database(SqlDbRepository):
         if replaceFiles:
             flags |= update.REPLACEFILES
         if isRollback:
-            flags |= update.MISSINGFILESOKAY
+            flags |= update.MISSINGFILESOKAY | update.IGNOREINITIALCONTENTS
 
         self.db.begin()
 
@@ -478,7 +509,9 @@ class Database(SqlDbRepository):
 	result = update.buildLocalChanges(self, troveList, root = self.root)
 	if not result: return
 
-	localRollback, retList = result
+        retList = result[1]
+        localRollback = changeset.ReadOnlyChangeSet()
+        localRollback.merge(result[0])
 
 	fsTroveDict = {}
 	for (changed, fsTrove) in retList:
@@ -492,11 +525,45 @@ class Database(SqlDbRepository):
 	fsJob = update.FilesystemJob(dbCache, cs, fsTroveDict, self.root, 
 				     flags = flags, callback = callback,
                                      removeHints = removeHints)
+        removeRollback = fsJob.createRemoveRollback()
+
+        # We now have two rollbacks we need to merge together, localRollback
+        # (which is the changes already made to the local system) and
+        # removeRollback, which contains local changes this update will do.
+        # Those two could overlap, so we need to merge them carefully.
+        for removeCs in [ x for x in removeRollback.iterNewTroveList() ]:
+            newInfo = (removeCs.getName(), removeCs.getNewVersion(), 
+                       removeCs.getNewFlavor())
+            if not localRollback.hasNewTrove(*newInfo):
+                continue
+
+            localCs = localRollback.getNewTroveVersion(*newInfo)
+
+            if localCs.getOldVersion() != removeCs.getOldVersion() or \
+               localCs.getOldFlavor() != removeCs.getOldFlavor():
+                contine
+
+            removeRollback.delNewTrove(*newInfo)
+
+            pathIdList = set()
+            for (pathId, path, fileId, version) in removeCs.getNewFileList():
+                pathIdList.add(pathId)
+                localCs.newFile(pathId, path, fileId, version)
+
+            changedList = localCs.getChangedFileList()
+            l = [ x for x in localCs.getChangedFileList() if
+                    x[0] not in pathIdList ]
+            del changedList[:]
+            changedList.extend(l)
+
+            continue
+
+        localRollback.merge(removeRollback)
 
 	# look through the directories which have had files removed and
 	# see if we can remove the directories as well
-	set = fsJob.getDirectoryCountSet()
-	list = set.keys()
+        dirSet = fsJob.getDirectoryCountSet()
+        list = dirSet.keys()
 	list.sort()
 	list.reverse()
 	directoryCandidates = {}
@@ -510,7 +577,7 @@ class Database(SqlDbRepository):
                     raise
                 continue
 
-	    entries -= set[path]
+            entries -= dirSet[path]
 
 	    # listdir excludes . and ..
 	    if (entries) != 0: continue
@@ -518,10 +585,10 @@ class Database(SqlDbRepository):
 	    directoryCandidates[path] = True
 
 	    parent = os.path.dirname(path)
-	    if set.has_key(parent):
-		set[parent] += 1
+            if dirSet.has_key(parent):
+                dirSet[parent] += 1
 	    else:
-		set[parent] = 1
+                dirSet[parent] = 1
 		list.append(parent)
 		# insertion is linear, sort is n log n
 		# oh well.
@@ -549,21 +616,68 @@ class Database(SqlDbRepository):
                 callback.runningPreTagHandlers()
                 fsJob.preapply(tagSet, tagScript)
 
+        for (troveName, troveVersion, troveFlavor, fileDict) in fsJob.iterUserRemovals():
+            if sum(fileDict.itervalues()) == 0:
+                # Nothing to do (these are updates for a trove being installed
+                # as part of this job rather than for a trove which is part
+                # of this job)
+                continue
+
+            self.db.removeFilesFromTrove(troveName, troveVersion,
+                                         troveFlavor, fileDict.keys())
+
+        dbConflicts = []
+
         # Build A->B
-        if toStash:
+        if updateDatabase:
             # this updates the database from the changeset; the change
             # isn't committed until the self.commit below
             # an object for historical reasons
-            localrep.LocalRepositoryChangeSetJob(
-                dbCache, cs, callback, autoPinList, threshold = threshold,
-                allowIncomplete=isRollback)
+            try:
+                localrep.LocalRepositoryChangeSetJob(
+                    dbCache, cs, callback, autoPinList, threshold = threshold,
+                    allowIncomplete = isRollback, 
+                    pathRemovedCheck = fsJob.pathRemoved,
+                    replaceFiles = replaceFiles)
+            except DatabasePathConflicts, e:
+                for (path, (pathId, (troveName, version, flavor)),
+                           newTroveInfo) in e.getConflicts():
+                    dbConflicts.append(DatabasePathConflictError(
+                            util.joinPaths(self.root, path), 
+                            troveName, version, flavor))
+
             self.db.mapPinnedTroves(uJob.getPinMaps())
+        else:
+            # When updateDatabase is False, we're applying the local part
+            # of changeset. Files which are newly added by local changesets
+            # need to be recorded in the database as being present (since
+            # they were previously erased)
+            localrep.markAddedFiles(self.db, cs)
 
         errList = fsJob.getErrorList()
+
+        # Let DatabasePathConflictError mask FileInWayError (since they
+        # are really very similar)
+        newErrs = []
+        for err in dbConflicts:
+            found = None
+            for i, otherErr in enumerate(errList):
+                if isinstance(otherErr, FileInWayError) and \
+                                   err.path == otherErr.path:
+                    found = i
+                    break
+
+            if found is None:
+                newErrs.append(err)
+            else:
+                errList[found] = err
+
+        errList = newErrs + errList
+        del newErrs, dbConflicts
+
         if errList:
-            for err in errList:
-                log.error(err)
-            raise CommitError, 'file system job contains errors'
+            raise CommitError, ('applying update would cause errors:\n' + 
+                                '\n\n'.join(str(x) for x in errList))
         if test:
             self.db.rollback()
             return
@@ -571,13 +685,9 @@ class Database(SqlDbRepository):
         if not justDatabase:
             fsJob.apply(tagSet, tagScript, journal, callback)
 
-        for (troveName, troveVersion, troveFlavor, pathIdList) in fsJob.iterUserRemovals():
-            self.db.removeFilesFromTrove(troveName, troveVersion, 
-                                         troveFlavor, pathIdList)
-
-	for (name, version, flavor) in fsJob.getOldTroveList():
-	    if toStash:
-		# if to stash if false, we're restoring the local
+        if updateDatabase:
+            for (name, version, flavor) in fsJob.getOldTroveList():
+		# if to database if false, we're restoring the local
 		# branch of a rollback
 		self.db.eraseTrove(name, version, flavor)
 
@@ -721,7 +831,21 @@ class Database(SqlDbRepository):
 		raise RollbackOrderError(name)
 	    last -= 1
 
-	for name in names:
+        # Count the number of jobs in the rollback. We have to open the
+        # local rollbacks to know if there is any work to do, which is
+        # unfortunate. We don't want to include empty local rollbacks
+        # in the work count though.
+        totalCount = 0
+        for name in names:
+            rb = self.getRollback(name)
+            totalCount += rb.getCount()
+            for i in xrange(rb.getCount()):
+                localCs = rb.getLocalChangeset(i)
+                if not localCs.isEmpty():
+                    totalCount += 1
+
+        for i, name in enumerate(names):
+            itemCount = i * 2
 	    rb = self.getRollback(name)
 
             # we don't want the primary troves from reposCs to win, so get
@@ -747,25 +871,34 @@ class Database(SqlDbRepository):
                 reposCs.merge(newCs)
 
                 try:
+                    itemCount += 1
+                    callback.setUpdateHunk(itemCount, totalCount)
+                    callback.setUpdateJob(reposCs.getJobSet())
                     self.commitChangeSet(reposCs, UpdateJob(None),
                                          isRollback = True,
                                          replaceFiles = replaceFiles,
                                          callback = callback)
-                    self.commitChangeSet(localCs, UpdateJob(None),
-                                         isRollback = True,
-                                         toStash = False,
-                                         replaceFiles = replaceFiles,
-                                         callback = callback)
+
+                    if not localCs.isEmpty():
+                        itemCount += 1
+                        callback.setUpdateHunk(itemCount, totalCount)
+                        callback.setUpdateJob(localCs.getJobSet())
+                        self.commitChangeSet(localCs, UpdateJob(None),
+                                             isRollback = True,
+                                             updateDatabase = False,
+                                             replaceFiles = replaceFiles,
+                                             callback = callback)
+
                     rb.removeLast()
-                except CommitError:
-                    raise RollbackError(name)
+                except CommitError, err:
+                    raise RollbackError(name, err)
 
                 (reposCs, localCs) = rb.getLast()
 
             self.removeRollback(name)
 
-    def iterFindPathReferences(self, path):
-        return self.db.iterFindPathReferences(path)
+    def iterFindPathReferences(self, path, justPresent = False):
+        return self.db.iterFindPathReferences(path, justPresent = justPresent)
 
     def getTrovesWithProvides(self, depSetList):
         """Returns a dict { depSet : [troveTup, troveTup] } of local 
@@ -809,7 +942,10 @@ class Database(SqlDbRepository):
                 recurseOne(newDepSetList)
         recurseOne(depSetList)
         return closureDepDict
-    
+
+    def iterUpdateContainerInfo(self, troveNames=None):
+        return self.db.iterUpdateContainerInfo(troveNames)
+
     def __init__(self, root, path):
 	self.root = root
 
@@ -871,15 +1007,16 @@ class RollbackError(errors.ConaryError):
 
     """Base class for exceptions related to applying rollbacks"""
 
-    def __init__(self, rollbackName):
+    def __init__(self, rollbackName, errorMessage=''):
 	"""
         Create new new RollbackrError
 	@param rollbackName: string represeting the name of the rollback
         """
 	self.name = rollbackName
+        self.error = errorMessage
 
     def __str__(self):
-	return "rollback %s cannot be applied" % self.name
+	return "rollback %s cannot be applied:\n%s" % (self.name, self.error)
 
 class RollbackOrderError(RollbackError):
 

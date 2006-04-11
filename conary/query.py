@@ -155,7 +155,8 @@ def getTrovesToDisplay(db, troveSpecs, pathList=[]):
     else:
         troveSpecs = []
 
-    pathList = [os.path.abspath(util.normpath(x)) for x in pathList]
+    pathList = [ util.realpath(os.path.abspath(util.normpath(x)))
+                 for x in pathList ]
 
     troveTups = []
     for path in pathList:
@@ -164,15 +165,14 @@ def getTrovesToDisplay(db, troveSpecs, pathList=[]):
                               trove.getFlavor()))
 
     if not (troveSpecs or pathList):
-        # FIXME: There is no database method that would allow me to avoid
-        #        this extra db call.
-        troveSpecs = [ (x, None, None) for x in sorted(db.iterAllTroveNames()) ]
+        names = db.iterAllTroveNames()
+        troveTups = sorted(db.findByNames(names))
         primary = False
+    else:
+        results = db.findTroves(None, troveSpecs)
 
-    results = db.findTroves(None, troveSpecs)
-
-    for troveSpec in troveSpecs:
-        troveTups.extend(results.get(troveSpec, []))
+        for troveSpec in troveSpecs:
+            troveTups.extend(results.get(troveSpec, []))
 
     return troveTups, primary
 

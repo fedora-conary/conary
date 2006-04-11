@@ -51,7 +51,9 @@ def _createComponent(repos, bldPkg, newVersion, ident):
     # returns a (trove, fileMap) tuple
     fileMap = {}
     p = trove.Trove(bldPkg.getName(), newVersion, bldPkg.flavor, None)
-    p.setRequires(bldPkg.requires)
+    # troves don't require things that are provided by themeselves - it 
+    # just creates more work for no benefit.
+    p.setRequires(bldPkg.requires - bldPkg.provides)
     p.setProvides(bldPkg.provides)
 
     linkGroups = {}
@@ -128,22 +130,41 @@ class _IdGen:
 
 # -------------------- public below this line -------------------------
 
-class CookCallback(callbacks.LineOutput, callbacks.CookCallback):
-    def setRate(self, rate):
-        self.rate = rate
+class CookCallback(lookaside.ChangesetCallback, callbacks.CookCallback):
 
-    def sendingChangeset(self, got, need):
-        if need != 0:
-            self._message("Committing changeset "
-                          "(%dKb (%d%%) of %dKb at %dKb/sec)..."
-                          % (got/1024, (got*100)/need, need/1024, self.rate/1024))
-        else:
-            self._message("Committing changeset "
-                          "(%dKb at %dKb/sec)..." % (got/1024, self.rate/1024))
+    def buildingChangeset(self):
+        self._message('Building changeset...')
+
+    def findingTroves(self, num):
+        self._message('Finding %s troves...' % num)
+
+    def gettingTroveDefinitions(self, num):
+        self._message('Getting %s trove definitions...' % num)
+
+    def buildingGroup(self, groupName, idx, total):
+        self.setPrefix('%s (%s/%s): ' % (groupName, idx, total))
+
+    def groupBuilt(self):
+        self.clearPrefix()
+        self.done()
+
+    def groupResolvingDependencies(self):
+        self._message('Resolving dependencies...')
+
+    def groupCheckingDependencies(self):
+        self._message('Checking dependency closure...')
+
+    def groupCheckingPaths(self, current):
+        self._message('Checking for path conflicts: %d' % (current))
+
+    def groupDeterminingPathConflicts(self, total):
+        self._message('Determining the %s paths involved in the path conflicts' % total)
 
     def __init__(self, *args, **kw):
-        callbacks.LineOutput.__init__(self, *args, **kw)
         callbacks.CookCallback.__init__(self, *args, **kw)
+        lookaside.ChangesetCallback.__init__(self, *args, **kw)
+
+
 
 def signAbsoluteChangeset(cs, fingerprint=None):
     # adds signatures or at least sha1s (if fingerprint is None)
@@ -303,7 +324,8 @@ def cookObject(repos, cfg, recipeClass, sourceVersion,
     elif recipeClass.getType() == recipe.RECIPE_TYPE_GROUP:
 	ret = cookGroupObject(repos, db, cfg, recipeClass, sourceVersion, 
 			      macros = macros, targetLabel = targetLabel,
-                              alwaysBumpCount = alwaysBumpCount)
+                              alwaysBumpCount = alwaysBumpCount,
+                              callback = callback)
     elif recipeClass.getType() == recipe.RECIPE_TYPE_FILESET:
 	ret = cookFilesetObject(repos, db, cfg, recipeClass, sourceVersion, 
 				macros = macros, targetLabel = targetLabel,
@@ -318,7 +340,11 @@ def cookObject(repos, cfg, recipeClass, sourceVersion,
     (cs, built, cleanup) = ret
 
     # sign the changeset
-    signatureKey = selectSignatureKey(cfg, sourceVersion.branch().label())
+    if targetLabel:
+        signatureLabel = targetLabel
+    else:
+        signatureLabel = sourceVersion.branch().label()
+    signatureKey = selectSignatureKey(cfg, signatureLabel)
     signAbsoluteChangeset(cs, signatureKey)
 
     if changeSetFile:
@@ -408,7 +434,8 @@ def cookRedirectObject(repos, db, cfg, recipeClass, sourceVersion, macros={},
     return (changeSet, built, None)
 
 def cookGroupObject(repos, db, cfg, recipeClass, sourceVersion, macros={},
-		    targetLabel = None, alwaysBumpCount=False):
+		    targetLabel = None, alwaysBumpCount=False, 
+                    callback = callbacks.CookCallback()):
     """
     Turns a group recipe object into a change set. Returns the absolute
     changeset created, a list of the names of the packages built, and
@@ -447,7 +474,9 @@ def cookGroupObject(repos, db, cfg, recipeClass, sourceVersion, macros={},
 
     flavors = [buildpackage._getUseDependencySet(recipeObj)]
 
-    grouprecipe.buildGroups(recipeObj, cfg, repos)
+    grouprecipe.buildGroups(recipeObj, cfg, repos, callback)
+
+    callback.buildingChangeset()
 
     for group in recipeObj.iterGroupList():
         flavors.extend(x[2] for x in group.iterTroveList())
@@ -1077,8 +1106,8 @@ def guessSourceVersion(repos, name, versionStr, buildLabel,
 
 def cookItem(repos, cfg, item, prep=0, macros={}, 
 	     emerge = False, resume = None, allowUnknownFlags = False,
-             ignoreDeps = False, logBuild = False, crossCompile = None,
-             callback = None):
+             showBuildReqs = False, ignoreDeps = False, logBuild = False,
+             crossCompile = None, callback = None):
     """
     Cooks an item specified on the command line. If the item is a file
     which can be loaded as a recipe, it's cooked and a change set with
@@ -1189,6 +1218,12 @@ def cookItem(repos, cfg, item, prep=0, macros={},
 
         recipeClass = loader.getRecipe()
 
+    if showBuildReqs:
+        if not recipeClass.getType() == recipe.RECIPE_TYPE_PACKAGE:
+            raise CookError("--show-buildreqs is available only for PackageRecipe subclasses")
+        print '\n'.join(recipeClass.buildRequires)
+        return None
+
     if emerge:
         (fd, changeSetFile) = tempfile.mkstemp('.ccs', "emerge-%s-" % name)
         os.close(fd)
@@ -1218,7 +1253,8 @@ def cookItem(repos, cfg, item, prep=0, macros={},
 
 def cookCommand(cfg, args, prep, macros, emerge = False, 
                 resume = None, allowUnknownFlags = False,
-                ignoreDeps = False, profile = False, logBuild = True,
+                showBuildReqs = False, ignoreDeps = False,
+                profile = False, logBuild = True,
                 crossCompile = None, cookIds=None):
     # this ensures the repository exists
     client = conaryclient.ConaryClient(cfg)
@@ -1277,6 +1313,7 @@ def cookCommand(cfg, args, prep, macros, emerge = False,
             built = cookItem(repos, cfg, item, prep=prep, macros=macros,
                              emerge = emerge, resume = resume, 
                              allowUnknownFlags = allowUnknownFlags, 
+                             showBuildReqs = showBuildReqs,
                              ignoreDeps = ignoreDeps, logBuild = logBuild,
                              crossCompile = crossCompile,
                              callback = CookCallback())
@@ -1363,15 +1400,16 @@ def _callSetup(cfg, recipeObj):
             debugger.post_mortem(sys.exc_info()[2])
             raise CookError(str(err))
 
+        filename = '<No File>'
+
         tb = sys.exc_info()[2]
         while tb.tb_next:
             tb = tb.tb_next
+            if tb.tb_frame.f_code.co_filename.endswith('.recipe'):
+                lastRecipeFrame = tb
+                break
 
-        if hasattr(sys.modules[recipeObj.__module__], 'filename'):
-            filename = sys.modules[recipeObj.__module__].filename
-        else:
-            filename = '<nofile>'
-
-	linenum = tb.tb_frame.f_lineno
-        del tb
+        filename = lastRecipeFrame.tb_frame.f_code.co_filename
+	linenum = lastRecipeFrame.tb_frame.f_lineno
+        del tb, lastRecipeFrame
         raise CookError('%s:%s:\n %s: %s' % (filename, linenum, err.__class__.__name__, err))

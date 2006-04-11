@@ -12,7 +12,7 @@
 # full details.
 #
 
-from conary import deps, files, streams, trove, versions
+from conary import deps, errors, files, streams, trove, versions
 from conary import dbstore
 from conary.dbstore import idtable, sqlerrors
 from conary.local import deptable, troveinfo, versiontable, schema
@@ -104,24 +104,19 @@ class DBTroveFiles:
 	cu.execute("UPDATE DBTroveFiles SET isPresent=0 WHERE path=? "
 		   "AND instanceId=?", (path, instanceId))
 
-    def removeFileIds(self, instanceId, pathIdList, forReal = False):
+    def _updatePathIdsPresent(self, instanceId, pathIdList, isPresent):
         pathIdListPattern = ",".join(( '?' ) * len(pathIdList))
         cu = self.db.cursor()
-	cu.execute("""DELETE FROM DBFileTags WHERE
-			streamId IN (
-			    SELECT streamId FROM DBTroveFiles
-				WHERE instanceId=%d AND pathId in (%s)
-			)
-		    """ % (instanceId, pathIdListPattern), pathIdList)
 
-	if forReal:
-	    cu.execute("DELETE FROM DBTroveFiles WHERE instanceId=%d "
-		       "AND pathId in (%s)" % (instanceId, pathIdListPattern),
-                       pathIdList)
-	else:
-	    cu.execute("UPDATE DBTroveFiles SET isPresent=0 WHERE "
-		       "instanceId=%d AND pathId in (%s)" % (instanceId,
-			       pathIdListPattern), pathIdList)
+        cu.execute("UPDATE DBTroveFiles SET isPresent=%d WHERE "
+                   "instanceId=%d AND pathId in (%s)" % (isPresent, 
+                   instanceId, pathIdListPattern), pathIdList)
+
+    def removePathIds(self, instanceId, pathIdList):
+        self._updatePathIdsPresent(instanceId, pathIdList, isPresent = 0)
+
+    def restorePathIds(self, instanceId, pathIdList):
+        self._updatePathIdsPresent(instanceId, pathIdList, isPresent = 1)
 
     def iterFilesWithTag(self, tag):
 	cu = self.db.cursor()
@@ -686,15 +681,17 @@ order by
                         versionId INTEGER,
                         path VARCHAR(768),
                         fileId BLOB,
-                        stream BLOB)""")
+                        stream BLOB,
+                        isPresent INTEGER)""")
 
         cu.execute("""CREATE TEMPORARY TABLE NewFileTags (
                         pathId BLOB,
                         tag VARCHAR(767))""")
 
         stmt = cu.compile("""
-                INSERT INTO NewFiles (pathId, versionId, path, fileId, stream)
-                        VALUES (?, ?, ?, ?, ?)""")
+                INSERT INTO NewFiles (pathId, versionId, path, fileId, 
+                                      stream, isPresent)
+                        VALUES (?, ?, ?, ?, ?, ?)""")
 
 	return (cu, troveInstanceId, stmt)
 
@@ -801,7 +798,7 @@ order by
                         newVersion.asString())
 
     def addFile(self, troveInfo, pathId, fileObj, path, fileId, fileVersion,
-                fileStream = None):
+                fileStream = None, isPresent = True):
 	(cu, troveInstanceId, addFileStmt) = troveInfo
 	versionId = self.getVersionId(fileVersion, self.addVersionCache)
 
@@ -810,7 +807,7 @@ order by
                 fileStream = fileObj.freeze()
 
             cu.execstmt(addFileStmt, pathId, versionId, path, fileId, 
-                        fileStream)
+                        fileStream, isPresent)
 
             if fileObj:
                 tags = fileObj.tags
@@ -823,17 +820,19 @@ order by
                                pathId, tag)
 	else:
 	    cu.execute("""
-		UPDATE DBTroveFiles SET instanceId=? WHERE
+		UPDATE DBTroveFiles SET instanceId=?, isPresent=? WHERE
 		    fileId=? AND pathId=? AND versionId=?""",
-                    troveInstanceId, fileId, pathId, versionId)
+                    troveInstanceId, isPresent, fileId, pathId, versionId)
 
     def addTroveDone(self, troveInfo):
 	(cu, troveInstanceId, addFileStmt) = troveInfo
+
         cu.execute("""
             INSERT INTO DBTroveFiles (pathId, versionId, path, fileId,
                                       instanceId, isPresent, stream)
                         SELECT pathId, versionId, path, fileId, %d,
-                               1, stream FROM NewFiles""" % troveInstanceId)
+                               isPresent, stream FROM NewFiles""" 
+               % troveInstanceId)
         cu.execute("""
             INSERT INTO Tags (tag) SELECT DISTINCT
                 NewFileTags.tag FROM NewFileTags 
@@ -849,6 +848,83 @@ order by
 
         cu.execute("DROP TABLE NewFiles")
         cu.execute("DROP TABLE NewFileTags")
+
+        return troveInstanceId
+
+    def checkPathConflicts(self, instanceIdList, replaceFiles):
+        cu = self.db.cursor()
+        cu.execute("CREATE TEMPORARY TABLE NewInstances (instanceId integer)")
+        for instanceId in instanceIdList:
+            cu.execute("INSERT INTO NewInstances (instanceId) VALUES (?)",
+                       instanceId)
+
+        conflicts = []
+
+        if replaceFiles:
+            # mark conflicting files as no longer present in the old trove
+            cu.execute("""
+                UPDATE DBTroveFiles SET isPresent = 0 WHERE instanceId IN
+                    (
+                        SELECT ExistingFiles.instanceId FROM NewInstances
+                            JOIN DBTroveFiles AS NewFiles USING (instanceId)
+                            JOIN DBTroveFiles AS ExistingFiles ON
+                                NewFiles.path = ExistingFiles.path AND
+                                NewFiles.instanceId != ExistingFiles.instanceId
+                            WHERE
+                                NewFiles.isPresent = 1 AND
+                                ExistingFiles.isPresent = 1
+                    )
+            """)
+        else:
+            cu.execute("""
+                SELECT AddedFiles.path,
+                       ExistingFiles.pathId, ExistingInstances.troveName,
+                       ExistingVersions.version, ExistingFlavors.flavor,
+                       AddedFiles.pathId, AddedInstances.troveName,
+                       AddedVersions.version, AddedFlavors.flavor
+
+                    FROM NewInstances
+                    JOIN DBTroveFiles AS AddedFiles USING (instanceId)
+                    JOIN DBTroveFiles AS ExistingFiles ON
+                        AddedFiles.path = ExistingFiles.path AND
+                        AddedFiles.instanceId != ExistingFiles.instanceId
+
+                    JOIN Instances AS ExistingInstances ON
+                        ExistingFiles.instanceId = ExistingInstances.instanceId
+                    JOIN Versions AS ExistingVersions ON
+                        ExistingInstances.versionId = ExistingVersions.versionId
+                    JOIN Flavors AS ExistingFlavors ON
+                        ExistingInstances.flavorId = ExistingFlavors.flavorId
+
+                    JOIN Instances AS AddedInstances ON
+                        AddedInstances.instanceId = NewInstances.instanceId
+                    JOIN Versions AS AddedVersions ON
+                        AddedInstances.versionId = AddedVersions.versionId
+                    JOIN Flavors AS AddedFlavors ON
+                        AddedInstances.flavorId = AddedFlavors.flavorId
+
+                    WHERE
+                        AddedFiles.isPresent = 1 AND
+                        ExistingFiles.isPresent = 1
+            """)
+
+            for (path, existingPathId, existingTroveName, existingVersion,
+                 existingFlavor, addedPathId, addedTroveName, addedVersion,
+                 addedFlavor) in cu:
+                conflicts.append((path,
+                        (existingPathId, 
+                         (existingTroveName,
+                          versions.VersionFromString(existingVersion),
+                          deps.deps.ThawDependencySet(existingFlavor))),
+                        (addedPathId, 
+                         (addedTroveName,
+                          versions.VersionFromString(addedVersion),
+                          deps.deps.ThawDependencySet(addedFlavor)))))
+
+        cu.execute("DROP TABLE NewInstances")
+
+        if conflicts:
+            raise errors.DatabasePathConflicts(conflicts)
 
     def getFile(self, pathId, fileId, pristine = False):
 	stream = self.troveFiles.getFileByFileId(fileId,
@@ -1114,19 +1190,24 @@ order by
 	    # which was included by a trove which was removed; getting that
 	    # closure may have to be iterative?). that process may be faster
 	    # then the full join?
+            # NOTE: if we could assume that we have weak references this
+            # would be a two-step process
             cu = self.db.cursor()
-            cu.execute("""SELECT Instances.instanceId FROM
+
+            cu.execute("""DELETE FROM TroveInfo WHERE 
+                    instanceId IN (
+                        SELECT Instances.instanceId FROM Instances
+                        WHERE isPresent = 0)
+                      """)
+
+            cu.execute("""DELETE FROM Instances WHERE 
+                    instanceId IN (
+                        SELECT Instances.instanceId
+                        FROM
                         Instances LEFT OUTER JOIN TroveTroves
                         ON Instances.instanceId = TroveTroves.includedId
-                        WHERE isPresent = 0 AND TroveTroves.includedId is NULL
+                        WHERE isPresent = 0 AND TroveTroves.includedId IS NULL)
                       """)
-            instanceIds = [ x[0] for x in cu ]
-
-            for instanceId in instanceIds:
-                cu.execute("DELETE FROM Instances WHERE instanceId=?", 
-                            instanceId)
-                cu.execute("DELETE FROM TroveInfo WHERE instanceId=?", 
-                            instanceId)
 
             cu.execute("""DELETE FROM Versions WHERE Versions.versionId IN
                             (SELECT rmvdVer FROM RemovedVersions
@@ -1144,9 +1225,8 @@ order by
 	self.addVersionCache = {}
 	self.flavorsNeeded = {}
 
-    def depCheck(self, jobSet, troveSource, findOrdering = False):
-        return self.depTables.check(jobSet, troveSource,
-                                    findOrdering = findOrdering)
+    def dependencyChecker(self, troveSource):
+        return deptable.DependencyChecker(self.db, troveSource)
 
     def pathIsOwned(self, path):
 	for instanceId in self.troveFiles.iterPath(path):
@@ -1164,9 +1244,10 @@ order by
 				 pristine = pristine)
 	    yield trv
 
-    def iterFindPathReferences(self, path):
+    def iterFindPathReferences(self, path, justPresent = False):
         cu = self.db.cursor()
-        cu.execute("""SELECT troveName, version, flavor, pathId
+        cu.execute("""SELECT troveName, version, flavor, pathId, 
+                             DBTroveFiles.isPresent
                             FROM DBTroveFiles JOIN Instances ON
                                 DBTroveFiles.instanceId = Instances.instanceId
                             JOIN Versions ON
@@ -1177,7 +1258,10 @@ order by
                                 path = ?
                     """, path)
 
-        for (name, version, flavor, pathId) in cu:
+        for (name, version, flavor, pathId, isPresent) in cu:
+            if not isPresent and justPresent:
+                continue
+
             version = versions.VersionFromString(version)
             if flavor is None:
                 flavor = deps.deps.DependencySet()
@@ -1196,7 +1280,14 @@ order by
 	versionId = self.versionTable[troveVersion]
         flavorId = self.flavors[troveFlavor]
 	instanceId = self.instances[(troveName, versionId, flavorId)]
-	self.troveFiles.removeFileIds(instanceId, pathIdList)
+	self.troveFiles.removePathIds(instanceId, pathIdList)
+
+    def restorePathIdsToTrove(self, troveName, troveVersion, troveFlavor,
+                              pathIdList):
+        versionId = self.versionTable[troveVersion]
+        flavorId = self.flavors[troveFlavor]
+        instanceId = self.instances[(troveName, versionId, flavorId)]
+        self.troveFiles.restorePathIds(instanceId, pathIdList)
 
     def iterFilesInTrove(self, troveName, version, flavor,
                          sortByPath = False, withFiles = False,
@@ -1443,6 +1534,113 @@ order by
             l.append((name, versions.VersionFromString(version), flavorStr))
 
         return l
+
+
+    def iterUpdateContainerInfo(self, troveNames=None):
+        """
+            Returns information about troves and their containers that should 
+            be enough to determine what local updates have been made to the 
+            system.
+
+            If troveNames are specified, returns enough information to be
+            used to determine what local updates have been made to the 
+            given troves.
+
+            Yields ((name, version, flavor), parentInfo, isPresent)
+            tuples, for troves on the system that may be part of a local
+            update.  parentInfo may be (name, version, flavor) or None.
+        """
+        cu = self.db.cursor()
+
+        if troveNames:
+            # Return information needed for determining local updates 
+            # concerning the given troves only.  To do that, we need a 
+            # list of all troves that could potentially affect whether this 
+            # trove is an update - that all parents of these troves
+            # and all troves with the same name as the parents of these troves.
+            cu.execute("CREATE TEMPORARY TABLE tmpInst(instanceId INT)",
+                       start_transaction = False)
+
+            for name in troveNames:
+                cu.execute("""INSERT INTO tmpInst 
+                   SELECT instanceId FROM Instances WHERE troveName = ?""",
+                           name, start_transaction = False)
+
+            # Summary, Insert into this tmpInst all troves that are parents
+            # of the troves already in tmpIst + all troves with the same 
+            # name.
+            cu.execute('''
+                INSERT INTO tmpInst
+                    SELECT DISTINCT SameName.instanceId
+                        FROM tmpInst
+                        JOIN TroveTroves
+                           ON (TroveTroves.includedId = tmpInst.instanceId)
+                        JOIN Instances
+                           ON (TroveTroves.instanceId = Instances.instanceId)
+                        JOIN Instances AS SameName
+                           ON (Instances.troveName == SameName.troveName)
+                        WHERE SameName.instanceId NOT IN
+                              (SELECT instanceId from tmpInst)
+                ''', start_transaction = False)
+            fromClause = 'FROM tmpInst JOIN Instances USING(instanceId)'
+        else:
+            fromClause = 'FROM Instances'
+
+        # Select troves where:
+        # 1. The trove instanceId is listed in tmpInst
+        # 2. There is another trove with the same name that is on the system -
+        #    we don't list removals as local updates (maybe we should?)
+        #    This trove must also not be referenced (this is why we join
+        #    TroveTroves as NotReferenced)
+        # 3. This trove is not both present and referenced - such troves
+        #    are definitely not parts of local updates - they are intended
+        #    installs.
+        cu.execute("""
+        SELECT Instances.isPresent, Instances.troveName, Versions.version,
+               Instances.timeStamps, Flavors.flavor,
+               Parent.troveName, ParentVersion.version, Parent.timeStamps,
+               ParentFlavor.flavor
+        %s
+        JOIN Instances AS InstPresent ON
+            (InstPresent.troveName=Instances.troveName and
+             InstPresent.isPresent)
+        LEFT JOIN TroveTroves AS NotReferenced ON
+            (InstPresent.instanceId=NotReferenced.includedId
+             AND NotReferenced.inPristine=1)
+        JOIN Versions ON
+            Instances.versionId = Versions.versionId
+        JOIN Flavors ON
+            Instances.flavorId = Flavors.flavorId
+        LEFT OUTER JOIN TroveTroves ON
+            (Instances.instanceId = TroveTroves.includedId
+             AND TroveTroves.inPristine=1)
+        LEFT OUTER JOIN Instances AS Parent ON
+            TroveTroves.instanceId=Parent.instanceId
+        LEFT OUTER JOIN Versions AS ParentVersion ON
+            ParentVersion.versionId=Parent.versionId
+        LEFT OUTER JOIN Flavors AS ParentFlavor ON
+            ParentFlavor.flavorId=Parent.flavorId
+        WHERE (NotReferenced.instanceId IS NULL
+               AND ((TroveTroves.inPristine=1 AND Instances.isPresent=0)
+                     OR TroveTroves.inPristine is NULL))
+        """ % fromClause)
+
+        VFS = versions.VersionFromString
+        Flavor = deps.deps.ThawDependencySet
+
+        for (isPresent, name, versionStr, timeStamps, flavorStr, 
+             parentName, parentVersion, parentTimeStamps, parentFlavor) in cu:
+            version = VFS(versionStr, timeStamps=timeStamps.split(':'))
+            if parentName:
+                parentVersion = VFS(parentVersion, 
+                                    timeStamps=parentTimeStamps.split(':'))
+                parentInfo = (parentName, parentVersion, Flavor(parentFlavor))
+            else:
+                parentInfo = None
+            yield ((name, version, Flavor(flavorStr)), parentInfo, isPresent)
+
+        if troveNames:
+            cu.execute("DROP TABLE tmpInst", start_transaction = False)
 
     def findRemovedByName(self, name):
         """

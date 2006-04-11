@@ -73,6 +73,9 @@ class ChangeSetNewTroveList(dict, streams.InfoStream):
 	return "".join(l)
 
     def thaw(self, data):
+        while self:
+            self.clear()
+
 	i = 0
 	while i < len(data):
 	    size = struct.unpack("!I", data[i : i + 4])[0]
@@ -388,7 +391,8 @@ class ChangeSet(streams.StreamSet):
 		    if oper == '+':
 			invertedTrove.oldTroveVersion(name, version, flavor)
 		    elif oper == "-":
-			invertedTrove.newTroveVersion(name, version, flavor, True)
+			invertedTrove.newTroveVersion(name, version, flavor,
+                            trv.includeTroveByDefault(name, version, flavor))
 
 	    for (pathId, path, fileId, version) in troveCs.getNewFileList():
 		invertedTrove.oldFile(pathId)
@@ -679,7 +683,16 @@ class ChangeSet(streams.StreamSet):
                                 (None, None), False))
 
         return jobSet
-            
+
+    def clearTroves(self):
+        """
+        Reset the newTroves and oldTroves list for this changeset. File
+        information is preserved.
+        """
+        self.primaryTroveList.thaw("")
+        self.newTroves.thaw("")
+        self.oldTroves.thaw("")
+
     def __init__(self, data = None):
 	streams.StreamSet.__init__(self, data)
 	self.configCache = {}
@@ -924,9 +937,11 @@ Cannot apply a relative changeset to an incomplete trove.  Please upgrade conary
 	if a new install is desired (the trove is switched from absolute
         to relative to nothing in this case). If an entry is missing for
         a trove, that trove is left absolute.
-	"""
-	assert(self.absolute)
 
+        Rooting can happen multiple times (only once per trove though). To
+        allow this, the absolute file streams remain available from this
+        changeset for all time; rooting does not remove them.
+	"""
 	# this has an empty source path template, which is only used to
 	# construct the eraseFiles list anyway
 	
@@ -940,10 +955,12 @@ Cannot apply a relative changeset to an incomplete trove.  Please upgrade conary
 	    troveName = troveCs.getName()
 	    newVersion = troveCs.getNewVersion()
 	    newFlavor = troveCs.getNewFlavor()
-	    assert(not troveCs.getOldVersion())
 
             if key not in troveMap:
                 continue
+
+            assert(not troveCs.getOldVersion())
+            assert(troveCs.isAbsolute())
 
             (oldVersion, oldFlavor) = troveMap[key]
 
@@ -989,7 +1006,8 @@ Cannot apply a relative changeset to an incomplete trove.  Please upgrade conary
                         self.configCache[pathId] = (contType,
                                                     cont.get().read(), False)
 
-	self.files = {}
+        # leave the old files in place; we my need those diffs for a
+        # trvCs which hasn't been rooted yet
 	for tup in newFiles:
 	    self.addFile(*tup)
 
@@ -1068,6 +1086,7 @@ Cannot apply a relative changeset to an incomplete trove.  Please upgrade conary
             assert(not otherCs.lastCsf)
 
             self.configCache.update(otherCs.configCache)
+            self.fileContainers += otherCs.fileContainers
 
             try:
                 for entry in otherCs.fileQueue:
@@ -1077,26 +1096,19 @@ Cannot apply a relative changeset to an incomplete trove.  Please upgrade conary
                 pathId = err.pathId
                 # look up the trove and file that caused the pathId 
                 # conflict.  
-                conflict1 = conflict2 = None
-
-                for myTrove in self.iterNewTroveList():
+                troves = set(itertools.chain(self.iterNewTroveList(),
+                                             otherCs.iterNewTroveList()))
+                conflicts = []
+                for myTrove in troves:
                     files = (myTrove.getNewFileList() 
                              + myTrove.getChangedFileList())
-                    conflict1 = [ x for x in files if x[0] == pathId]
-                    if conflict1:
-                        conflict1 = conflict1[0]
-                        break
-                for otherTrove in otherCs.iterNewTroveList():
-                    files = (otherTrove.getNewFileList() 
-                             + otherTrove.getChangedFileList())
-                    conflict2 = [ x for x in files if x[0] == pathId]
-                    if conflict2:
-                        conflict2 = conflict2[0]
-                        break
-                if not (conflict1 and conflict2):
+                    conflicts.extend((myTrove, x) for x in files if x[0] == pathId)
+                if len(conflicts) >= 2:
+                    raise PathIdsConflictError(pathId,
+                                               conflicts[0][0], conflicts[0][1],
+                                               conflicts[1][0], conflicts[1][1])
+                else:
                     raise
-                raise PathIdsConflictError(pathId, myTrove, conflict1,
-                                                   otherTrove, conflict2)
 
         else:
             assert(otherCs.__class__ ==  ChangeSet)
@@ -1111,20 +1123,39 @@ Cannot apply a relative changeset to an incomplete trove.  Please upgrade conary
                     self.configCache[pathId] = (contType, contents, compressed)
                 else:
                     configs[pathId] = (contType, contents, compressed)
-                    
+
             wrapper = DictAsCsf(otherCs.fileContents)
             wrapper.addConfigs(configs)
+            self.csfWrappers.append(wrapper)
             entry = wrapper.getNextFile()
             if entry:
                 util.tupleListBsearchInsert(self.fileQueue,
                                             entry + (wrapper,), 
                                             self.fileQueueCmp)
 
+    def reset(self):
+        for csf in self.fileContainers:
+            csf.reset()
+            # skip the CONARYCHANGESET
+            (name, tagInfo, control) = csf.getNextFile()
+            assert(name == "CONARYCHANGESET")
+
+        for csf in self.csfWrappers:
+            csf.reset()
+
+        self.fileQueue = []
+        for csf in itertools.chain(self.fileContainers, self.csfWrappers):
+            entry = csf.getNextFile()
+            if entry:
+                util.tupleListBsearchInsert(self.fileQueue, entry + (csf,),
+                                            self.fileQueueCmp)
 
     def __init__(self, data = None):
 	ChangeSet.__init__(self, data = data)
 	self.configCache = {}
         self.filesRead = False
+        self.csfWrappers = []
+        self.fileContainers = []
 
         self.lastCsf = None
         self.fileQueue = []
@@ -1155,6 +1186,7 @@ class ChangeSetFromFile(ReadOnlyChangeSet):
 
 	self.absolute = True
 	empty = True
+        self.fileContainers = [ csf ]
 
 	for trvCs in self.newTroves.itervalues():
 	    if not trvCs.isAbsolute():
@@ -1269,11 +1301,11 @@ def CreateFromFilesystem(troveList):
 class DictAsCsf:
 
     def getNextFile(self):
-        if not self.items:
+        if self.next >= len(self.items):
             return None
 
-        (name, contType, contObj) = self.items[0]
-        del self.items[0]
+        (name, contType, contObj) = self.items[self.next]
+        self.next += 1
 
         # XXX there must be a better way, but I can't think of it
         f = contObj.get()
@@ -1295,6 +1327,9 @@ class DictAsCsf:
         l.sort()
         self.items = l + self.items
 
+    def reset(self):
+        self.next = 0
+
     def __init__(self, contents):
         # convert the dict (which is a changeSet.fileContents object) to
         # a (name, contTag, contObj) list, where contTag is the same kind
@@ -1302,3 +1337,4 @@ class DictAsCsf:
         self.items = [ (x[0], "0 " + x[1][0][4:], x[1][1]) for x in 
                             contents.iteritems() ]
         self.items.sort()
+        self.next = 0

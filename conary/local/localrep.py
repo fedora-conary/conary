@@ -32,11 +32,20 @@ class LocalRepositoryChangeSetJob(repository.ChangeSetJob):
     """
 
     def addTrove(self, oldTroveSpec, trove):
+        info = trove.getNameVersionFlavor()
         pin = self.autoPinList.match(trove.getName())
-	return self.repos.addTrove(trove, pin = pin)
+	return (info, self.repos.addTrove(trove, pin = pin))
+
+    def addFileVersion(self, troveId, pathId, fileObj, path, fileId, 
+                       newVersion, fileStream = None):
+        isPresent = not self.pathRemovedCheck(troveId[0], pathId)
+        self.repos.addFileVersion(troveId[1], pathId, fileObj, path,
+                                  fileId, newVersion,
+                                  fileStream = fileStream,
+                                  isPresent = isPresent)
 
     def addTroveDone(self, troveId):
-        self.repos.addTroveDone(troveId)
+        self.trovesAdded.append(self.repos.addTroveDone(troveId[1]))
 
     def oldTrove(self, oldTrove, trvCs, name, version, flavor):
         # trvCs is None for an erase, !None for an update
@@ -105,14 +114,17 @@ class LocalRepositoryChangeSetJob(repository.ChangeSetJob):
     # Otherwise, we're applying a rollback and origJob is B->A and
     # localCs is A->A.local, so it doesn't need retargeting.
     def __init__(self, repos, cs, callback, autoPinList, threshold = 0,
-                 allowIncomplete = False):
+                 allowIncomplete = False, pathRemovedCheck = None,
+                 replaceFiles = False):
 	assert(not cs.isAbsolute())
 
 	self.cs = cs
 	self.repos = repos
 	self.oldTroves = []
 	self.oldFiles = []
+        self.trovesAdded = []
         self.autoPinList = autoPinList
+        self.pathRemovedCheck = pathRemovedCheck
 
 	repository.ChangeSetJob.__init__(self, repos, cs, callback = callback,
                                          threshold = threshold, 
@@ -123,6 +135,9 @@ class LocalRepositoryChangeSetJob(repository.ChangeSetJob):
 
         for (pathId, fileVersion, sha1) in self.oldFileList():
 	    self.repos.eraseFileVersion(pathId, fileVersion)
+
+        # this raises an exception if this install would create conflicts
+        self.repos.db.db.checkPathConflicts(self.trovesAdded, replaceFiles)
 
         for (pathId, fileVersion, sha1) in self.oldFileList():
             if sha1 is not None:
@@ -210,3 +225,14 @@ class SqlDataStore(datastore.AbstractDataStore):
     def __init__(self, db):
         self.db = db
         schema.createDataStore(db)
+
+def markAddedFiles(db, cs):
+    """
+    Mark files added by this changeset as present -- they should already
+    be in the database.
+    """
+    for trvCs in cs.iterNewTroveList():
+        # we only need the pathIds
+        pathIds = [ x[0] for x in trvCs.getNewFileList() ]
+        db.restorePathIdsToTrove(trvCs.getName(), trvCs.getOldVersion(),
+                                 trvCs.getOldFlavor(), pathIds)

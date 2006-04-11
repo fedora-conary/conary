@@ -57,11 +57,13 @@ quote = lambda s: urllib.quote(s, safe='')
 
 class _Method(xmlrpclib._Method, xmlshims.NetworkConvertors):
 
-    def __init__(self, send, name, host, pwCallback, anonymousCallback):
+    def __init__(self, send, name, host, pwCallback, anonymousCallback,
+                 altHostCallback):
         xmlrpclib._Method.__init__(self, send, name)
         self.__host = host
         self.__pwCallback = pwCallback
         self.__anonymousCallback = anonymousCallback
+        self.__altHostCallback = altHostCallback
 
     def __repr__(self):
         return "<netclient._Method(%s, %r)>" % (self._Method__send, self._Method__name) 
@@ -96,6 +98,14 @@ class _Method(xmlrpclib._Method, xmlshims.NetworkConvertors):
         except errors.InsufficientPermission:
             # no password was specified -- prompt for it
             if not self.__pwCallback():
+                # It's possible we switched to anonymous
+                # for an earlier query, and now need to 
+                # switch back to our specified user/passwd
+                if self.__altHostCallback and self.__altHostCallback():
+                    self.__altHostCallback = None
+                    # recursively call doCall to get all the 
+                    # password handling goodness
+                    return self.doCall(clientVersion, *args)
                 raise
         except xmlrpclib.ProtocolError, err:
             if err.errcode == 500:
@@ -174,16 +184,27 @@ class ServerProxy(xmlrpclib.ServerProxy):
         return True
 
     def __usedAnonymousCallback(self):
+        self.__altHost = self.__host
         self.__host = self.__host.split('@')[-1]
+
+    def __altHostCallback(self):
+        if self.__altHost:
+            self.__host = self.__altHost
+            self.__altHost = None
+            return True
+        else:
+            return False
 
     def __getattr__(self, name):
         #log.debug('Calling %s:%s' % (self.__host.split('@')[-1], name))
         return _Method(self.__request, name, self.__host, 
-                       self.__passwordCallback, self.__usedAnonymousCallback)
+                       self.__passwordCallback, self.__usedAnonymousCallback,
+                       self.__altHostCallback)
 
     def __init__(self, url, transporter, pwCallback):
         xmlrpclib.ServerProxy.__init__(self, url, transporter)
         self.__pwCallback = pwCallback
+        self.__altHost = None
 
 class ServerCache:
 
@@ -658,7 +679,10 @@ class NetworkRepositoryClient(xmlshims.NetworkConvertors,
 
         d = {}
         for server, l in byServer.iteritems():
-            exists = self.c[server].hasTroves([x[1] for x in l])
+            if server == 'local':
+                exists = [False] * len(l)
+            else:
+                exists = self.c[server].hasTroves([x[1] for x in l])
             d.update(dict(itertools.izip((x[0] for x in l), exists)))
 
         return d
@@ -671,14 +695,15 @@ class NetworkRepositoryClient(xmlshims.NetworkConvertors,
 
 	return rc[0]
 
-    def getTroves(self, troves, withFiles = True):
+    def getTroves(self, troves, withFiles = True, callback = None):
 	chgSetList = []
 	for (name, version, flavor) in troves:
 	    chgSetList.append((name, (None, None), (version, flavor), True))
 
 	cs = self._getChangeSet(chgSetList, recurse = False, 
                                 withFiles = withFiles,
-                                withFileContents = False)
+                                withFileContents = False, 
+                                callback = callback)
 
 	l = []
         # walk the list so we can return the troves in the same order
@@ -1005,8 +1030,8 @@ class NetworkRepositoryClient(xmlshims.NetworkConvertors,
         if withFiles and filesNeeded:
             need = []
             for (pathId, troveName, 
-                        (oldTroveVersion, oldTroveFlavor, oldFileId, oldFileVersion),
-                        (newTroveVersion, newTroveFlavor, newFileId, newFileVersion)) \
+                (oldTroveVersion, oldTroveFlavor, oldFileId, oldFileVersion),
+                (newTroveVersion, newTroveFlavor, newFileId, newFileVersion)) \
                                 in filesNeeded:
                 if oldFileVersion:
                     need.append((pathId, oldFileId, oldFileVersion))
@@ -1016,7 +1041,7 @@ class NetworkRepositoryClient(xmlshims.NetworkConvertors,
             fileDict = {}
             for ((pathId, fileId, fileVersion), fileObj) in zip(need, fileObjs):
                 fileDict[(pathId, fileId)] = fileObj
-            del fileObj, fileObjs, need
+            del fileObj, fileObjs, need, fileId
 
             contentsNeeded = []
             fileJob = []
@@ -1037,6 +1062,9 @@ class NetworkRepositoryClient(xmlshims.NetworkConvertors,
 
 		internalCs.addFile(oldFileId, newFileId, filecs)
 
+                if excludeAutoSource and newFileObj.flags.isAutoSource():
+                    continue
+
                 if withFileContents and hash:
                     # pull contents from the trove it was originally
                     # built in
@@ -1044,16 +1072,15 @@ class NetworkRepositoryClient(xmlshims.NetworkConvertors,
                     needItems = []
 
                     if changeset.fileContentsUseDiff(oldFileObj, newFileObj):
-                        #fetchItems.append( (oldFileId, oldFileVersion, 
-                        #assert(oldFileId == fileId)
-                        fetchItems.append( (fileId, oldFileVersion, 
+                        fetchItems.append( (oldFileId, oldFileVersion, 
                                             oldFileObj) ) 
                         needItems.append( (pathId, oldFileObj) ) 
 
                     fetchItems.append( (newFileId, newFileVersion, newFileObj) )
-                    needItems.append( (pathId, newFileObj) ) 
-
+                    needItems.append( (pathId, newFileObj) )
                     contentsNeeded += fetchItems
+
+
                     fileJob += (needItems,)
 
             contentList = self.getFileContents(contentsNeeded, 
@@ -1123,6 +1150,75 @@ class NetworkRepositoryClient(xmlshims.NetworkConvertors,
             r[self.toDepSet(key)] = l
 
         return r
+
+    def resolveDependenciesByGroups(self, groupTroves, depList):
+        if not groupTroves:
+            return {}
+
+        notMatching = []
+        seen = []
+        notMatching = [ x.getNameVersionFlavor() for x in groupTroves ]
+
+        # here's what we pass to servers: all groups + any troves
+        # that are not mentioned by a group on the same host.
+        # that should be the minimal set of troves.
+        while groupTroves:
+            groupsToGet = []
+            for group in groupTroves:
+                groupHost = group.getVersion().getHost()
+
+                for info in group.iterTroveList(strongRefs=True,
+                                                   weakRefs=True):
+                    h = info[1].getHost()
+                    if groupHost == h:
+                        seen.append(info)
+                    else:
+                        notMatching.append(info)
+                        if info[0].startswith('group-'):
+                            groupsToGet.append(info)
+
+            if not groupsToGet:
+                break
+            groupTroves = self.getTroves(groupsToGet)
+
+        # everything in seen was seen by a parent group on the same host
+        # and can be skipped
+        notMatching = set(notMatching)
+        notMatching.difference_update(seen)
+        del seen
+
+        trovesByHost = {}
+        for info in notMatching:
+            trovesByHost.setdefault(info[1].getHost(), []).append(info)
+
+        frozenDeps = [ self.fromDepSet(x) for x in depList ]
+
+        r = {}
+        for host, troveList in trovesByHost.iteritems():
+            t = [ self.fromTroveTup(x) for x in set(troveList) ]
+            d = self.c[host].getDepSuggestionsByTroves(frozenDeps, t)
+
+            # combine the results for the same dep on different host - 
+            # there's no preference of troves on different hosts in a group
+            # therefore there can be no preference here.
+            for (key, val) in d.iteritems():
+                dep = self.toDepSet(key)
+                if dep not in r:
+                    lst = [ [] for x in val ]
+                    r[dep] = lst
+                else:
+                    lst = r[dep]
+                for i, items in enumerate(val):
+                    # NOTE: this depends on servers returning the
+                    # dependencies in the same order.
+                    # That should be true, but there are no assertions
+                    # we can make anywhere to ensure it, except perhaps
+                    # to ensure that each dependency is resolved when it
+                    # is supposed to be.
+                    lst[i].extend(self.toTroveTup(x, withTime=True)
+                                  for x in items)
+        return r
+
 
     def getFileVersions(self, fullList, lookInLocal = False):
         if self.localRep and lookInLocal:

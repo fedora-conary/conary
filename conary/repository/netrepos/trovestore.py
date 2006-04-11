@@ -364,7 +364,7 @@ class TroveStore:
         # too slow
         cu.execute("""
         UPDATE FileStreams
-        SET stream = (SELECT NewFiles.stream FROM NewFiles
+        SET stream = (SELECT DISTINCT NewFiles.stream FROM NewFiles
                       WHERE FileStreams.fileId = NewFiles.fileId
                         AND NewFiles.stream IS NOT NULL)
         WHERE FileStreams.stream IS NULL
@@ -867,8 +867,8 @@ class TroveStore:
         del retr
         return d
 
-    def resolveRequirements(self, label, depSetList):
-        return self.depTables.resolve(label, depSetList)
+    def resolveRequirements(self, label, depSetList, troveList=[]):
+        return self.depTables.resolve(label, depSetList, troveList=troveList)
 
     def begin(self):
         return self.db.transaction()

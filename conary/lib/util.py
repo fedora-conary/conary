@@ -21,6 +21,7 @@ import misc
 import os
 import select
 import shutil
+import signal
 import stat
 import string
 import sys
@@ -38,6 +39,15 @@ def normpath(path):
     if s.startswith(os.sep + os.sep):
 	return s[1:]
     return s
+
+def realpath(path):
+    # returns the real path of a file, if and only if it is not a symbolic
+    # link
+    if not os.path.exists(path):
+        return path
+    if stat.S_ISLNK(os.lstat(path)[stat.ST_MODE]):
+        return path
+    return os.path.realpath(path)
 
 def isregular(path):
     return stat.S_ISREG(os.lstat(path)[stat.ST_MODE])
@@ -113,21 +123,28 @@ help.
 
 To get a debug prompt, rerun this command with --config 'debugExceptions True'
 '''
+_debugAll = False
 
 def genExcepthook(debug=True, dumpStack=False, 
-                  debugCtrlC=False, prefix='conary-stack-'):
+                  debugCtrlC=False, prefix='conary-stack-',
+                  catchSIGUSR1=True):
+    def SIGUSR1Handler(signum, frame):
+        global _debugAll
+        _debugAll = True
+        print >>sys.stderr, '<Turning on KeyboardInterrupt catching>'
+
     def excepthook(type, value, tb):
         if type is bdb.BdbQuit:
             sys.exit(1)
         sys.excepthook = sys.__excepthook__
-        if type == KeyboardInterrupt and not debugCtrlC:
+        if not _debugAll and (type == KeyboardInterrupt and not debugCtrlC):
             sys.exit(1)
 
         lines = traceback.format_exception(type, value, tb)
         if log.syslog is not None:
             log.syslog.traceback(lines)
 
-        if debug:
+        if debug or _debugAll:
             sys.stderr.write(string.joinfields(lines, ""))
             if sys.stdout.isatty() and sys.stdin.isatty():
                 debugger.post_mortem(tb, type, value)
@@ -156,7 +173,9 @@ def genExcepthook(debug=True, dumpStack=False,
                                                  errtype=type.__name__,
                                                  errmsg=value,
                                                  stackfile=stackfile))
-            
+
+    if catchSIGUSR1:
+        signal.signal(signal.SIGUSR1, SIGUSR1Handler)
     return excepthook
 
 
@@ -663,6 +682,22 @@ class IterableQueue:
 
     def __init__(self):
         self.l = []
+
+def lstat(path):
+    """
+    Return None if the path doesn't exist.
+    """
+    if not misc.exists(path):
+        return None
+
+    try:
+        sb = os.lstat(path)
+    except OSError, e:
+        if e.errno != errno.ENOENT:
+            raise
+        return None
+
+    return sb
 
 exists = misc.exists
 removeIfExists = misc.removeIfExists
