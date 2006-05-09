@@ -34,6 +34,8 @@ from conary import versions
 from conary.build import recipe
 from conary.build import loadrecipe, lookaside
 from conary.build import errors as builderrors
+from conary.build.macros import Macros
+from conary.build.packagerecipe import loadMacros
 from conary.build.cook import signAbsoluteChangeset
 from conary.conarycfg import selectSignatureKey
 from conary.conaryclient import cmdline
@@ -1083,31 +1085,66 @@ def newTrove(repos, cfg, name, dir = None):
         except versions.ParseError:
             log.error("%s is not a valid label" % versionStr)
             return
-    name += ":source"
+    component = "%s:source" % name
 
     # XXX this should really allow a --build-branch or something; we can't
     # create new packages on branches this way
     branch = versions.Branch([label])
-    sourceState = SourceState(name, versions.NewVersion(), branch)
+    sourceState = SourceState(component, versions.NewVersion(), branch)
     conaryState = ConaryState(cfg.context, sourceState)
 
     # see if this package exists on our build branch
     if repos and repos.getTroveLeavesByLabel(
-                        { name : { label : None } }).get(name, []):
-	log.error("package %s already exists" % name)
-	return
+                        { component : { label : None } }).get(component, []):
+        log.error("package %s already exists" % component)
+        return
 
     if dir is None:
-        dir = name.split(":")[0]
+        dir = name
 
     if not os.path.isdir(dir):
-	try:
-	    os.mkdir(dir)
-	except:
-	    log.error("cannot create directory %s/%s", os.getcwd(), dir)
-	    return
+        try:
+            os.mkdir(dir)
+        except:
+            log.error("cannot create directory %s/%s", os.getcwd(), dir)
+            return
 
-    conaryState.write(dir + "/" + "CONARY")
+    recipeFile = '%s.recipe' % name
+    recipeFileDir = os.path.join(dir, recipeFile)
+    if not os.path.exists(recipeFileDir) and cfg.recipeTemplate:
+        try:
+            path = util.findFile(cfg.recipeTemplate, cfg.recipeTemplateDirs)
+        except OSError:
+            log.error("recipe template '%s' not found" % cfg.recipeTemplate)
+            return
+
+        macros = Macros()
+        macros.update({'contactName': cfg.name,
+                       'contact': cfg.contact,
+                       'year': str(time.localtime()[0]),
+                       'name': name,
+                       'upperName': name.capitalize()})
+
+        template = open(path).read()
+        recipe = open(recipeFileDir, 'w')
+
+        try:
+            recipe.write(template % macros)
+        except builderrors.MacroKeyError, e:
+            log.error("could not replace '%s' in recipe template '%s'" % (e.args[0], path))
+            return
+        recipe.close()
+
+    if os.path.exists(recipeFileDir):
+        cwd = os.getcwd()
+        try:
+            os.chdir(dir)
+            pathId = makePathId()
+            sourceState.addFile(pathId, recipeFile, versions.NewVersion(), "0" * 20)
+        finally:
+            os.chdir(cwd)
+
+    conaryState.write(os.path.join(dir, "CONARY"))
 
 def renameFile(oldName, newName):
     conaryState = ConaryStateFromFile("CONARY")
