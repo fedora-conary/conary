@@ -148,6 +148,9 @@ class TroveSchemaError(RepositoryError):
 class PermissionAlreadyExists(RepositoryError):
     pass
 
+class CannotChangePassword(RepositoryError):
+    _error = ('Repository does not allow password changes')
+
 class UserNotFound(RepositoryError):
     def __init__(self, user = "user"):
         self.user = user
@@ -221,4 +224,5 @@ simpleExceptions = (
     (DuplicateBranch,            'DuplicateBranch'),
     (UnknownEntitlementGroup,    'UnknownEntitlementGroup'),
     (InvalidEntitlement,         'InvalidEntitlement'),
+    (CannotChangePassword,       'CannotChangePassword'),
     )
