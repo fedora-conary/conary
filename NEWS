@@ -1,4 +1,9 @@
 Changes in @NEW@:
+  o Client Changes:
+    * The default resolveLevel is now 2, this means that conary will try 
+      to update troves that would otherwise cause an update to fail.  
+      See the conary man page for more details.
+
   o Build Changes:
     * Add the Ant, JavaCompile, and ClassPath build actions to support build 
       java with conary.
@@ -13,6 +18,10 @@ Changes in @NEW@:
     * When checking out a source trove from a repository using "cvc checkout"
       the  user is no longer warned about not being able to change the 
       ownership of the files checked out.
+    * Fixed a bug in conary's determination of what troves had been updated 
+      locally.  This bug caused updateall to consider many x86 troves as
+      needing to be updated separately instead of as a part of group-dist.
+      This could cause updateall failures. (CNY-497)
 
 Changes in 1.0.18:
   o Client Changes:
