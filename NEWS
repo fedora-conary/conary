@@ -1,4 +1,7 @@
 Changes in @NEW@:
+  o Client Changes:
+    * "conary updateall" now accepts the --keep-required command line
+      argument.
   o Bug Fixes:
     * Subdirectories within source components are now better supported.
       Specifically, different subdirectories with the same filename will
