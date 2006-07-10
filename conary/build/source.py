@@ -18,11 +18,14 @@ it, unpack it, and patch it in the correct directory.  Each of the
 public classes in this module is accessed from a recipe as addI{Name}.
 """
 
+import fcntl
 import gzip
 import os
+import subprocess
 import sys
+import tempfile
 
-from conary.lib import log, magic
+from conary.lib import debugger, log, magic
 from conary.build import lookaside
 from conary import rpmhelper
 from conary.lib import util
@@ -30,8 +33,9 @@ from conary.build import action, errors
 
 class _Source(action.RecipeAction):
     keywords = {'rpm': '',
-		'dir': '',
-		'keyid': None }
+                'dir': '',
+                'keyid': None,
+                'httpHeaders': {}}
 
 
     def __init__(self, recipe, *args, **keywords):
@@ -115,22 +119,25 @@ class _Source(action.RecipeAction):
 	r = lookaside.findAll(self.recipe.cfg, self.recipe.laReposCache,
 			      self.rpm, self.recipe.name,
 			      self.recipe.srcdirs)
+        if not r:
+            return
+
 	# XXX check signature in RPM package?
 	c = lookaside.createCacheName(self.recipe.cfg, self.sourcename,
 				      self.recipe.name)
 	_extractFilesFromRPM(r, targetfile=c)
 
 
-    def _findSource(self):
+    def _findSource(self, httpHeaders={}):
         if self.rpm:
             # the file was pulled at some point from the RPM, and if it
             # has been committed it is in the repository
             return lookaside.findAll(self.recipe.cfg, self.recipe.laReposCache,
                 self.sourcename, self.recipe.name, self.recipe.srcdirs,
-                autoSource=True)
+                autoSource=True, httpHeaders=httpHeaders)
 
 	return lookaside.findAll(self.recipe.cfg, self.recipe.laReposCache,
-	    self.sourcename, self.recipe.name, self.recipe.srcdirs)
+	    self.sourcename, self.recipe.name, self.recipe.srcdirs, httpHeaders=httpHeaders)
 
     def fetch(self):
 	if 'sourcename' not in self.__dict__:
@@ -140,6 +147,18 @@ class _Source(action.RecipeAction):
 			      self.recipe.srcdirs)
 	self._checkSignature(f)
 	return f
+
+    def fetchLocal(self):
+        if self.rpm:
+            toFetch = self.rpm
+        else:
+            toFetch = self.sourcename
+
+        f = lookaside.searchAll(self.recipe.cfg, self.recipe.laReposCache,
+                                toFetch, self.recipe.name,
+                                self.recipe.srcdirs, localOnly=True)
+        return f
+
 
     def do(self):
 	raise NotImplementedError
@@ -191,6 +210,12 @@ class Archive(_Source):
     boolean values which determine whether the source code archive is
     actually unpacked, or merely stored in the archive.
 
+    B{httpHeaders} : A dictionary containing a list of headers to send with
+    the http request to download the source archive.  For example, you could
+    set Authorization credentials, fudge a Cookie, or, if direct links are
+    not allowed for some reason (e.g. a click through EULA), a Referer can
+    be provided.
+
     EXAMPLES
     ========
 
@@ -209,6 +234,11 @@ class Archive(_Source):
     C{r.addArchive('ftp://ftp.pbone.net/mirror/ftp.sourceforge.net/pub/sourceforge/g/gc/gcompris/gcompris-7.4-1.i586.rpm')}
 
     Demonstrates use with a binary RPM file accessed via an FTP URL.
+
+    C{r.addArchive('http://ipw2200.sourceforge.net/firmware.php?i_agree_to_the_license=yes&f=%(name)s-%(version)s.tgz', httpHeaders={'Referer': 'http://ipw2200.sourceforge.net/firmware.php?fid=7'})}
+
+    Demonstrates use with a source code archive accessed via an HTTP url, and
+    sending a Referer header through the httpHeader keyword.
     """
 
     def __init__(self, recipe, *args, **keywords):
@@ -233,11 +263,13 @@ class Archive(_Source):
     @keyword use: A Use flag, or boolean, or a tuple of Use flags, and/or
         boolean values which determine whether the source code archive is
         actually unpacked, or merely stored in the archive.
+    @keyword httpHeaders: A dictionary containing headers to add to an http request
+        when downloading the source code archive.
 	"""
 	_Source.__init__(self, recipe, *args, **keywords)
 
     def do(self):
-	f = self._findSource()
+	f = self._findSource(self.httpHeaders)
 	self._checkSignature(f)
         destDir = action._expandOnePath(self.dir, self.recipe.macros,
                                         defaultDir=self.builddir)
@@ -257,7 +289,7 @@ class Archive(_Source):
         util.mkdirChain(destDir)
 
 	if f.endswith(".zip"):
-	    util.execute("unzip -q -o -d %s %s" % (destDir, f))
+	    util.execute("unzip -q -o -d %s '%s'" % (destDir, f))
 
 	elif f.endswith(".rpm"):
             log.info("extracting %s into %s" % (f, destDir))
@@ -292,7 +324,7 @@ class Archive(_Source):
             else:
                 raise SourceError, "unknown archive format: " + f
 
-            util.execute("%s < %s | %s" % (_uncompress, f, _unpack))
+            util.execute("%s < '%s' | %s" % (_uncompress, f, _unpack))
 
         if guessMainDir:
             bd = self.builddir
@@ -311,7 +343,17 @@ class Archive(_Source):
                 candidate = difference.pop()
                 if os.path.isdir('%s/%s' %(self.builddir, candidate)):
                     self.recipe.mainDir(candidate)
-                    os.rmdir('/'.join((self.builddir, oldMainDir)))
+                    try:
+                        os.rmdir('/'.join((self.builddir, oldMainDir)))
+                    except OSError:
+                        raise SourceError(
+                            'Sources do not agree on main directory:'
+                            ' files exist in %s but first archive wants %s;'
+                            ' try calling addArchive() before other'
+                            ' source actions such as addSource()',
+                            '/'.join((self.builddir, oldMainDir)),
+                            '/'.join((self.builddir, candidate))
+                        )
                 else:
                     self.recipe.mainDir(oldMainDir)
             else:
@@ -363,9 +405,11 @@ class Patch(_Source):
     appropriate GPG key. A missing signature results in a warning; a failed
     signature check is fatal.
 
-    B{level} : By default, one level of initial subdirectory names is stripped
-    out prior to applying the patch. The C{level} keyword allows
-    specification of additional initial subdirectory levels to be removed.
+    B{level} : By default, conary attempts to patch the source using
+    levels 1, 0, 2, and 3, in that order. The C{level} keyword can
+    be given an integer value to resolve ambiguity, or if an even
+    higher level is required.  (This is the C{-p} option to the
+    patch program.)
 
     B{macros} : The C{macros} keyword accepts a boolean value, and defaults
     to false. However, if the value of C{macros} is true, recipe macros in the
@@ -381,6 +425,12 @@ class Patch(_Source):
     B{use} : A Use flag, or boolean, or a tuple of Use flags, and/or
     boolean values which determine whether the source code archive is
     actually unpacked or merely stored in the archive.
+
+    B{httpHeaders} : A dictionary containing a list of headers to send with
+    the http request to download the source archive.  For example, you could
+    set Authorization credentials, fudge a Cookie, or, if direct links are
+    not allowed for some reason (e.g. a click through EULA), a Referer can
+    be provided.
 
     EXAMPLES
     ========
@@ -399,7 +449,7 @@ class Patch(_Source):
     stripped, and a C{dir} keyword, instructing C{r.addPatch} to change to the
     C{lib/Xaw3d} directory prior to applying the patch.
     """
-    keywords = {'level': '1',
+    keywords = {'level': None,
 		'backup': '',
 		'macros': False,
 		'extraArgs': ''}
@@ -429,9 +479,11 @@ class Patch(_Source):
         I{patchname}C{.{sig,sign,asc}}, and ensure it is signed with the
         appropriate GPG key. A missing signature results in a warning; a
         failed signature check is fatal.
-    @keyword level: By default, one level of initial subdirectory names is
-        stripped out prior to applying the patch.  The C{level} keyword allows
-        specification of additional initial subdirectory levels to be removed.
+    @keyword level: By default, conary attempts to patch the source using
+        levels 1, 0, 2, and 3, in that order. The C{level} keyword can
+        be given an integer value to resolve ambiguity, or if an even
+        higher level is required.  (This is the C{-p} option to the
+        patch program.)
     @keyword macros: The C{macros} keyword accepts a boolean value, and
         defaults to false. However, if the value of C{macros} is true, recipe
         macros in the body  of the patch will be interpolated before applying
@@ -443,40 +495,78 @@ class Patch(_Source):
     @keyword use: A Use flag, or boolean, or a tuple of Use flags, and/or
         boolean values which determine whether the source code archive is
         actually unpacked, or merely stored in the archive.
+    @keyword httpHeaders: A dictionary containing headers to add to an http request
+        when downloading the source code archive.
 	"""
 	_Source.__init__(self, recipe, *args, **keywords)
 	self.applymacros = self.macros
 
-    def do(self):
+    def patchme(self, patch, f, destDir, patchlevels):
+        for patchlevel in patchlevels:
+            patchArgs = [ 'patch', '-d', destDir, '-p%s'%patchlevel, ]
+            if self.backup:
+                patchArgs.extend(['-b', '-z', self.backup])
+            if self.extraArgs:
+                patchArgs.extend(self.extraArgs)
 
+            log.info('attempting to apply %s with patchlevel %s' % (f,patchlevel))
+            fd, path = tempfile.mkstemp()
+            os.unlink(path)
+            logFile = os.fdopen(fd, 'w+')
+
+            inFd, outFd = os.pipe()
+            p2 = subprocess.Popen(patchArgs, stdin=inFd, stderr=logFile,
+                                  shell=False, stdout=logFile, close_fds=True)
+
+            os.close(inFd)
+            offset=0
+            while len(patch[offset:]):
+                offset += os.write(outFd, patch[offset:])
+            os.close(outFd) # since stdin is closed, we can't
+                            # answer y/n questions.
+
+            failed = p2.wait()
+            try:
+                logFile.flush()
+                logFile.seek(0,0)
+                print logFile.read().strip()
+            except IOError:
+                pass
+            logFile.close()
+
+            if failed:
+                log.info('patch %s did not apply with level %s' % (f,patchlevel))
+            else:
+                log.info('patch applied successfully')
+                return
+        log.error('could not apply patch %s in directory %s', f, destDir)
+        raise SourceError, 'could not apply patch %s' % f
+
+    def do(self):
 	f = self._findSource()
+        # FIXME: we should probably read in the patch directly now
+        # that we aren't just applying in a pipeline
 	provides = "cat"
 	if self.sourcename.endswith(".gz"):
 	    provides = "zcat"
 	elif self.sourcename.endswith(".bz2"):
 	    provides = "bzcat"
-	if self.backup:
-	    self.backup = '-b -z %s' % self.backup
         defaultDir = os.sep.join((self.builddir, self.recipe.theMainDir))
         destDir = action._expandOnePath(self.dir, self.recipe.macros,
                                                   defaultDir=defaultDir)
+        if self.level != None:
+            leveltuple = (self.level,)
+        else:
+            leveltuple = (1,0,2,3,)
         util.mkdirChain(destDir)
-	if self.applymacros:
-	    log.info('applying macros to patch %s' %f)
-	    pin = util.popen("%s '%s'" %(provides, f))
-	    log.info('patch -d %s -p%s %s %s'
-		      %(destDir, self.level, self.backup, self.extraArgs))
-	    pout = util.popen('patch -d %s -p%s %s %s'
-		              %(destDir, self.level, self.backup,
-			        self.extraArgs), 'w')
-	    pout.write(pin.read()%self.recipe.macros)
-	    pin.close()
-	    pout.close()
-	else:
-	    util.execute("%s '%s' | patch -d %s -p%s %s %s"
-			 %(provides, f, destDir, self.level, self.backup,
-			   self.extraArgs))
 
+        pin = util.popen("%s '%s'" %(provides, f))
+	if self.applymacros:
+            patch = pin.read() % self.recipe.macros
+	else:
+            patch = pin.read()
+        pin.close()
+        self.patchme(patch, f, destDir, leveltuple)
 
 class Source(_Source):
     """
@@ -541,6 +631,12 @@ class Source(_Source):
     that determine whether the archive is actually unpacked or merely stored
     in the archive.
 
+    B{httpHeaders} : A dictionary containing a list of headers to send with
+    the http request to download the source archive.  For example, you could
+    set Authorization credentials, fudge a Cookie, or, if direct links are
+    not allowed for some reason (e.g. a click through EULA), a Referer can
+    be provided.
+
     EXAMPLES
     ========
 
@@ -575,8 +671,11 @@ class Source(_Source):
         within a recipe is unnecessary.
     @keyword dest: If set, provides the target name of the file in the build
         directory. A full pathname can be used. Use either B{dir}, or 
-        B{dest} to specify directory information, but not both. Useful mainly        when fetching the file from an source outside your direct control,
-        such as a URL to a third-party web site, or copying a file out of an         RPM package. An absolute C{dest} value will be considered relative to        C{%(destdir)s}, whereas a relative C{dest} value will be considered
+        B{dest} to specify directory information, but not both. Useful mainly
+        when fetching the file from an source outside your direct control, such
+        as a URL to a third-party web site, or copying a file out of an
+        RPM package. An absolute C{dest} value will be considered relative to
+        C{%(destdir)s}, whereas a relative C{dest} value will be considered
         relative to C{%(builddir)s}.
     @keyword dir: The directory in which to store the file, relative to
         the build directory. An absolute C{dir} value will be considered
@@ -604,6 +703,8 @@ class Source(_Source):
     @keyword use: A Use flag or boolean, or a tuple of Use flags and/or
         booleans, that determine whether the archive is actually unpacked or
         merely stored in the archive.
+    @keyword httpHeaders: A dictionary containing headers to add to an http request
+        when downloading the source code archive.
 	"""
 	_Source.__init__(self, recipe, *args, **keywords)
 	if self.dest:
@@ -635,7 +736,6 @@ class Source(_Source):
 	    self.applymacros = False
 
     def do(self):
-	f = self._findSource()
 
         defaultDir = os.sep.join((self.builddir, self.recipe.theMainDir))
         destDir = action._expandOnePath(self.dir, self.recipe.macros,
@@ -651,6 +751,7 @@ class Source(_Source):
 		pout.write(self.contents)
 	    pout.close()
 	else:
+            f = self._findSource()
 	    if self.applymacros:
 		log.info('applying macros to source %s' %f)
 		pin = file(f)

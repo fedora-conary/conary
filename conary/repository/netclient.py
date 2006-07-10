@@ -172,14 +172,36 @@ class ServerProxy(xmlrpclib.ServerProxy):
         if self.__pwCallback is None:
             return False
 
-        l = self.__host.split('@')
+        l = self.__host.split('@', 1)
+        if len(l) == 1: 
+            fullHost = l[0]
+            user, password = self.__pwCallback(self.__serverName)
+            if not user or not password:
+                return False
+            if not self.__usedMap:
+                # the user didn't specify what protocol to use, therefore
+                # we assume that when we need a user/password we need
+                # to use https
+                self.__transport.https = True
+        else:
+            user, fullHost = l
+            if user[-1] != ':':
+                return False
 
-        if len(l) != 2 or l[0][-1] != ':':
-            return False
+            user = user[:-1]
 
-        password = self.__pwCallback(l[0][:-1], l[1])
-        l[0] = l[0] + password
-        self.__host = '@'.join(l)
+            # if there is a port number, strip it off
+            l = fullHost.split(':', 1)
+            if len(l) == 2:
+                host = l[0]
+            else:
+                host = fullHost
+
+            user, password = self.__pwCallback(self.__serverName, user)
+            if not user or not password:
+                return False
+
+        self.__host = '%s:%s@%s' % (user, password, fullHost)
 
         return True
 
@@ -202,12 +224,15 @@ class ServerProxy(xmlrpclib.ServerProxy):
                        self.__passwordCallback, self.__usedAnonymousCallback,
                        self.__altHostCallback)
 
-    def __init__(self, url, transporter, pwCallback):
+    def __init__(self, url, serverName, transporter, pwCallback, usedMap):
         xmlrpclib.ServerProxy.__init__(self, url, transporter)
         self.__pwCallback = pwCallback
         self.__altHost = None
+        self.__serverName = serverName
+        self.__usedMap = usedMap
 
 class ServerCache:
+
     def __init__(self, repMap, userMap, pwPrompt, entitlementDir):
 	self.cache = {}
 	self.map = repMap
@@ -215,6 +240,12 @@ class ServerCache:
 	self.pwPrompt = pwPrompt
         self.entitlementDir = entitlementDir
 
+    def __getPassword(self, host, user=None):
+        user, pw = self.pwPrompt(host, user)
+        if user is None or pw is None:
+            return None, None
+        self.userMap.append((host, user, pw))
+        return user, pw
 
     def __getitem__(self, item):
 	if isinstance(item, (versions.Label, versions.VersionSequence)):
@@ -249,17 +280,18 @@ class ServerCache:
         # check for an entitlement for this server
         ent = conarycfg.loadEntitlement(self.entitlementDir, serverName)
 
+        usedMap = url is not None
         if url is None:
             if ent or userInfo:
+                # if we have a username/password, use https
                 protocol = 'https'
             else:
+                # if we are using anonymous, use http
                 protocol = 'http'
 
             if userInfo is None:
-                # if we are using anonymous, use http
                 url = "%s://%s/conary/" % (protocol, serverName)
             else:
-                # if we have a username/password, use https
                 url = "%s://%s:%s@%s/conary/" % (protocol,
                                                  quote(userInfo[0]),
                                                  quote(userInfo[1]),
@@ -269,12 +301,14 @@ class ServerCache:
             assert(not s[1])
             s[2] = ('%s:%s@' % (quote(userInfo[0]), quote(userInfo[1]))) + s[2]
             url = '/'.join(s)
+            usedMap = True
 
         protocol, uri = urllib.splittype(url)
         transporter = transport.Transport(https = (protocol == 'https'),
                                           entitlement = ent)
 
-        server = ServerProxy(url, transporter, self.pwPrompt)
+        server = ServerProxy(url, serverName, transporter, self.__getPassword,
+                             usedMap = usedMap)
         self.cache[serverName] = server
 
         try:
@@ -302,13 +336,19 @@ class ServerCache:
                 "While talking to repository " + url + ":\n"
                 "Invalid server version.  Server accepts client "
                 "versions %s, but this client only supports versions %s"
-                " - download a valid client from wiki.conary.com" %
+                " - download a valid client from wiki.rpath.com" %
                 (",".join([str(x) for x in serverVersions]),
                  ",".join([str(x) for x in CLIENT_VERSIONS])))
 
         transporter.setCompress(True)
 
 	return server
+
+    def getPwPrompt(self):
+        return self.pwPrompt
+
+    def getUserMap(self):
+        return self.userMap
 
 class NetworkRepositoryClient(xmlshims.NetworkConvertors,
 			      repository.AbstractRepository, 
@@ -322,7 +362,7 @@ class NetworkRepositoryClient(xmlshims.NetworkConvertors,
         # troves _getChangeSet needs when it's building changesets which
         # span repositories. it has no effect on any other operation.
         if pwPrompt is None:
-            pwPrompt = lambda x, y: None
+            pwPrompt = lambda x, y: None, None
 
         self.downloadRateLimit = downloadRateLimit
         self.uploadRateLimit = uploadRateLimit
@@ -341,6 +381,17 @@ class NetworkRepositoryClient(xmlshims.NetworkConvertors,
 
     def open(self, *args):
         pass
+
+    def getUserMap(self):
+        """
+        The user/password map can be updated at runtime since we're prompting
+        the user for passwords. We may need to get those passwords back out
+        again to avoid having to reprompt for passwords.
+        """
+        return self.c.getUserMap()
+
+    def getPwPrompt(self):
+        return self.c.pwPrompt
 
     def updateMetadata(self, troveName, branch, shortDesc, longDesc = "",
                        urls = [], licenses=[], categories = [],
@@ -412,6 +463,9 @@ class NetworkRepositoryClient(xmlshims.NetworkConvertors,
     def addUserByMD5(self, label, user, salt, password):
         #Base64 encode salt
         self.c[label].addUserByMD5(user, base64.encodestring(salt), password)
+
+    def addGroup(self, label, groupName):
+        return self.c[label].addGroup(groupName)
 
     def addDigitalSignature(self, name, version, flavor, digsig):
         signature = trove.DigitalSignature()
@@ -498,15 +552,25 @@ class NetworkRepositoryClient(xmlshims.NetworkConvertors,
         entitlement = self.fromEntitlement(entitlement)
         return self.c[serverName].addEntitlement(entGroup, entitlement)
 
+    def deleteEntitlement(self, serverName, entGroup, entitlement):
+        entitlement = self.fromEntitlement(entitlement)
+        return self.c[serverName].deleteEntitlement(entGroup, entitlement)
+
     def addEntitlementGroup(self, serverName, entGroup, userGroup):
         return self.c[serverName].addEntitlementGroup(entGroup, userGroup)
 
     def addEntitlementOwnerAcl(self, serverName, userGroup, entGroup):
         return self.c[serverName].addEntitlementOwnerAcl(userGroup, entGroup)
 
+    def deleteEntitlementOwnerAcl(self, serverName, userGroup, entGroup):
+        return self.c[serverName].deleteEntitlementOwnerAcl(userGroup, entGroup)
+
     def listEntitlements(self, serverName, entGroup):
         l = self.c[serverName].listEntitlements(entGroup)
         return [ self.toEntitlement(x) for x in l ]
+
+    def listEntitlementGroups(self, serverName):
+        return self.c[serverName].listEntitlementGroups()
 
     def troveNames(self, label):
 	return self.c[label].troveNames(self.fromLabel(label))

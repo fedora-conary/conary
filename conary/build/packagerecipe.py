@@ -142,7 +142,10 @@ class _AbstractPackageRecipe(Recipe):
 	    util.rmtree(builddir)
 
     def sourceMap(self, path):
-        basepath = os.path.basename(path)
+        if os.path.exists(path):
+            basepath = path
+        else:
+            basepath = os.path.basename(path)
         if basepath in self.sourcePathMap:
             if basepath == path:
                 # we only care about truly different source locations with the
@@ -170,7 +173,10 @@ class _AbstractPackageRecipe(Recipe):
             errlist = []
             for basepath in self.pathConflicts.keys():
                 errlist.extend([x for x in self.pathConflicts[basepath]])
-            raise RecipeFileError, '\n'.join(errlist)
+            raise RecipeFileError("The following file names conflict "
+                                  "(cvc does not currently support multiple"
+                                  " files with the same name from different"
+                                  " locations):\n   " + '\n   '.join(errlist))
 	self.prepSources()
 	files = []
 	for src in self._sources:
@@ -181,6 +187,18 @@ class _AbstractPackageRecipe(Recipe):
 		else:
 		    files.append(f)
 	return files
+
+    def fetchLocalSources(self):
+	files = []
+	for src in self._sources:
+	    f = src.fetchLocal()
+	    if f:
+		if type(f) in (tuple, list):
+		    files.extend(f)
+		else:
+		    files.append(f)
+        return files
+
 
     def checkBuildRequirements(self, cfg, sourceVersion, ignoreDeps=False):
         """ Checks to see if the build requirements for the recipe
@@ -220,7 +238,7 @@ class _AbstractPackageRecipe(Recipe):
 
         def _filterBuildReqsByFlavor(flavor, troves):
             troves.sort(lambda a, b: a.getVersion().__cmp__(b.getVersion()))
-            if not flavor:
+            if flavor is None:
                 return troves[-1]
             for trove in reversed(versionMatches):
                 troveFlavor = trove.getFlavor()
@@ -433,7 +451,7 @@ class _AbstractPackageRecipe(Recipe):
             srcName = rclass._trove.getName()
             srcVersion = rclass._trove.getVersion()
             for f in repos.iterFilesInTrove(srcName, srcVersion,
-                                            deps.DependencySet(),
+                                            deps.Flavor(),
                                             withFiles=True):
                 pathId, path, fileId, version, fileObj = f
                 assert(path[0] != "/")
@@ -537,7 +555,7 @@ class _AbstractPackageRecipe(Recipe):
                  architecture.
         """
         def _parseArch(archSpec):
-            if isinstance(archSpec, deps.DependencySet):
+            if isinstance(archSpec, deps.Flavor):
                 return archSpec, None, None
 
             if '-' in archSpec:
@@ -552,7 +570,7 @@ class _AbstractPackageRecipe(Recipe):
                 raise errors.CookError('Invalid architecture specification %s'
                                        %archSpec)
 
-            if not flavor:
+            if flavor is None:
                 raise errors.CookError('Invalid architecture specification %s'
                                        %archSpec)
             return flavor, vendor, hostOs
@@ -704,22 +722,25 @@ class _AbstractPackageRecipe(Recipe):
 	self.macros = macros.Macros()
         baseMacros = loadMacros(cfg.defaultMacros)
 	self.macros.update(baseMacros)
-        if crossCompile:
-            self.setCrossCompile(crossCompile)
-        else:
-            self.macros.update(use.Arch._getMacros())
-            self.macros['hostarch'] = self.macros['targetarch']
-            self.macros['buildarch'] = self.macros['targetarch']
 
         # allow for architecture not to be set -- this could happen
         # when storing the recipe e.g.
  	for key in cfg.macros:
  	    self.macros._override(key, cfg['macros'][key])
+
 	self.macros.name = self.name
 	self.macros.version = self.version
         self.packages = { self.name : True }
 	if extraMacros:
 	    self.macros.update(extraMacros)
+
+        if crossCompile:
+            self.setCrossCompile(crossCompile)
+        else:
+            self.macros.update(use.Arch._getMacros())
+            self.macros.setdefault('hostarch', self.macros['targetarch'])
+            self.macros.setdefault('buildarch', self.macros['targetarch'])
+
 	self.mainDir(self.nameVer(), explicit=False)
         self.sourcePathMap = {}
         self.pathConflicts = {}
@@ -811,7 +832,7 @@ class BuildPackageRecipe(PackageRecipe):
     EXAMPLE
     =======
 
-    C{class DocbookDtds(BuidlPackageRecipe):}
+    C{class DocbookDtds(BuildPackageRecipe):}
 
     Uses C{BuildPackageRecipe} to define the class for a Docbook Document Type
     Definition collection recipe.

@@ -1,9 +1,237 @@
+Changes in @NEW@:
+  o API Changes:
+    * Expose the interface to create Groups in ConaryClient.
+
+  o Client Changes:
+    * "conary updateall" now accepts the --keep-required command line
+      argument.
+
+  o Server Changes:
+    * No longer support repository schema migrations for versions of Conary
+      older than 1.0. If you have a repository that old, please contact
+      us for help.
+
+  o Bug Fixes:
+    * Subdirectories within source components are now better supported.
+      Specifically, different subdirectories with the same filename will
+      now work. (CNY-617)
+
+Changes in 1.0.22:
+  o Client Changes:
+    * Conary now has hooks for allowing you to be prompted for both name
+      and password when necessary.
+    * Conary will no longer report a traceback when trying to perform 
+      dependency resolution against repositories that are not available.
+      Instead, it will print out a warning. (CNY-578)
+
+  o Build Changes:
+    * It is now possible to set environment variables to use within
+      Conary builds from within conary configuration files, using the
+      new "environment" configuration item.  Thanks to Pavel
+      Volkovitskiy for implementing this feature. (CNY-592)
+    * In previous versions of Conary, calls to r.PackageSpec() would
+      improperly override previous calls to r.ComponentSpec(); now
+      the ordering is preserved.  Thanks to Pavel Volkovitskiy for 
+      this fix. (CNY-613)
+
+  o Bug Fixes:
+    * A bug that would allow recursively generated changesets to
+      potentially have missing redirect flags has been fixed.
+    * A bug in redirect handling when the branch changed but the trove
+      name didn't has been fixed - conary will do a better job of
+      determining what jobs to perform in this situation. (CNY-599, CNY-602)
+    * Errors relating to PGP now just display the error instead of causing 
+      conary to traceback. (CNY-591)
+    * Conary sync on a locally cooked trove will no longer traceback (CNY-568)
+    * --from-file and sync now work together.
+    * An AssertionError that was occasionally reached by incorrect repository
+      setups is now a ConaryInternalError
+    * A bug when updating to a locally cooked trove when the user had 
+      manually removed files has been fixed. (CNY-604)
+    * CONARY files that are not accessible will no longer cause conary to
+      traceback when trying to read context from them. (CNY-456)
+    * signatureKeyMap configuration entries are now checked to ensure
+      they are valid. (CNY-531)
+
+Changes in 1.0.21:
+  o Client Changes:
+    * The "conary migrate" command has changed behavior significantly
+      in order to make it more useful for updating a system to exactly
+      match a different group.  However, this change makes it much
+      less useful for updating normal systems.  "conary migrate"
+      should not be used without first reading the man page
+      description of its behavior.  The old migrate behavior is now
+      available by using "conary sync --full".  "conary syncchildren"
+      has been renamed to "conary sync", and its behavior has also
+      been modified slightly as a result.  The old behavior is
+      available by using "conary sync --current". Please read the man
+      page for a full description of the "sync" command as well.  (CNY-477)
+
+  o Build Changes:
+    * A "package" keyword parameter has been added to build actions,
+      which specifies the package and/or component to which to assign
+      the files that are added (not modified or deleted) by that build
+      action.  For example, r.MakeInstall(package="foo") will place
+      all the new files installed by the MakeInstall action into the
+      "foo" package.  Thanks to Pavel Volkovitskiy for contributing
+      this capability.  (CNY-562)
+    * A "httpHeaders" keyword parameter has been added to the
+      r.addArchive(), r.addPatch(), and r.addSource() source actions
+      so that headers can be added to the HTTP request.
+
+  o Bug Fixes:
+    * The r.addPatch() build action no longer depends on nohup to
+      create a file in the current directory (a bug introduced in
+      conary 1.0.19). (CNY-575)
+    * Commits with missing files no longer traceback. (CNY-455)
+    * A bug that caused "#!/usr/bin/env /bin/bash" to not be
+      normalized to /bin/bash by the NormalizeInterpreterPaths policy
+      has been fixed.
+    * A bug that prevented Conary from being able to download files
+      that contain '&' or ';' characters has been fixed.  This allows
+      Conary to download sources from cgi-bin URLs.
+    * "cvc merge" no longer fails to merge changes from the parent
+      branch when the shadowed version doesn't exist on the parent
+      branch.
+
+Changes in 1.0.20:
+  o Build Changes:
+    * "jvmdir", "javadir", "javadocdir", and "thisjavadocdir" have
+       been added to the default set of macros.
+    * A r.JavaDoc() build action has been added.  It funtions
+      exactly like the "r.Doc()" build action, except it coppies into
+      "%(thisjavadocdir)s".
+    * When the r.addArchive() source action attempts to guess the main
+      directory in which to build, it now recognizes when when sources
+      have been added in an order that defeats its algorithm and provides
+      a helpful error message. (CNY-557)
+
+  o Client Changes:
+    * A --tag-script parameter has been added to the rollback
+      command. (CNY-519)
+
+  o Bug Fixes:
+    * A bug in clone behavior that caused Conary to try to clone
+      excessive troves has been fixed.  If you were cloning uphill
+      from branch /a/b to /a, and a buildreq was satisfied by a trove
+      on /a//c, Conary would try to clone the buildreq to /a as well.
+      (CNY-499)
+    * A bug in the "r.Ant()" and "r.JavaCompile()" build actions which
+      caused the CLASSPATH variable to get mangled has been fixed.
+    * A bug in 'r.ClassPath()' that caused a traceback has been fixed.
+    * A bug that caused the "change password" tab to be displayed when
+      browsing the repository via the web as an anonymous user has
+      been fixed.
+    * The web service code no longer permits the anonymous user to
+      view the "change password" (/conary/chPassForm) form.
+    * The r.addPatch() source action no longer hangs when presented
+      with large patches, which fixes a bug introduced in Conary
+      1.0.19.
+
+Changes in 1.0.19:
+  o API Change:
+    * In order to fully represent empty flavors in Conary, a new Flavor
+      object class has been added.  Previously, DependencySet objects
+      were used to store flavor information.  Unfortunately it was not
+      possible to distinguish "empty flavor" from "flavor not specified".
+      When dealing with thawing frozen flavors, use ThawFlavor() instead
+      of ThawDependencySet().  When testing to see if a flavor is empty,
+      use the isEmpty() method of the flavor object.
+
+  o Client Changes:
+    * The default resolveLevel setting is now 2, this means that
+      conary will try to update troves that would otherwise cause an
+      update to fail.  See the conary man page for more details.
+    * Multiple bugs have been fixed in interactive prompting for user
+      passwords (CNY-466):
+      - Password prompts are based on the server name portion of the
+        label being accessed, not the actual hostname of the server
+        (these are often different when repositoryMaps are used).
+      - When no password callback is available, the operation will
+        fail with an open error (which is identical to what would
+        happen if no user name was present) instead of giving a
+        traceback.
+      - The download thread uses the passwords which the original
+        thread obtained from the user.
+      - The download thread is able to prompt for passwords from the
+        user if distributed changesets require access to additional
+        repositories.
+
+  o Build Changes:
+    * "r.Ant()", "r.JavaCompile()", and "r.ClassPath()" build actions
+      have been added to support building java with conary.
+    * "r.addPatch()" will now determine the patchlevel without users
+      needing to add level= in the r.addPatch() call. The level
+      parameter is still honored, but should not be needed.
+    * "cvc cook --show-buildreqs" now displays build requirements
+      inherited from parent recipe classes. (CNY-520)
+    * The output of "cvc diff" and "cvc rdiff" can now be used as an
+      input to patch when files are added between two versions. (CNY-424)
+    * Use flags have been added for dom0 and domU.  They default to
+      "sense prefernot".  The domU flag should be used to build
+      binaries specific to Xen domU environments where special
+      provisions are made for paravirtualization.  The dom0 flag
+      should be used to build binaries specific to Xen dom0
+      environments where special provisions are made for the
+      hypervisor.  The existing "xen" flag should be used to build
+      binaries specific to Xen which apply equally to Xen dom0 and
+      domU environments.
+    * Warning message for modes specified without an initial "0" have
+      been improved to include the path that is affected. (CNY-530)
+
+  o Server Changes:
+    * Use the term Entitlement Class in all conary repository web interfaces
+      replacing Entitlement Group.
+
+  o Bugs Fixed:
+    * The Conary Repository now returns an error to a client when
+      committing duplicate troves that have an empty flavor. (CNY-476)
+    * When checking out a source trove from a repository using
+      "cvc checkout", the user is no longer warned about not being able
+      to change the ownership of the files checked out.
+    * A bug has been fixed in conary's determination of what troves
+      had been updated locally.  This bug caused "conary updateall" to
+      consider many x86 troves as needing to be updated separately
+      instead of as a part of group-dist.  This could cause updateall
+      failures. (CNY-497)
+    * A bug that caused 'conary q tmpwatch:runtime --recurse' to traceback
+      has been fixed (CNY-460)
+    * Interactive mode now handles EOF by assuming it means 'no';
+      thanks go to David Coulthart for the patch. (CNY-391)
+    * Configuration settings in contexts can now be overridden from
+      the command line. (CNY-22)
+    * Redirect changesets now have primary troves, meaning they will
+      display better when using "conary showchangeset". (CNY-450)
+    * User's passwords are now masked when using "cvc context" (unless
+      --show-passwords is specified). (CNY-471)
+    * Removed excess output from commitaction which was caused by a
+      change in option parsing code (CNY-405)
+
 Changes in 1.0.18:
   o Client Changes:
-    * Trying to shadow a cooked redirect now results in an error (CNY-447)
-    * Added --keep-required option to tell conary to leave troves installed
-      when removing them would break dependencies. This used to be the
-      default behaviour; conary now issues a dependency error instead (CNY-6).
+    * Trying to shadow a cooked redirect now results in an error. (CNY-447)
+    * A --keep-required option has been added to tell Conary to leave
+      troves installed when removing them would break
+      dependencies. This used to be the default behavior; Conary now
+      issues a dependency error instead. (CNY-6)
+    * "delete-entitlement" and "list-entitlements" options have been
+      added to the "manageents" script.
+
+  o Build Changes:
+    * Python dependencies are now generated for .pyc files as well as
+      for .py files. (CNY-459)
+
+  o Server Changes:
+    * Support for deleting entitlements, listing the entitlement
+      groups a user can manage, and removing the ACL which lets a group
+      manage an entitlement group has been added.
+    * Entitlement management has been added to the Conary repository
+      web interface. (CNY-483)
+
+  o Bug Fixes:
+    * The "list-groups" option to the "manageents" script has been
+      corrected to list the groups the user can manage instead of the
+      groups that user belongs to.
 
 Changes in 1.0.17:
   o Client Changes:

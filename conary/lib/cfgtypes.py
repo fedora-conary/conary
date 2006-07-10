@@ -15,6 +15,7 @@
 import copy
 import inspect
 import re
+import shlex
 import sre_constants
 import os
 
@@ -134,10 +135,11 @@ class CfgPath(CfgType):
             return val
 
     def format(self, val, displayOptions=None):
-        if hasattr(val, '_getUnexpanded'):
+        if (not displayOptions.get('expandPaths', False)
+            and hasattr(val, '_getUnexpanded')):
             return val._getUnexpanded()
         else:
-            return val
+            return str(val)
 
 class CfgInt(CfgType):
 
@@ -292,6 +294,19 @@ class CfgLineList(CfgType):
                         self.valueType.format(x, displayOptions) for x in value)
 
 
+class CfgQuotedLineList(CfgLineList):
+    def __init__(self, valueType, listType=list, default=[]):
+        CfgLineList.__init__(self, valueType=valueType, listType=listType,
+                             default=default)
+
+    def parseString(self, val):
+        return self.listType(self.valueType.parseString(x) \
+                             for x in shlex.split(val) if x)
+
+    def toStrings(self, value, displayOptions=None):
+        if value:
+            yield "'" + "' '".join(
+                    self.valueType.format(x, displayOptions) for x in value) + "'"
 
 class CfgList(CfgType):
 
@@ -325,7 +340,8 @@ class CfgList(CfgType):
             yield '[]'
         else:
             for val in value:
-                yield self.valueType.format(val, displayOptions)
+                for str in self.valueType.toStrings(val, displayOptions):
+                    yield str
 
 
 

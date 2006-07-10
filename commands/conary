@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/env python2.4
 # -*- mode: python -*-
 #
 # Copyright (c) 2004-2006 rPath, Inc.
@@ -45,7 +45,7 @@ from conary import callbacks, commit, conarycfg, constants
 from conary import cscmd, deps, flavorcfg, query, repository
 from conary import queryrep, conaryclient, rollbacks, showchangeset, state
 from conary import trove, updatecmd, verify, versions
-from conary.lib import cfg,cfgtypes,log, openpgpkey, options, util
+from conary.lib import cfg,cfgtypes,log, openpgpfile, openpgpkey, options, util
 from conary.local import database
 from conary.conaryclient import cmdline
 
@@ -67,7 +67,7 @@ def usage(rc = 1):
     print "       conary rblist"
     print "       conary rollback     <rollback>"
     print "       conary showcs       <changeset> <trove>[=<version>]*"
-    print "       conary syncchildren <pkgname>[=<version>][[flavor]]*"
+    print "       conary sync         <pkgname>[=<version>][[flavor]]*"
     print "       conary unpin        <pkgname>[=<version>][[flavor]]*"
     print "       conary update       <pkgname>[=<version>][[flavor]]* <changeset>*"
     print "       conary updateall"
@@ -109,6 +109,7 @@ class ConaryCommand(options.AbstractCommand):
             'full-versions'      : ('Always display complete version strings'),
             'labels'             : 'Always display labels for versions',
             'profile'            : optparse.SUPPRESS_HELP,
+            'lsprof'             : optparse.SUPPRESS_HELP,
             "pubring"            : '',
             'skip-default-config': "Don't read default configs",
             'quiet'              : ('do not display extra information when '
@@ -125,6 +126,7 @@ class ConaryCommand(options.AbstractCommand):
         d["context"] = ONE_PARAM
         d["install-label"] = MULT_PARAM
         d["profile"] = NO_PARAM
+        d["lsprof"] = NO_PARAM
         d["skip-default-config"] = NO_PARAM
         argDef[self.defaultGroup] = d
 
@@ -145,7 +147,7 @@ class ConaryCommand(options.AbstractCommand):
 
     def setContext(self, cfg, argSet):
         context = cfg.context
-        if os.path.exists('CONARY'):
+        if os.access('CONARY', os.R_OK):
             conaryState = state.ConaryStateFromFile('CONARY')
             if conaryState.hasContext():
                 context = conaryState.getContext()
@@ -170,7 +172,7 @@ class ConaryCommand(options.AbstractCommand):
 
 
 class ChangeSetCommand(ConaryCommand):
-    commands = ['changeset']
+    commands = ['changeset', 'cs' ]
     paramHelp = '''\
 conary changeset <pkg>[=[<oldver>--]<newver>]+ <outfile>
 
@@ -286,7 +288,7 @@ class EmergeCommand(ConaryCommand):
                 return 1
             if info.pw_dir == '/':
                 log.error("The '%s' user's home directory is set to '/'.  "
-                          "See http://wiki.conary.com/ConaryConversion for "
+                          "See http://wiki.rpath.com/wiki/Conary:Conversion for "
                           "assistance."
                           % cookUser)
                 return 1
@@ -435,17 +437,23 @@ class RollbackCommand(ConaryCommand):
     paramHelp = "<rollback>"
 
     docs = {'replace-files' : ('replace files on system with files from'
-                               ' rollback if conflict')}
+                               ' rollback if conflict'),
+            'tag-script': ('Output commands to run tag-script to PATH', 'PATH')
+           }
 
     def addParameters(self, argDef):
         ConaryCommand.addParameters(self, argDef)
         argDef["replace-files"] = NO_PARAM
+        argDef["tag-script"] = ONE_PARAM
 
     def runCommand(self, cfg, argSet, otherArgs):
         kwargs = {}
         if argSet.has_key('replace-files'):
             kwargs['replaceFiles'] = True
             del argSet['replace-files']
+
+        kwargs['tagScript'] = argSet.pop('tag-script', None)
+
         kwargs['callback'] = updatecmd.UpdateCallback(cfg)
         if argSet or len(otherArgs) != 3: return self.usage()
         db = openDatabase(cfg.root, cfg.dbPath)
@@ -716,7 +724,7 @@ _register(ShowChangesetCommand)
 
 class UpdateCommand(ConaryCommand):
 
-    commands = ["update", "erase", "migrate", "sync", "syncchildren"]
+    commands = ["update", "erase" ]
     paramHelp = "<pkgname>[=<version>][[flavor]]* <changeset>*"
 
     docs = {
@@ -736,7 +744,7 @@ class UpdateCommand(ConaryCommand):
         'sync-to-parents' : 'Install already referenced versions of troves',
         'tag-script': ('Output commands to run tag-script to PATH', 'PATH'),
         'test'      : 'Run through whole update but do not modify system',
-        'update-only' : 'Do not install any new troves', 
+        'update-only' : 'Do not install any new troves',
     }
 
     def addParameters(self, argDef):
@@ -757,10 +765,10 @@ class UpdateCommand(ConaryCommand):
         d["sync-to-parents"] = NO_PARAM
         d["tag-script"] = ONE_PARAM
         d["test"] = NO_PARAM
-        d["update-only"] = NO_PARAM
         argDef['Update Options'] = d
 
     def runCommand(self, cfg, argSet, otherArgs):
+        # NOTE: this code path is used by sync and migrate as well.
         cfg.requireInstallLabelPath()
         kwargs = {}
 
@@ -796,8 +804,21 @@ class UpdateCommand(ConaryCommand):
         kwargs['updateOnly'] = argSet.pop('update-only', False)
 
         kwargs['updateByDefault']    = otherArgs[1] != 'erase'
-        kwargs['syncChildren']       = otherArgs[1] in ('sync', 'syncchildren')
         kwargs['migrate']            = otherArgs[1] == 'migrate'
+
+        #
+        kwargs['syncChildren'] = False
+        kwargs['syncUpdate'] = False
+        if otherArgs[1] == 'sync':
+            if argSet.pop('current', False):
+                kwargs['syncChildren'] = True
+            else:
+                kwargs['syncUpdate'] = True
+            kwargs['removeNotByDefault'] = argSet.pop('full', False)
+        elif otherArgs[1] == 'syncchildren':
+            # backwards compatibility.  Don't remove this 
+            kwargs['syncChildren'] = True
+            kwargs['removeNotByDefault'] = argSet.pop('full', False)
 
         if kwargs['sync'] and kwargs['fromFiles']:
             log.error("Only one of --sync and --from-file may be used")
@@ -811,6 +832,42 @@ class UpdateCommand(ConaryCommand):
             return self.usage()
 _register(UpdateCommand)
 
+class SyncCommand(UpdateCommand):
+
+    commands = ["sync", "syncchildren"]
+    paramHelp = "<pkgname>[=<version>][[flavor]]* <changeset>*"
+
+    docs = {
+            'current' : 'syncs child troves to this trove w/o updating <pkgname>',
+            'full'    : 'also remove children that are non-default',
+           }
+    def addParameters(self, argDef):
+        UpdateCommand.addParameters(self, argDef)
+        sync = argDef.pop('Update Options')
+        sync["full"] = NO_PARAM
+        sync["current"] = NO_PARAM
+        sync["update-only"] = NO_PARAM
+        argDef['Sync Options'] = sync
+
+_register(SyncCommand)
+
+class MigrateCommand(UpdateCommand):
+
+    commands = ["migrate"]
+    paramHelp = "<pkgname>[=<version>][[flavor]]*"
+
+    def addParameters(self, argDef):
+        UpdateCommand.addParameters(self, argDef)
+        d = argDef.pop('Update Options')
+        del d['from-file']
+        del d['keep-existing']
+        del d['sync-to-parents']
+        del d['no-recurse']
+        del d['replace-files']
+        argDef['Migrate Options'] = d
+_register(MigrateCommand)
+
+
 class UpdateAllCommand(UpdateCommand):
 
     commands = ['updateall']
@@ -821,6 +878,7 @@ class UpdateAllCommand(UpdateCommand):
         ConaryCommand.addParameters(self, argDef)
         argDef["items"] = NO_PARAM
         argDef["info"] = NO_PARAM
+        argDef["keep-required"] = NO_PARAM
         argDef["no-conflict-check"] = NO_PARAM
         argDef["no-deps"] = NO_PARAM
         argDef["no-resolve"] = NO_PARAM
@@ -847,6 +905,8 @@ class UpdateAllCommand(UpdateCommand):
         if argSet.has_key('replace-files'):
             kwargs['replaceFiles'] = True
             del argSet['replace-files']
+
+        kwargs['keepRequired'] = argSet.pop('keep-required', False)
 
         kwargs['checkPathConflicts'] = \
                                 not argSet.pop('no-conflict-check', False)
@@ -932,6 +992,14 @@ class ConaryMain(options.MainHandler):
             profile = True
             del argSet['profile']
 
+        lsprof = False
+        if argSet.has_key('lsprof'):
+            import cProfile
+            prof = cProfile.Profile()
+            prof.enable()
+            lsprof = True
+            del argSet['lsprof']
+
         keyCache = openpgpkey.getKeyCache()
         keyCacheCallback = openpgpkey.KeyCacheCallback(cfg.repositoryMap,
                                                        cfg.pubRing[-1])
@@ -942,6 +1010,10 @@ class ConaryMain(options.MainHandler):
 
         if profile:
             prof.stop()
+        if lsprof:
+            prof.disable()
+            prof.dump_stats('conary.lsprof')
+            prof.print_stats()
 
         if log.errorOccurred():
             return 1
@@ -976,7 +1048,8 @@ def main(argv=sys.argv):
         if log.getVerbosity() == log.DEBUG:
             raise
         log.error(str(e))
-    except conary.repository.errors.ConaryError, e:
+    except (conary.repository.errors.ConaryError, 
+            openpgpfile.PGPError), e:
         if not str(e):
             raise
         else:

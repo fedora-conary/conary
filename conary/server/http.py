@@ -118,6 +118,10 @@ class HttpHandler(WebHandler):
 
         self.hasWrite = self.repServer.auth.check(self.authToken, write=True)
         self.isAdmin = self.repServer.auth.check(self.authToken, admin=True)
+        self.hasEntitlements = False
+        self.isAnonymous = self.authToken[0] == 'anonymous'
+        self.hasEntitlements = self.repServer.auth.listEntitlementGroups(
+                                                        self.authToken)
 
         try:
             output = method(**d)
@@ -153,6 +157,8 @@ class HttpHandler(WebHandler):
                            req = self.req,
                            hasWrite = self.hasWrite,
                            isAdmin = self.isAdmin,
+                           isAnonymous = self.isAnonymous,
+                           hasEntitlements = self.hasEntitlements,
                            currentUser = self.authToken[0],
                            **values)
 
@@ -265,7 +271,7 @@ class HttpHandler(WebHandler):
     @checkAuth(write=False)
     def files(self, auth, t, v, f):
         v = versions.ThawVersion(v)
-        f = deps.ThawDependencySet(f)
+        f = deps.ThawFlavor(f)
         parentTrove = self.repos.getTrove(t, v, f, withFiles = False)
         # non-source group troves only show contained troves
         if t.startswith('group-') and not t.endswith(':source'):
@@ -553,6 +559,8 @@ class HttpHandler(WebHandler):
     @checkAuth()
     @strFields(username = "")
     def chPassForm(self, auth, username):
+        if self.isAnonymous:
+            raise apache.SERVER_RETURN, 401
         if username:
             askForOld = False
         else:
@@ -589,6 +597,82 @@ class HttpHandler(WebHandler):
 
             return self._write("notice", message = message,
                 link = returnLink[0], url = returnLink[1])
+
+    @checkAuth()
+    @strFields(entClass = None)
+    def addEntitlementForm(self, auth, entClass):
+        return self._write("add_ent", entClass = entClass)
+
+    @checkAuth()
+    @strFields(entClass = None)
+    def deleteEntClass(self, auth, entClass):
+        self.repServer.auth.deleteEntitlementGroup(auth, entClass)
+        self._redirect('manageEntitlements')
+
+    @checkAuth()
+    @strFields(entClass = None, entitlement = None)
+    def addEntitlement(self, auth, entClass, entitlement):
+        self.repServer.auth.addEntitlement(auth, entClass, entitlement)
+        self._redirect('manageEntitlementForm?entClass=%s' % entClass)
+
+    @checkAuth()
+    @strFields(entClass = None, entitlement = None)
+    def deleteEntitlement(self, auth, entClass, entitlement):
+        self.repServer.auth.deleteEntitlement(auth, entClass, entitlement)
+        self._redirect('manageEntitlementForm?entClass=%s' % entClass)
+
+    @checkAuth()
+    def manageEntitlements(self, auth):
+        entClassList = self.repServer.listEntitlementGroups(auth, 0)
+
+        if self.isAdmin:
+            entClassInfo = [
+                (x, self.repServer.auth.getEntitlementOwnerAcl(auth, x),
+                 self.repServer.auth.getEntitlementPermGroup(auth, x)) for
+                x in entClassList ]
+        else:
+            entClassInfo = [ (x, None, None) for x in entClassList ]
+
+        groups = self.repServer.auth.getGroupList()
+
+        return self._write("manage_ents", entClasses = entClassInfo,
+                           groups = groups)
+
+    @checkAuth()
+    @strFields(entClass = None, entOwner = None)
+    def entSetOwner(self, auth, entClass, entOwner):
+        oldOwner = self.repServer.auth.getEntitlementOwnerAcl(auth, entClass)
+        if oldOwner:
+            self.repServer.auth.deleteEntitlementOwnerAcl(auth, oldOwner,
+                                                          entClass)
+        if entOwner != '*none*':
+            self.repServer.auth.addEntitlementOwnerAcl(auth, entOwner,
+                                                       entClass)
+
+        self._redirect('manageEntitlements')
+
+    @checkAuth()
+    def addEntClassForm(self, auth):
+        groups = self.repServer.auth.getGroupList()
+        return self._write("add_ent_group", groups = groups)
+
+    @checkAuth()
+    @strFields(entClass = None, entOwner = None, userGroup = None)
+    def addEntClass(self, auth, entOwner, userGroup, entClass):
+        self.repServer.auth.addEntitlementGroup(auth, entClass, userGroup)
+        if entOwner != '*none*':
+            self.repServer.auth.addEntitlementOwnerAcl(auth, entOwner,
+                                                       entClass)
+
+        self._redirect('manageEntitlements')
+
+    @checkAuth()
+    @strFields(entClass = None)
+    def manageEntitlementForm(self, auth, entClass):
+        entitlements = [ x for x in
+            self.repServer.auth.iterEntitlements(auth, entClass) ]
+        return self._write("entlist", entitlements = entitlements,
+                           entClass = entClass)
 
     @checkAuth(admin=True)
     @strFields(key=None, owner="")

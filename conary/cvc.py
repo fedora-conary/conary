@@ -34,6 +34,7 @@ from conary import versions
 from conary.build import cook, use, signtrove
 from conary.lib import cfg
 from conary.lib import log
+from conary.lib import openpgpfile
 from conary.lib import openpgpkey
 from conary.lib import options
 from conary.lib import util
@@ -120,7 +121,7 @@ class CvcCommand(options.AbstractCommand):
 
     def setContext(self, cfg, argSet):
         context = cfg.context
-        if os.path.exists('CONARY'):
+        if os.access('CONARY', os.R_OK):
             conaryState = state.ConaryStateFromFile('CONARY')
             if conaryState.hasContext():
                 context = conaryState.getContext()
@@ -142,6 +143,12 @@ class CvcCommand(options.AbstractCommand):
             cfg.installLabelPath = l
             del argSet['install-label']
 
+        for k,v in cfg.environment.items():
+            if v == '':
+                cfg.environment.pop(k)
+                os.environ.pop(k, None)
+                continue
+            os.environ[k] = v
 
 class AddCommand(CvcCommand):
     commands = ['add']
@@ -323,20 +330,29 @@ class ContextCommand(CvcCommand):
     def addParameters(self, argDef):
         CvcCommand.addParameters(self, argDef)
         argDef["ask"] = NO_PARAM
+        argDef["show-passwords"] = NO_PARAM
 
-    docs = {'ask' : 'If not defined, create CONTEXT by answering questions'}
+    docs = {'ask' : 'If not defined, create CONTEXT by answering questions',
+            'show-passwords' : 'do not mask passwords'}
 
     def runCommand(self, repos, cfg, argSet, args, profile = False, 
                    callback = None):
         if len(args) > 2:
             return self.usage()
 
+        showPasswords = argSet.pop('show-passwords', False)
         ask = argSet.pop('ask', False)
         if len(args) > 1:
             name = args[1]
         else:
             name = None
 
+        try:
+            prettyPrint = sys.stdout.isatty()
+        except AttributeError:
+            prettyPrint = False
+        cfg.setDisplayOptions(hidePasswords=not showPasswords,
+                              prettyPrint=prettyPrint)
         checkin.setContext(cfg, name, ask=ask)
 _register(ContextCommand)
 
@@ -626,19 +642,6 @@ class CvcMain(options.MainHandler):
         repos = client.getRepos()
         callback = CheckinCallback(cfg)
 
-        context = cfg.context
-        if os.path.exists('CONARY'):
-            conaryState = state.ConaryStateFromFile('CONARY')
-            if conaryState.hasContext():
-                context = conaryState.getContext()
-
-        context = os.environ.get('CONARY_CONTEXT', context)
-        context = argSet.pop('context', context)
-
-        if context:
-            cfg.setContext(context)
-
-
         if not cfg.buildLabel and cfg.installLabelPath:
             cfg.buildLabel = cfg.installLabelPath[0]
 
@@ -713,7 +716,8 @@ def main(argv=sys.argv):
                             cfg=ccfg)
     except debuggerException, err:
         raise
-    except (errors.ConaryError, errors.CvcError, cfg.CfgError), e:
+    except (errors.ConaryError, errors.CvcError, cfg.CfgError,
+            openpgpfile.PGPError), e:
         if str(e):
             log.error(str(e))
             sys.exit(1)

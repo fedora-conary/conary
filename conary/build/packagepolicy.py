@@ -225,7 +225,7 @@ class ComponentSpec(_filterSpec):
     SYNOPSIS
     ========
 
-    C{r.ComponentSpec([I{componentname}, I{filterexp}] || [I{packagename:componentname}, I{filterexp}])}
+    C{r.ComponentSpec([I{componentname}, I{filterexp}] || [I{packagename}:I{componentname}, I{filterexp}])}
 
     DESCRIPTION
     ===========
@@ -236,6 +236,8 @@ class ComponentSpec(_filterSpec):
     first match wins.  After all the recipe-provided expressions are
     evaluated, the default expressions are evaluated.  If no expression
     matches, then the file is assigned to the C{catchall} component.
+    Note that in the C{I{packagename}:I{componentname}} form, the C{:}
+    must be literal, it cannot be part of a macro.
 
     KEYWORDS
     ========
@@ -275,7 +277,7 @@ class ComponentSpec(_filterSpec):
 	# note that gtk-doc is not well-named; it is a shared system, like info,
 	# and is used by unassociated tools (devhelp).  This line needs to
         # come first because "lib" in these paths should not mean :lib
-	('doc',       ('%(datadir)s/(gtk-doc|doc|man|info|ri)/')),
+	('doc',       ('%(datadir)s/(gtk-doc|doc|man|info|ri|javadoc)/')),
 	# automatic subpackage names and sets of regexps that define them
 	# cannot be a dictionary because it is ordered; first match wins
 	('runtime',   ('%(datadir)s/gnome/help/.*/C/')), # help menu stuff
@@ -318,6 +320,15 @@ class ComponentSpec(_filterSpec):
             # until/unless we handle files moving between
             # components
             #self.extraFilters.append(('config', util.literalRegex(config)))
+
+        if args:
+            name = args[0]
+            if ':' in name:
+                package, name = name.split(':')
+                # we've got a package as well as a component, pass it on
+                self.recipe.PackageSpec(package, args[1:])
+                args = (name, ) + args[1:]
+
 	_filterSpec.updateArgs(self, *args, **keywords)
 
     def doProcess(self, recipe):
@@ -331,16 +342,10 @@ class ComponentSpec(_filterSpec):
         for filteritem in itertools.chain(self.invariantFilters,
                                           self.extraFilters,
                                           self.baseFilters):
-            main = ''
 	    name = filteritem[0] % self.macros
-            if ':' in name:
-                main, name = name.split(':')
 	    assert(name != 'source')
 	    filterargs = self.filterExpression(filteritem[1:], name=name)
 	    compFilters.append(filter.Filter(*filterargs))
-            if main:
-                # we've got a package as well as a component, pass it on
-                recipe.PackageSpec(main, filteritem[1:])
 	# by default, everything that hasn't matched a filter pattern yet
 	# goes in the catchall component ('runtime' by default)
 	compFilters.append(filter.Filter('.*', self.macros, name=self.catchall))
@@ -1729,7 +1734,7 @@ class Provides(policy.Policy):
 
     def _addPythonProvides(self, path, m, pkg, macros):
 
-        if not (path.endswith('.py') or path.endswith('.so')):
+        if not (path.endswith('.py') or path.endswith('.pyc') or path.endswith('.so')):
             return
 
         if self.sysPath is None:
@@ -1749,7 +1754,9 @@ class Provides(policy.Policy):
         if not depPath:
             return
 
-        depPath = depPath[:-3]
+        # remove extension
+        depPath = depPath.rsplit('.', 1)[0]
+
         if depPath.endswith('/__init__'):
             depPath = depPath.replace('/__init__', '')
         depPath = depPath.replace('/', '.')
@@ -1859,7 +1866,7 @@ class Provides(policy.Policy):
             if m and m.name == 'ELF':
                 self._ELFPathProvide(path, m, pkg)
 
-            if path.endswith('.so') or path.endswith('.py'):
+            if path.endswith('.so') or path.endswith('.py') or path.endswith('.pyc'):
                 self._addPythonProvides(path, m, pkg, macros)
 
             elif m and m.name == 'CIL':
@@ -2281,8 +2288,9 @@ class Requires(_addInfo):
                 # a python file not found in sys.path will not have been
                 # provided, so we must not depend on it either
                 return
-            if depPath.endswith('.py') or depPath.endswith('.so'):
-                depPath = depPath[:-3]
+            if depPath.endswith('.py') or depPath.endswith('.pyc') or depPath.endswith('.so'):
+                # remove extension
+                depPath = depPath.rsplit('.', 1)[0]
             else:
                 # Not something we provide, so not something we can
                 # require either.  Drop it and go on.  We have seen
@@ -2415,7 +2423,7 @@ class Requires(_addInfo):
         if (f.inode.perms() & 0111 and m and m.name == 'script' and
             os.path.basename(m.contents['interpreter']).startswith('python')):
             self._addPythonRequirements(path, fullpath, pkg, script=True)
-        elif path.endswith('.py'):
+        elif path.endswith('.py') or path.endswith('.pyc'):
             self._addPythonRequirements(path, fullpath, pkg, script=False)
 
         if m and m.name == 'CIL':
@@ -2615,7 +2623,7 @@ class Flavor(policy.Policy):
         else:
             return
 
-	set = deps.DependencySet()
+	set = deps.Flavor()
         set.addDep(deps.InstructionSetDependency, deps.Dependency(isnset, []))
         # get the Arch.* dependencies
         set.union(use.createFlavor(None, use.Arch._iterUsed()))

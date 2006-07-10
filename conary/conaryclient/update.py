@@ -20,7 +20,7 @@ from conary import conarycfg
 from conary.callbacks import UpdateCallback
 from conary.conaryclient import resolve
 from conary.deps import deps
-from conary.errors import ClientError
+from conary.errors import ClientError, InternalConaryError
 from conary.lib import log, util
 from conary.local import database
 from conary.repository import changeset, trovesource
@@ -66,8 +66,9 @@ class ClientUpdate:
         troveSet = {}
         redirectHack = {}
 
-        jobsToRemove = set()
-        jobsToAdd = set()
+        jobsToRemove = []
+        jobsToAdd = []
+        transitiveClosureToRemove = []
 
         # We don't have to worry about non-primaries recursively included
         # from the job because groups can't include redirects, so any redirect
@@ -117,7 +118,9 @@ class ClientUpdate:
 
                 if isPrimary:
                     # Don't install a redirect
-                    jobsToRemove.add(job)
+                    jobsToRemove.append(job)
+                else:
+                    transitiveClosureToRemove.append(job)
 
                 if not recurse:
                     raise UpdateError, \
@@ -147,7 +150,7 @@ class ClientUpdate:
                                                      match[1:], True)
                             nextSet.add((isPrimary, redirectJob))
                             if isPrimary:
-                                jobsToAdd.add(redirectJob)
+                                jobsToAdd.append(redirectJob)
 
                     for info in trv.iterTroveList(strongRefs = True):
                         toDoSet.add((False, 
@@ -172,6 +175,10 @@ class ClientUpdate:
         # We may remove some jobs which we add due to redirection chains.
         jobSet.update(jobsToAdd)
         jobSet.difference_update(jobsToRemove)
+
+        # remove redirects from transitive closure
+        transitiveClosure.difference_update(transitiveClosureToRemove)
+        transitiveClosure.difference_update(jobsToRemove)
 
         for l in redirectHack.itervalues():
             outdated = self.db.outdatedTroves(l)
@@ -321,35 +328,6 @@ class ClientUpdate:
 
             return set(eraseList)
 
-
-        def _getPathHashes(trvSrc, db, trv, inDb = False):
-            if not trv.isCollection(): return trv.getPathHashes()
-
-            ph = None
-            for info in trv.iterTroveList(strongRefs=True):
-                # FIXME: should this include weak references?
-                if inDb:
-                    otherTrv = db.getTrove(withFiles = False, *info)
-                elif trvSrc.hasTrove(*info):
-                    otherTrv = trvSrc.getTrove(withFiles = False, *info)
-                else:
-                    # if the trove is not in the trove source, then it 
-                    # can't be part of the update job.  This can happen 
-                    # for example if you're just installing a package with
-                    # no-recurse.
-                    continue
-
-                if ph is None:
-                    ph = otherTrv.getPathHashes()
-                else:
-                    ph.update(otherTrv.getPathHashes())
-
-            if ph is None:
-                # this gives us an empty set
-                ph = trv.getPathHashes()
-
-            return ph
-
         def _troveTransitiveClosure(db, itemList):
             itemQueue = util.IterableQueue()
             fullSet = set()
@@ -402,7 +380,7 @@ class ClientUpdate:
         # we may need to install. Build a set of all of the trove names
         # in that trove as well.
         availableTrove = trove.Trove("@update", versions.NewVersion(),
-                                     deps.DependencySet(), None)
+                                     deps.Flavor(), None)
 
         names = set()
         for job in transitiveClosure:
@@ -536,7 +514,7 @@ class ClientUpdate:
 
 
         existsTrv = trove.Trove("@update", versions.NewVersion(), 
-                                deps.DependencySet(), None)
+                                deps.Flavor(), None)
         [ existsTrv.addTrove(*x) for x in installedTroves ]
         [ existsTrv.addTrove(*x) for x in referencedNotInstalled ]
 
@@ -787,8 +765,7 @@ followLocalChanges: %s
                         installedBranch = replacedInfo[1].branch()
 
                         if replacedInfo in localUpdatesByPresent:
-                            notInstalledVer = \
-                                        localUpdatesByPresent[replacedInfo][0]
+                            notInstalledVer = localUpdatesByPresent[replacedInfo][0]
                             notInstalledBranch = notInstalledVer.branch()
                             # create alreadyBranchSwitch variable for 
                             # readability
@@ -808,9 +785,7 @@ followLocalChanges: %s
                             # install a downgrade, skip it.
                             if not isPrimary:
                                 if replacedInfo in sameBranchLocalUpdates:
-                                    notInstalledFlavor = \
-                                        sameBranchLocalUpdates[replacedInfo][1]
-
+                                    notInstalledFlavor = sameBranchLocalUpdates[replacedInfo][1]
                                 if (newInfo[1] < replaced[0]
                                     and replacedInfo in sameBranchLocalUpdates):
                                     log.debug('SKIP: avoiding downgrade')
@@ -882,23 +857,18 @@ followLocalChanges: %s
 
                         if replaced[0] and respectFlavorAffinity:
                             if replacedInfo in localUpdatesByPresent:
-                                notInstalledFlavor = \
-                                        localUpdatesByPresent[replacedInfo][1]
+                                notInstalledFlavor = localUpdatesByPresent[replacedInfo][1]
                                 # create alreadyBranchSwitch variable for 
                                 # readability
                                 alreadyFlavorSwitch = True
                             elif replacedInfo in sameBranchLocalUpdates:
-                                notInstalledFlavor = \
-                                        sameBranchLocalUpdates[replacedInfo][1]
+                                notInstalledFlavor = sameBranchLocalUpdates[replacedInfo][1]
                             else:
                                 notInstalledFlavor = None
 
-                            if (notInstalledFlavor
-                                and not deps.compatibleFlavors(
-                                                           notInstalledFlavor,
-                                                           replacedInfo[2])
-                                and not deps.compatibleFlavors(replacedInfo[2],
-                                                               newInfo[2])):
+                            if (notInstalledFlavor is not None
+                                and not deps.compatibleFlavors(notInstalledFlavor, replacedInfo[2])
+                                and not deps.compatibleFlavors(replacedInfo[2], newInfo[2])):
                                 if isPrimary:
                                     respectFlavorAffinity = False
                                 else:
@@ -945,54 +915,15 @@ followLocalChanges: %s
                     # trove to redirect on the system.
                     log.debug('installing redirect')
                     installRedirects = False
-                
-                if pinned:
-                    if replaced[0] is not None:
-                        log.debug('looking at pinned replaced trove')
-                        try:
-                            trv = troveSource.getTrove(withFiles = False, 
-                                                       *newInfo)
-                        except TroveMissing:
-                            # we don't even actually have this trove available,
-                            # making it difficult to install.
-                            log.debug('SKIP: new trove is not in source,'
-                                      ' cannot compare path hashes!')
-                            recurseThis = False
-                            break
-
-                        # try and install the two troves next to each other
-                        assert(replacedInfo[1] is not None)
-                        oldTrv = self.db.getTrove(withFiles = False, 
-                                                  pristine = False, 
-                                                  *replacedInfo)
-                        oldHashes = _getPathHashes(troveSource, self.db, 
-                                                   oldTrv, inDb = True)
-                        newHashes = _getPathHashes(uJob.getTroveSource(), 
-                                                   self.db, trv, inDb = False)
-
-                        if newHashes.compatibleWith(oldHashes):
-                            log.debug('old and new versions are compatible')
-                            replaced = (None, None)
-                            if isPrimary and checkPrimaryPins:
-                                name = replacedInfo[0]
-                                log.warning(
-"""
-Not removing old %s as part of update - it is pinned.
-Installing new version of %s side-by-side instead.
-
-To remove the old %s, run:
-conary unpin '%s=%s[%s]'
-conary erase '%s=%s[%s]'
-""" % ((name, name, name) + replacedInfo + replacedInfo))
-                        else:
-                            if not isPrimary:
-                                recurseThis = False
-                                break
-                            elif checkPrimaryPins:
-                                raise UpdatePinnedTroveError(replacedInfo, 
-                                                             newInfo)
 
                 job = (newInfo[0], replaced, (newInfo[1], newInfo[2]), False)
+                if pinned and (not isPrimary or checkPrimaryPins):
+                    job = self._splitPinnedJob(uJob, troveSource, job,
+                                               force=not isPrimary)
+                    if job is None:
+                        recurseThis = False
+                        break
+
                 log.debug('JOB ADDED: %s' % (job,))
                 newJob.add(job)
                 jobAdded = True
@@ -1095,11 +1026,99 @@ conary erase '%s=%s[%s]'
         newJob.update(eraseSet)
 
         # items which were updated to redirects should be removed, no matter
-        # what
+        # what - IF there's no job removing them now, we need to add it now.
+        redirects = {}
         for info in set(itertools.chain(*redirectHack.values())):
-            newJob.add((info[0], (info[1], info[2]), (None, None), False))
+            redirects.setdefault(info[0], []).append(info)
+
+        for job in newJob:
+            if job[0] in redirects:
+                redirectList = redirects[job[0]]
+                info = (job[0], job[1][0], job[1][1])
+                if info in redirectList:
+                    redirectList.remove(info)
+        for troveList in redirects.itervalues():
+            for info in set(troveList):
+                newJob.add((info[0], (info[1], info[2]), (None, None), False))
 
         return newJob
+
+    def _splitPinnedJob(self, uJob, troveSource, job, force=False):
+        def _getPathHashes(trvSrc, db, trv, inDb = False):
+            if not trv.isCollection(): return trv.getPathHashes()
+
+            ph = None
+            for info in trv.iterTroveList(strongRefs=True):
+                # FIXME: should this include weak references?
+                if inDb:
+                    otherTrv = db.getTrove(withFiles = False, *info)
+                elif trvSrc.hasTrove(*info):
+                    otherTrv = trvSrc.getTrove(withFiles = False, *info)
+                else:
+                    # if the trove is not in the trove source, then it 
+                    # can't be part of the update job.  This can happen 
+                    # for example if you're just installing a package with
+                    # no-recurse.
+                    continue
+
+                if ph is None:
+                    ph = otherTrv.getPathHashes()
+                else:
+                    ph.update(otherTrv.getPathHashes())
+
+            if ph is None:
+                # this gives us an empty set
+                ph = trv.getPathHashes()
+
+            return ph
+
+
+        if job[1][0] is None:
+            return job
+
+        newInfo = (job[0], job[2][0], job[2][1])
+        replacedInfo = (job[0], job[1][0], job[1][1])
+        log.debug('looking at pinned replaced trove')
+        try:
+            trv = troveSource.getTrove(withFiles = False, *newInfo)
+        except TroveMissing:
+            # we don't even actually have this trove available,
+            # making it difficult to install.
+            log.debug('SKIP: new trove is not in source,'
+                      ' cannot compare path hashes!')
+            return None
+
+        # try and install the two troves next to each other
+        oldTrv = self.db.getTrove(withFiles = False, 
+                                  pristine = False, 
+                                  *replacedInfo)
+        oldHashes = _getPathHashes(troveSource, self.db, 
+                                   oldTrv, inDb = True)
+        newHashes = _getPathHashes(uJob.getTroveSource(), 
+                                   self.db, trv, inDb = False)
+
+        if not newHashes.compatibleWith(oldHashes):
+            if force:
+                return None
+            else:
+                raise UpdatePinnedTroveError(replacedInfo, 
+                                             newInfo)
+
+        log.debug('old and new versions are compatible')
+        replaced = (None, None)
+        if not force:
+            name = replacedInfo[0]
+            log.warning(
+"""
+Not removing old %s as part of update - it is pinned.
+Installing new version of %s side-by-side instead.
+
+To remove the old %s, run:
+conary unpin '%s=%s[%s]'
+conary erase '%s=%s[%s]'
+""" % ((name, name, name) + replacedInfo + replacedInfo))
+        return (job[0], (None, None), job[2], False)
+
 
     def _updateChangeSet(self, itemList, uJob, keepExisting = None, 
                          recurse = True, updateMode = True, sync = False,
@@ -1185,15 +1204,15 @@ conary erase '%s=%s[%s]'
 
             if troveName[0] == '-':
                 needsOld = True
-                needsNew = newVersionStr or newFlavorStr
+                needsNew = newVersionStr or (newFlavorStr is not None)
                 troveName = troveName[1:]
             elif troveName[0] == '+':
                 needsNew = True
-                needsOld = oldVersionStr or oldFlavorStr
+                needsOld = oldVersionStr or (oldFlavorStr is not None)
                 troveName = troveName[1:]
             else:
-                needsOld = oldVersionStr or oldFlavorStr
-                needsNew = newVersionStr or newFlavorStr
+                needsOld = oldVersionStr or (oldFlavorStr is not None)
+                needsNew = newVersionStr or (newFlavorStr is not None)
                 if not (needsOld or needsNew):
                     if updateMode:
                         needsNew = True
@@ -1207,14 +1226,14 @@ conary erase '%s=%s[%s]'
                 oldTroves = []
 
             if not needsNew:
-                assert(not newFlavorStr)
+                assert(newFlavorStr is None)
                 assert(not isAbsolute)
                 for troveInfo in oldTroves:
                     log.debug("set up removal of %s", troveInfo)
                     removeJob.add((troveInfo[0], (troveInfo[1], troveInfo[2]),
                                    (None, None), False))
                 # skip ahead to the next itemList
-                continue                    
+                continue
 
             if len(oldTroves) > 2:
                 raise UpdateError, "Update of %s specifies multiple " \
@@ -1226,7 +1245,7 @@ conary erase '%s=%s[%s]'
             del oldTroves
 
             if isinstance(newVersionStr, versions.Version):
-                assert(isinstance(newFlavorStr, deps.DependencySet))
+                assert(isinstance(newFlavorStr, deps.Flavor))
                 jobToAdd = (troveName, oldTrove,
                             (newVersionStr, newFlavorStr), isAbsolute)
                 newJob.add(jobToAdd)
@@ -1260,7 +1279,12 @@ conary erase '%s=%s[%s]'
             installLabelPath = None
 
         if not useAffinity:
-            results.update(searchSource.findTroves(installLabelPath, toFind))
+            if searchSource.isSearchAsDatabase():
+                flavor = None
+            else:
+                flavor = self.cfg.flavor
+            results.update(searchSource.findTroves(installLabelPath, toFind,
+                                                   flavor))
         else:
             if toFind:
                 log.debug("looking up troves w/ database affinity")
@@ -1336,9 +1360,19 @@ conary erase '%s=%s[%s]'
                                                 recurse = recurse)
         self._replaceIncomplete(cs, csSource, 
                                 self.db, self.repos)
+        if notFound:
+            nonLocal = [ x for x in notFound if not x[2][0].isOnLocalHost() ]
+            if nonLocal:
+                troveList = '\n   '.join('%s=%s[%s]' % x for x in nonLocal)
+                raise UpdateError(
+                       'Failed to find required troves for update:\n   %s' 
+                        % troveList)
+            jobSet.difference_update(notFound)
+            if not jobSet:
+                raise NoNewTrovesError
         assert(not notFound)
         uJob.getTroveSource().addChangeSet(cs)
-        transitiveClosure.update(cs.getJobSet(primaries = False))
+        transitiveClosure = set(cs.getJobSet(primaries = False))
         del cs
 
         redirectHack = self._processRedirects(csSource, uJob, jobSet, 
@@ -1400,6 +1434,161 @@ conary erase '%s=%s[%s]'
         uJob.setPrimaryJobs(jobSet)
 
         return newJob
+
+    def _fullMigrate(self, itemList, uJob, callback):
+        def _getTrovesToBeMigrated(db, troves):
+            """
+                Gets the list of troves on the system 
+                that will be migrated to the new troves in the update
+                job (just the top level troves)
+            """
+            # perform a diff of toplevel troves to find out 
+            # what version of the troves on the system will be updated.
+            existsTrv = trove.Trove("@update", versions.NewVersion(),
+                                    deps.Flavor(), None)
+            availableTrv = trove.Trove("@update", versions.NewVersion(),
+                                         deps.Flavor(), None)
+            for troveNVF in db.findByNames([x.getName() for x in troves]):
+                existsTrv.addTrove(*troveNVF)
+
+            for trv in troves:
+                availableTrv.addTrove(*trv.getNameVersionFlavor())
+            jobs = availableTrv.diff(existsTrv)[2]
+
+            return db.getTroves([(x[0], x[1][0], x[1][1])
+                                    for x in jobs if x[1][0] ],
+                                withFiles=False)
+
+        toFind = []
+        for item in itemList:
+            (troveName, (oldVersionStr, oldFlavorStr),
+                        (newVersionStr, newFlavorStr), isAbsolute) = item
+            if not isAbsolute or troveName[0] == '-':
+                raise UpdateError('Cannot perform relative updates'
+                                  'or erases as part of full migration')
+            toFind.append((troveName, newVersionStr, newFlavorStr))
+
+        searchSource = uJob.getSearchSource()
+        if searchSource.requiresLabelPath():
+            installLabelPath = self.cfg.installLabelPath
+        else:
+            installLabelPath = None
+
+        results = searchSource.findTroves(installLabelPath, toFind,
+                                          self.cfg.flavor,
+                                          affinityDatabase=self.db)
+        newTroves = list(itertools.chain(*results.itervalues()))
+        newTroves = searchSource.getTroves(newTroves, withFiles=False)
+
+        updateSet = []
+
+        availByDefaultInfo = {}
+
+        for trv in newTroves:
+            updateSet.append(trv.getNameVersionFlavor())
+            availByDefaultInfo[trv.getNameVersionFlavor()] = True
+            for (troveNVF, byDefault, isWeak) in trv.iterTroveListInfo():
+                updateSet.append(troveNVF)
+                if byDefault:
+                    availByDefaultInfo[troveNVF] = True
+                else:
+                    availByDefaultInfo.setdefault(troveNVF, False)
+
+        # find the installed versions of the top level troves we're
+        # trying to migrate to.  Troves within the _old_ versions 
+        # of those troves that installed by byDefault False 
+        # we will keep when migrating.
+        # E.g. if you install foo:debuginfo, when we migrate you,
+        # foo:debuginfo will be kept.
+        toBeMigrated = _getTrovesToBeMigrated(self.db, newTroves)
+
+        byDefaultFalse = []
+        byDefaultTrue = []
+        count = 0
+        notByDefault = []
+        for trv in toBeMigrated:
+            troveList = list(trv.iterTroveListInfo())
+
+            troveTups = [x[0] for x in troveList]
+            hasTroves = self.db.hasTroves(troveTups)
+            troveList = (x[0] for x in itertools.izip(troveList, hasTroves) if x[1])
+            for (troveNVF, byDefault, isWeak) in troveList:
+                count += 1
+                if not byDefault:
+                    byDefaultFalse.append(troveNVF)
+                else:
+                    byDefaultTrue.append(troveNVF)
+        byDefaultFalse = set(byDefaultFalse)
+        byDefaultFalse.difference_update(byDefaultTrue)
+        del byDefaultTrue
+
+        updateSet = set(updateSet)
+        eraseSet = set(self.db.iterAllTroves())
+        toKeep = eraseSet & updateSet
+        updateSet.difference_update(toKeep)
+        eraseSet.difference_update(toKeep)
+
+        existsTrv = trove.Trove("@update", versions.NewVersion(),
+                                deps.Flavor(), None)
+        availableTrv = trove.Trove("@update", versions.NewVersion(),
+                                     deps.Flavor(), None)
+        for troveNVF in updateSet:
+            availableTrv.addTrove(*troveNVF)
+        for troveNVF in eraseSet:
+            existsTrv.addTrove(*troveNVF)
+        potentialJobs = availableTrv.diff(existsTrv)[2]
+
+        finalJobs = []
+        for job in potentialJobs:
+            newInfo = (job[0], job[2][0], job[2][1])
+            oldInfo = (job[0], job[1][0], job[1][1])
+            if not job[1][0]:
+                if not availByDefaultInfo[newInfo]:
+                    # only install byDefault True
+                    continue
+            elif job[2][0]:
+                if oldInfo not in byDefaultFalse:
+                    # this is an update from a byDefault True trv 
+                    # to a byDefault False trv.
+                    if not availByDefaultInfo[newInfo]:
+                        finalJobs.append((job[0], job[1], (None, None), False))
+                        continue
+            finalJobs.append(job)
+
+
+        for troveNVF in toKeep:
+            if (not availByDefaultInfo[troveNVF] 
+                and troveNVF not in byDefaultFalse):
+                finalJobs.append((troveNVF[0], (troveNVF[1], troveNVF[2]),
+                                 (None, None), False))
+        finalJobs = set(finalJobs)
+
+
+        updateJobs = [ x for x in finalJobs if x[2][0] ]
+        pins = self.db.trovesArePinned([ (x[0], x[1][0], x[1][1]) 
+                                         for x in updateJobs if x[1][0]])
+
+        csSource = trovesource.stack(uJob.getSearchSource(), self.repos)
+
+        for job, isPinned in itertools.izip(updateJobs, pins):
+            if isPinned:
+                newJob = self._splitPinnedJob(uJob, csSource, job, force=True)
+                if newJob is not None:
+                    finalJobs.add(newJob)
+                    finalJobs.remove(job)
+                else:
+                    # we can't update this because of the pin.
+                    # just leave the old version in place.
+                    finalJobs.remove(job)
+
+        cs, notFound = csSource.createChangeSet(updateJobs,
+                                                withFiles = False,
+                                                recurse = False,
+                                                callback = callback)
+
+        self._replaceIncomplete(cs, csSource, self.db, self.repos)
+        uJob.getTroveSource().addChangeSet(cs)
+        return finalJobs
 
     def fullUpdateItemList(self):
         # ignore updates that just switch version, not flavor or 
@@ -1474,19 +1663,26 @@ conary erase '%s=%s[%s]'
         if troveNames is not None and not troveNames:
             return []
 
+
         allJobs = []        # allJobs is returned from this fn
 
         noParents = []      # troves with no parents that could be part of
                             # unknown local updates.
 
         troves = []         # troveId -> troveInfo map (troveId == index)
-                            # contains (troveTup, isPresent, hasParent, isWeak)
+                            # contains (troveTup, isPresent, hasParent, 
+                            #           isWeak)
 
         maxId = 0           # next index for troves list
         troveIdsByInfo = {} # (name,ver,flavor) -> troveId 
 
         parentIds = {}      # name -> [parents of troves w/ name, troveIds]
         childIds = {}       # troveId -> childIds
+
+        TROVEINFO = 0
+        ISPRESENT = 1
+        HASPARENT = 2
+        ISWEAK = 3
 
         # 1. Create needed data structures
         #    troves, parentIds, childIds
@@ -1498,21 +1694,22 @@ conary erase '%s=%s[%s]'
                 troves.append([troveInfo, isPresent, bool(parentInfo), weakRef])
             else:
                 if isPresent:
-                    troves[troveId][1] = True
+                    troves[troveId][ISPRESENT] = True
                 if parentInfo:
-                    troves[troveId][2] = True
+                    troves[troveId][HASPARENT] = True
                 if not weakRef:
-                    troves[troveId][3] = False
+                    troves[troveId][ISWEAK] = False
 
-            parentId = troveIdsByInfo.setdefault(parentInfo, maxId)
-            if parentId == maxId:
-                maxId += 1
-                troves.append([parentInfo, False, False, False])
+            if parentInfo:
+                parentId = troveIdsByInfo.setdefault(parentInfo, maxId)
+                if parentId == maxId:
+                    maxId += 1
+                    troves.append([parentInfo, False, False, True])
 
-            l = parentIds.setdefault(troveInfo[0], (set(), []))
+            l = parentIds.setdefault(troveInfo[0], [set(), []])
             l[1].append(troveId)
 
-            if parentId:
+            if parentInfo:
                 childIds.setdefault(parentId, []).append(troveId)
                 l[0].add(parentId)
 
@@ -1520,8 +1717,13 @@ conary erase '%s=%s[%s]'
 
         # remove troves that don't are not present and have no parents - they 
         # won't be part of local updates.
-        allTroves = set(x[0] for x in enumerate(troves) if x[1][1] or x[1][2])
-        [ x[0].intersection_update(allTroves) for x in parentIds.itervalues() ]
+        allTroves = set(x[0] for x in enumerate(troves) 
+                        if (x[1][ISPRESENT] or x[1][HASPARENT])
+                           and not (x[1][ISPRESENT] and x[1][HASPARENT] and not x[1][ISWEAK]))
+        for name, (parents, troveIds) in parentIds.items():
+            parents.intersection_update(allTroves)
+            parentIds[name][1] = set(troveIds)
+            parentIds[name][1].intersection_update(allTroves)
         del allTroves
 
         noParents = (x[1][1] for x in parentIds.iteritems() if not x[1][0])
@@ -1529,9 +1731,9 @@ conary erase '%s=%s[%s]'
 
         while noParents:
             exists = trove.Trove('@update', versions.NewVersion(),
-                                 deps.DependencySet(), None)
+                                 deps.Flavor(), None)
             refd = trove.Trove('@update', versions.NewVersion(),
-                               deps.DependencySet(), None)
+                               deps.Flavor(), None)
 
             for troveId in noParents:
                 info, isPresent, hasParent, isWeak = troves[troveId]
@@ -1545,11 +1747,15 @@ conary erase '%s=%s[%s]'
             for job in exists.diff(refd)[2]:
                 if not job[2][0]:
                     continue
-                newIsWeak = troves[troveIdsByInfo[job[0], job[2][0], job[2][1]]][3]
-                if newIsWeak:
-                    if not job[1][0]:
-                        continue
-                    elif troves[troveIdsByInfo[job[0], job[1][0], job[1][1]]][3]:
+                newInfo = troves[troveIdsByInfo[job[0], job[2][0], job[2][1]]]
+                if not job[1][0] and newInfo[HASPARENT]:
+                    # it's a new install.  If it has a parent,
+                    # then it's already covered by the install of that
+                    # parent.
+                    continue
+                elif newInfo[HASPARENT] and newInfo[ISWEAK]:
+                    oldInfo = troves[troveIdsByInfo[job[0], job[1][0], job[1][1]]]
+                    if oldInfo[ISWEAK]:
                         continue
                 allJobs.append(job)
 
@@ -1624,12 +1830,8 @@ conary erase '%s=%s[%s]'
             # that contains only those parts of newTrove that are actually
             # installed.
 
-            notExistsOldTrove = trove.Trove('@update',
-                                            versions.NewVersion(),
-                                            deps.DependencySet())
-            existsNewTrove = trove.Trove('@update',
-                                         versions.NewVersion(),
-                                         deps.DependencySet())
+            notExistsOldTrove = trove.Trove('@update', versions.NewVersion(), deps.Flavor())
+            existsNewTrove = trove.Trove('@update', versions.NewVersion(), deps.Flavor())
 
             # only create local updates between old troves that
             # don't exist and new troves that do.
@@ -1678,16 +1880,15 @@ conary erase '%s=%s[%s]'
             cs.merge(newCs)
 
 
-
     def updateChangeSet(self, itemList, keepExisting = False, recurse = True,
                         resolveDeps = True, test = False,
                         updateByDefault = True, callback = UpdateCallback(),
                         split = True, sync = False, fromChangesets = [],
                         checkPathConflicts = True, checkPrimaryPins = True,
-                        resolveRepos = True, syncChildren = False, 
-                        updateOnly = False, resolveGroupList=None, 
+                        resolveRepos = True, syncChildren = False,
+                        updateOnly = False, resolveGroupList=None,
                         installMissing = False, removeNotByDefault = False,
-                        keepRequired = False):
+                        keepRequired = False, migrate = False):
         """
         Creates a changeset to update the system based on a set of trove update
         and erase operations. If self.cfg.autoResolve is set, dependencies
@@ -1759,10 +1960,10 @@ conary erase '%s=%s[%s]'
 
         uJob = database.UpdateJob(self.db)
 
-        useAffinity = False
         forceJobClosure = False
         resolveSource = None
 
+        useAffinity = False
         if fromChangesets:
             # when --from-file is used we need to explicitly compute the
             # transitive closure for our job. we normally trust the 
@@ -1784,12 +1985,12 @@ conary erase '%s=%s[%s]'
                 # a matching comment
                 uJob.getTroveSource().addChangeSet(cs,
                                                    includesFileContents = True)
-
-            uJob.setSearchSource(trovesource.stack(csSource, self.repos))
-        elif sync:
+        if sync:
             uJob.setSearchSource(trovesource.ReferencedTrovesSource(self.db))
         elif syncChildren:
             uJob.setSearchSource(self.db)
+        elif fromChangesets:
+            uJob.setSearchSource(trovesource.stack(csSource, self.repos))
         else:
             uJob.setSearchSource(self.repos)
             useAffinity = True
@@ -1810,7 +2011,10 @@ conary erase '%s=%s[%s]'
             resolveSource = resolve.DepResolutionByTroveList(self.cfg, self.db,
                                                              groupTroves)
 
-        jobSet = self._updateChangeSet(itemList, uJob,
+        if migrate:
+            jobSet = self._fullMigrate(itemList, uJob, callback)
+        else:
+            jobSet = self._updateChangeSet(itemList, uJob,
                                        keepExisting = keepExisting,
                                        recurse = recurse,
                                        updateMode = updateByDefault,
@@ -1821,6 +2025,9 @@ conary erase '%s=%s[%s]'
                                        updateOnly = updateOnly,
                                        installMissing = installMissing,
                                        removeNotByDefault = removeNotByDefault)
+
+        self._validateJob(jobSet)
+
         updateThreshold = self.cfg.updateThreshold
 
         # When keep existing is provided none of the changesets should
@@ -1939,6 +2146,26 @@ conary erase '%s=%s[%s]'
 
         return (uJob, suggMap)
 
+    def _validateJob(self, jobSet):
+        # sanity check for jobSet - never allow a job that would add 
+        # or remove the same trove twice to be applied to the system.
+        oldTroves = [ (x[0], x[1]) for x in jobSet if x[1][0]]
+        if not len(oldTroves) == len(set(oldTroves)):
+            extraTroves = set(x for x in oldTroves if oldTroves.count(x) > 1)
+            raise InternalConaryError(
+                            "Update tries to remove same trove twice:\n    "
+                              + '\n    '.join('%s=%s[%s]' % ((x[0],) + x[1]) 
+                                              for x in sorted(extraTroves)))
+
+        newTroves = [ (x[0], x[2]) for x in jobSet if x[2][0]]
+        if not len(newTroves) == len(set(newTroves)):
+            extraTroves = [ x for x in newTroves if newTroves.count(x) > 1 ]
+            raise InternalConaryError(
+                             "Update tries to add same trove twice:\n    "
+                              + '\n    '.join('%s=%s[%s]' % ((x[0],) + x[1]) 
+                                              for x in sorted(extraTroves)))
+
+
     def applyUpdate(self, uJob, replaceFiles = False, tagScript = None, 
                     test = False, justDatabase = False, journal = None, 
                     localRollbacks = False, callback = UpdateCallback(),
@@ -1994,19 +2221,22 @@ conary erase '%s=%s[%s]'
                 raise
 
         def _createAllCs(q, allJobs, uJob, cfg, stopSelf):
-	    # reopen the local database so we don't share a sqlite object
-	    # with the main thread
+            # Reopen the local database so we don't share a sqlite object
+            # with the main thread. This gets the user map from the already
+            # existing repository object to ensure we still have access to
+            # any passwords we need.
             # _createCs accesses the database through the uJob.troveSource,
             # so make sure that references this fresh db as well.
             db = database.Database(cfg.root, cfg.dbPath)
             uJob.troveSource.db = db
             repos = NetworkRepositoryClient(cfg.repositoryMap,
-                                            cfg.user,
+                                            self.repos.getUserMap(),
                                             downloadRateLimit =
                                                 cfg.downloadRateLimit,
                                             uploadRateLimit =
                                                 cfg.uploadRateLimit,
-                                            localRepository = db)
+                                            localRepository = db,
+                                            pwPrompt = self.repos.getPwPrompt())
             callback.setAbortEvent(stopSelf)
 
             for i, job in enumerate(allJobs):
@@ -2036,6 +2266,9 @@ conary erase '%s=%s[%s]'
         # def applyUpdate -- body begins here
 
         allJobs = uJob.getJobs()
+
+        self._validateJob(list(itertools.chain(*allJobs)))
+
         if len(allJobs) == 1:
             # this handles change sets which include change set files
             callback.setChangesetHunk(0, 0)

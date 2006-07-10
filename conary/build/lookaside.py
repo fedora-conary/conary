@@ -216,22 +216,26 @@ def _searchCache(cfg, name, location):
 
 def _searchRepository(cfg, repCache, name, location):
     """searches repository, and retrieves to cache"""
+    if repCache.hasFileName(name):
+	log.info('found %s in repository', name)
+	return repCache.cacheFile(cfg, name, location, name)
     basename = os.path.basename(name)
-
     if repCache.hasFileName(basename):
 	log.info('found %s in repository', name)
-	return repCache.cacheFile(cfg, name, location)
+	return repCache.cacheFile(cfg, basename, location, basename)
+
 
     return None
 
 
-def fetchURL(cfg, name, location):
+def fetchURL(cfg, name, location, httpHeaders={}):
     log.info('Downloading %s...', name)
     retries = 0
     url = None
     while retries < 5:
         try:
-            url = urllib2.urlopen(name)
+            req = urllib2.Request(name, headers=httpHeaders)
+            url = urllib2.urlopen(req)
             break
         except urllib2.HTTPError, msg:
             if msg.code == 404:
@@ -278,18 +282,22 @@ def fetchURL(cfg, name, location):
     rc = _createCacheEntry(cfg, name, location, url)
     return rc
 
-def searchAll(cfg, repCache, name, location, srcdirs, autoSource=False):
+def searchAll(cfg, repCache, name, location, srcdirs, autoSource=False, 
+              localOnly=False, httpHeaders={}):
     """
     searches all locations, including populating the cache if the
     file can't be found in srcdirs, and returns the name of the file.
     autoSource should be True when the file has been pulled from an RPM,
     and so has no path associated but is still auto-added
     """
-    if '/' not in name and not autoSource:
+    if name[0] != '/' and not autoSource:
         # these are files that do not have / in the name and are not
         # indirectly fetched via RPMs, so we look in the local directory
         f = util.searchFile(name, srcdirs)
         if f: return f
+
+    if localOnly:
+        return None
 
     # this needs to come as soon as possible to preserve reproducability
     f = _searchRepository(cfg, repCache, name, location)
@@ -309,14 +317,14 @@ def searchAll(cfg, repCache, name, location, srcdirs, autoSource=False):
     # on commit
     for prefix in networkPrefixes:
         if name.startswith(prefix):
-            return fetchURL(cfg, name, location)
+            return fetchURL(cfg, name, location, httpHeaders)
 
     # could not find it anywhere
     return None
 
 
-def findAll(cfg, repcache, name, location, srcdirs, autoSource=False):
-    f = searchAll(cfg, repcache, name, location, srcdirs, autoSource)
+def findAll(cfg, repcache, name, location, srcdirs, autoSource=False, httpHeaders={}):
+    f = searchAll(cfg, repcache, name, location, srcdirs, autoSource, httpHeaders=httpHeaders)
     if not f:
 	raise OSError, (errno.ENOENT, os.strerror(errno.ENOENT), name)
     return f
@@ -332,9 +340,8 @@ class RepositoryCache:
     def hasFileName(self, fileName):
 	return fileName in self.nameMap
 
-    def cacheFile(self, cfg, fileName, location):
+    def cacheFile(self, cfg, fileName, location, basename):
 	cachedname = createCacheName(cfg, fileName, location)
-        basename = os.path.basename(fileName)
 
         if basename in self.cacheMap:
             # don't check sha1 twice

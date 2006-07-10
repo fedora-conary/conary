@@ -1,4 +1,3 @@
-#!/usr/bin/python2.4
 # -*- mode: python -*-
 #
 # Copyright (c) 2006 rPath, Inc.
@@ -36,6 +35,7 @@ class MirrorConfiguration(cfg.SectionedConfigFile):
     target                =  MirrorConfigurationSection
     uploadRateLimit       =  (conarycfg.CfgInt, 0)
     downloadRateLimit     =  (conarycfg.CfgInt, 0)
+    lockFile              =  cfg.CfgString
 
     def __init__(self):
         cfg.SectionedConfigFile.__init__(self)
@@ -210,7 +210,7 @@ def displayBundle(bundle):
     ret.append("newVF: %s" % (newVF,))
     return "\n  ".join(ret)
 
-# this is to keep track of PGP keys we already added to avoid repeated
+# this is to keep track of GPG keys we already added to avoid repeated
 # add operation into the target
 addedKeys = {}
 def mirrorGPGKeys(sourceRepos, targetRepos, cfg, host, test = False):
@@ -222,7 +222,7 @@ def mirrorGPGKeys(sourceRepos, targetRepos, cfg, host, test = False):
     # we mirror the entire set of GPG keys in one step to avoid
     # multiple roundtrips to the sourceRepos. Also, mirroring new
     # signatures for old troves is the first mirroring step, so we
-    # need to have the PGP keys available early on
+    # need to have the GPG keys available early on
     keyList = sourceRepos.getNewPGPKeys(host, -1)
     if test:
         log.debug("(not adding %d keys due to test mode)", len(keyList))

@@ -18,6 +18,7 @@ import fnmatch
 import os
 import sys
 import xml
+import re
 
 from conary.deps import deps, arch
 from conary.lib import util
@@ -129,7 +130,7 @@ class CfgRepoMap(CfgDict):
 
 class CfgFlavor(CfgType):
 
-    default = deps.DependencySet()
+    default = deps.Flavor()
 
     def copy(self, val):
         return val.copy()
@@ -153,10 +154,14 @@ class CfgFlavor(CfgType):
 
 
 class CfgFingerPrintMapItem(CfgType):
-    
     def parseString(self, val):
         val = val.split(None, 1)
         label = val[0]
+        try:
+            # compile label to verify that it is valid
+            re.compile(label)
+        except Exception, e:
+            raise ParseError, "Invalid regexp: '%s': " % label + str(e)
 
         if len(val) == 1 or not val[1] or val[1].lower() == 'none':
             fingerprint = None
@@ -226,6 +231,7 @@ class ConaryContext(ConfigSection):
     buildLabel            =  CfgLabel
     buildPath             =  None
     contact               =  None
+    environment           =  CfgDict(CfgString)
     excludeTroves         =  CfgRegExpList
     flavor                =  CfgList(CfgFlavor)
     lookaside             =  CfgPath
@@ -268,6 +274,7 @@ class ConaryConfiguration(SectionedConfigFile):
     emergeUser            =  (CfgString, 'emerge')
     enforceManagedPolicy  =  (CfgBool, True)
     entitlementDirectory  =  (CfgPath, '/etc/conary/entitlements')
+    environment           =  CfgDict(CfgString)
     fullVersions          =  CfgBool
     fullFlavors           =  CfgBool
     localRollbacks        =  CfgBool
@@ -287,7 +294,7 @@ class ConaryConfiguration(SectionedConfigFile):
     uploadRateLimit       =  (CfgInt, 0)
     downloadRateLimit     =  (CfgInt, 0)
     root                  =  (CfgPath, '/')
-    resolveLevel          =  (CfgInt, 1)
+    resolveLevel          =  (CfgInt, 2)
     recipeTemplateDirs    =  (CfgPathList, ('~/.conary/recipeTemplates',
                                             '/etc/conary/recipeTemplates'))
     showLabels            =  CfgBool
@@ -340,7 +347,9 @@ class ConaryConfiguration(SectionedConfigFile):
         context = self.getSection(name)
 
         for key, value in context.iteritems():
-            if value:
+            if isinstance(value, deps.Flavor):
+                    self.__dict__[key] = value
+            elif value:
                 if isinstance(value, dict):
                     self.__dict__[key].update(value)
                 else:
@@ -357,7 +366,9 @@ class ConaryConfiguration(SectionedConfigFile):
             out = sys.stdout
         if self.context:
             out.write('[%s]\n' % self.context)
-            self.getContext(self.context).display(out)
+            context = self.getContext(self.context)
+            context.setDisplayOptions(**self._displayOptions)
+            context.display(out)
         else:
             out.write('No context set.\n')
 
@@ -376,7 +387,7 @@ class ConaryConfiguration(SectionedConfigFile):
         self.flavorConfig = flavorcfg.FlavorConfig(self.useDirs, 
                                                    self.archDirs)
         if self.flavor == []:
-            self.flavor = [deps.DependencySet()]
+            self.flavor = [deps.Flavor()]
 
         self.flavor = self.flavorConfig.toDependency(override=self.flavor)
 
@@ -393,7 +404,7 @@ class ConaryConfiguration(SectionedConfigFile):
             # use all the flavors for the main arch first
             for depList in arch.currentArch:
                 for flavor in self.flavor:
-                    insSet = deps.DependencySet()
+                    insSet = deps.Flavor()
                     for dep in depList:
                         insSet.addDep(deps.InstructionSetDependency, dep)
                     newFlavor = flavor.copy()

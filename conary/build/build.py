@@ -100,11 +100,91 @@ class BuildCommand(BuildAction, action.ShellCommand):
     Pure virtual class which implements the do method,
     based on the shell command built from a template.
     """
+    keywords = {'package': None}
     def __init__(self, recipe, *args, **keywords):
 	# enforce pure virtual status
         assert(self.__class__ is not BuildCommand)
 	BuildAction.__init__(self, recipe, *args, **keywords)
 	action.ShellCommand.__init__(self, recipe, *args, **keywords)
+
+        package = None
+        component = None
+
+        if self.package:
+            self.package = self.package % recipe.macros
+            package = self.package
+            if ':' in self.package:
+                (package, component) = self.package.split(':')
+
+            recipe.packages[package] = True
+
+        if component:
+            self.recipe.ComponentSpec(component,
+                                      lambda: self.manifestRegexp(self.package))
+        if package:
+            self.recipe.PackageSpec(package,
+                                      lambda: self.manifestRegexp(self.package))
+
+    def getDestDirItems(self):
+
+        fileList = set()
+
+        destdir = self.recipe.macros.destdir
+
+        skip=len(destdir)
+        for root, dirs, files in os.walk(destdir):
+            topdir = root[skip:]
+            if not topdir:
+                topdir = '/'
+            for name in dirs+files:
+                fileList.add(os.path.join(topdir, name))
+
+        return fileList
+
+    def manifestFile(self, manifest):
+
+        manifestDir = '%s/%s/_MANIFESTS_' \
+            % (util.normpath(self.recipe.cfg.buildPath),
+              self.recipe.name)
+
+        if not os.path.exists(manifestDir):
+            util.mkdirChain(manifestDir)
+
+        manifestFile = '%s/%s.manifest' \
+                       % (manifestDir, manifest)
+
+        return manifestFile
+
+    def manifestRegexp(self, manifest):
+
+        manifestFile = self.manifestFile(manifest)
+
+        log.info("loading specs from '%s.manifest' file" % manifest)
+
+        files = [ re.escape(x[:-1]) for x in open(manifestFile).readlines() ]
+        regexp = '^('+'|'.join(files)+')$'
+
+        return regexp
+
+    def manifestInitialize(self):
+
+        log.info('Manifest: get already installed files')
+
+        self.manifestBefore = self.getDestDirItems()
+
+    def manifestCreate(self):
+
+        log.info('Manifest: get new files')
+
+        files = self.getDestDirItems() - self.manifestBefore
+
+        del self.manifestBefore
+
+        manifestFile = self.manifestFile(self.package)
+        manifest = open(manifestFile, 'a')
+        for file in sorted(list(files)):
+            manifest.write('%s\n' % file)
+        manifest.close()
 
     def do(self, macros):
         """
@@ -116,8 +196,14 @@ class BuildCommand(BuildAction, action.ShellCommand):
         @return: None
         @rtype: None
 	"""
+
+        if self.package:
+            self.manifestInitialize()
+
         util.execute(self.command %macros)
 
+        if self.package:
+            self.manifestCreate()
 
 class Run(BuildCommand):
     """
@@ -155,6 +241,14 @@ class Run(BuildCommand):
     B{wrapdir} : (None) If set, points to a directory. Similar to C{filewrap},
     except it limits the C{%(destdir)s} substitution to only the tree under
     the given directory.
+
+    B{package} : (None) If set, must be a string that specifies the package
+    (C{package='packagename'}), component (C{package=':componentname'}), or
+    package and component (C{package='packagename:componentname'}) in which
+    to place the files added while executing this command.
+    Previously-specified C{PackageSpec} or C{ComponentSpec} lines will
+    override the package specification, since all package and component
+    specifications are considered in strict order as provided by the recipe.
 
     EXAMPLES
     ========
@@ -209,7 +303,7 @@ class Run(BuildCommand):
 	else:
 	    macros.cdcmd = ''
 
-        util.execute(self.command %macros)
+        BuildCommand.do(self, macros)
 
 class Automake(BuildCommand):
     """
@@ -253,6 +347,14 @@ class Automake(BuildCommand):
 
     B{subDir}: (None) Directory in which to re-run C{aclocal}, C{autoconf},
     and C{automake}
+
+    B{package} : (None) If set, must be a string that specifies the package
+    (C{package='packagename'}), component (C{package=':componentname'}), or
+    package and component (C{package='packagename:componentname'}) in which
+    to place the files added while executing this command.
+    Previously-specified C{PackageSpec} or C{ComponentSpec} lines will
+    override the package specification, since all package and component
+    specifications are considered in strict order as provided by the recipe.
 
     EXAMPLES
     ========
@@ -339,6 +441,14 @@ class Configure(BuildCommand):
 
     B{subDir} : (None) Directory in which to run C{configure}
 
+    B{package} : (None) If set, must be a string that specifies the package
+    (C{package='packagename'}), component (C{package=':componentname'}), or
+    package and component (C{package='packagename:componentname'}) in which
+    to place the files added while executing this command.
+    Previously-specified C{PackageSpec} or C{ComponentSpec} lines will
+    override the package specification, since all package and component
+    specifications are considered in strict order as provided by the recipe.
+
     EXAMPLES
     ========
 
@@ -352,7 +462,8 @@ class Configure(BuildCommand):
     template = (
 	'cd %%(actionDir)s; '
 	'%%(mkObjdir)s '
-	'CFLAGS="%%(cflags)s" CXXFLAGS="%%(cflags)s %%(cxxflags)s"'
+    'CLASSPATH="%%(classpath)s"'
+	' CFLAGS="%%(cflags)s" CXXFLAGS="%%(cflags)s %%(cxxflags)s"'
 	' CPPFLAGS="%%(cppflags)s"'
 	' LDFLAGS="%%(ldflags)s" CC=%%(cc)s CXX=%%(cxx)s'
 	' %(preConfigure)s %%(configure)s'
@@ -466,7 +577,8 @@ class ManualConfigure(Configure):
     """
     template = ('cd %%(actionDir)s; '
                 '%%(mkObjdir)s '
-                'CFLAGS="%%(cflags)s" CXXFLAGS="%%(cflags)s %%(cxxflags)s"'
+                'CLASSPATH="%%(classpath)s"'
+                ' CFLAGS="%%(cflags)s" CXXFLAGS="%%(cflags)s %%(cxxflags)s"'
                 ' CPPFLAGS="%%(cppflags)s"'
                 ' LDFLAGS="%%(ldflags)s" CC=%%(cc)s CXX=%%(cxx)s'
 	        ' %(preConfigure)s %%(configure)s %(args)s')
@@ -527,6 +639,14 @@ class Make(BuildCommand):
     B{subDir} : (The build directory) The directory to enter before running
     C{make}
 
+    B{package} : (None) If set, must be a string that specifies the package
+    (C{package='packagename'}), component (C{package=':componentname'}), or
+    package and component (C{package='packagename:componentname'}) in which
+    to place the files added while executing this command.
+    Previously-specified C{PackageSpec} or C{ComponentSpec} lines will
+    override the package specification, since all package and component
+    specifications are considered in strict order as provided by the recipe.
+
     EXAMPLES
     ========
 
@@ -549,7 +669,7 @@ class Make(BuildCommand):
     # them.
     template = ('cd %%(actionDir)s; '
 	        'CFLAGS="%%(cflags)s" CXXFLAGS="%%(cflags)s %%(cxxflags)s"'
-		' CPPFLAGS="%%(cppflags)s"'
+		' CPPFLAGS="%%(cppflags)s" CLASSPATH="%%(classpath)s" '
 		' LDFLAGS="%%(ldflags)s" CC=%%(cc)s CXX=%%(cxx)s'
                 ' %(preMake)s %(makeName)s %%(overrides)s'
 		' %%(mflags)s %%(parallelmflags)s %(args)s')
@@ -622,7 +742,7 @@ class MakeParallelSubdir(Make):
     """
     template = ('cd %%(actionDir)s; '
 	        'CFLAGS="%%(cflags)s" CXXFLAGS="%%(cflags)s %%(cxxflags)s"'
-		' CPPFLAGS="%%(cppflags)s"'
+		' CPPFLAGS="%%(cppflags)s" CLASSPATH="%%(classpath)s" '
 		' LDFLAGS="%%(ldflags)s" CC=%%(cc)s CXX=%%(cxx)s'
                 ' %(preMake)s make %%(overrides)s'
 		' %%(mflags)s '
@@ -660,6 +780,14 @@ class MakeInstall(Make):
 
     B{installtarget} : (C{install}) The install target to C{make}
 
+    B{package} : (None) If set, must be a string that specifies the package
+    (C{package='packagename'}), component (C{package=':componentname'}), or
+    package and component (C{package='packagename:componentname'}) in which
+    to place the files added while executing this command.
+    Previously-specified C{PackageSpec} or C{ComponentSpec} lines will
+    override the package specification, since all package and component
+    specifications are considered in strict order as provided by the recipe.
+
     EXAMPLES
     ========
 
@@ -675,7 +803,7 @@ class MakeInstall(Make):
     """
     template = ('cd %%(actionDir)s; '
 	        'CFLAGS="%%(cflags)s" CXXFLAGS="%%(cflags)s %%(cxxflags)s"'
-		' CPPFLAGS="%%(cppflags)s"'
+		' CPPFLAGS="%%(cppflags)s" CLASSPATH="%%(classpath)s" '
 		' LDFLAGS="%%(ldflags)s" CC=%%(cc)s CXX=%%(cxx)s'
                 ' %(preMake)s make %%(overrides)s'
 		' %%(mflags)s %%(rootVarArgs)s'
@@ -723,7 +851,7 @@ class MakePathsInstall(Make):
     template = (
 	'cd %%(actionDir)s; '
 	'CFLAGS="%%(cflags)s" CXXFLAGS="%%(cflags)s %%(cxxflags)s"'
-	' CPPFLAGS="%%(cppflags)s"'
+	' CPPFLAGS="%%(cppflags)s" CLASSPATH="%%(classpath)s" '
 	' LDFLAGS="%%(ldflags)s" CC=%%(cc)s CXX=%%(cxx)s'
 	' %(preMake)s make %%(overrides)s'
 	' %%(mflags)s'
@@ -742,6 +870,119 @@ class MakePathsInstall(Make):
 	' infodir=%%(destdir)s/%%(infodir)s'
 	' %(installtarget)s %(args)s')
     keywords = {'installtarget': 'install'}
+
+
+class Ant(BuildCommand):
+    """
+    NAME
+    ====
+
+    B{C{r.Ant()}} - Runs c{ant}
+
+    SYNOPSIS
+    ========
+
+    C{r.Ant(I{antargs}, [I{verbose}], [I{options}], [I{subdir}])}
+
+    DESCRIPTION
+    ===========
+
+    The C{r.Ant()} class is called from within a Conary recipe to execute the 
+    C{ant} utility.
+
+    KEYWORDS
+    ========
+
+    The C{r.Ant()} class accepts the following keywords, with default values
+    shown in parentheses when applicable:
+
+    B{package} : (None) If set, must be a string that specifies the package
+    (C{package='packagename'}), component (C{package=':componentname'}), or
+    package and component (C{package='packagename:componentname'}) in which
+    to place the files added while executing this command.
+    Previously-specified C{PackageSpec} or C{ComponentSpec} lines will
+    override the package specification, since all package and component
+    specifications are considered in strict order as provided by the recipe.
+
+    EXAMPLES
+    ========
+
+    C{r.Ant('jar javadoc')}
+
+    Demonstrates calling C{r.Ant()}, with the C{jar} and C{javadoc} arguments
+    to C{ant}.
+
+    """
+    keywords = {'subdir': '',
+                'verbose': True,
+                'options': '-lib %(javadir)s'}
+    template = '%%(cdcmd)s CLASSPATH="%%(classpath)s" %%(antcmd)s %%(antoptions)s %%(args)s'
+
+    def do(self, macros):
+        macros = macros.copy()
+        if self.subdir: macros.cdcmd = 'cd %s;' % (self.subdir % macros)
+        else: macros.cdcmd = ''
+        if self.options: macros.antoptions = self.options
+        if self.verbose: macros.antoptions += ' -v'
+        macros.antcmd = 'ant'
+        macros.args = ' '.join(self.arglist)
+        BuildCommand.do(self, macros)
+
+
+class JavaCompile(BuildCommand):
+    """
+    NAME
+    ====
+
+    B{C{r.JavaCompile()}} - Runs C{javac}
+
+    SYNOPSIS
+    ========
+
+    C{r.JavaCompile(I{directory}, [I{javacmd}], [I{javaArgs}])}
+
+    DESCRIPTION
+    ===========
+
+    The C{r.JavaCompile()} class is called from within a Conary recipe to 
+    execute the command defined by C{javacmd}, normally C{javac}.
+
+    KEYWORDS
+    ========
+
+    The C{r.JavaCompile()} class accepts the following keywords, with default values
+    shown in parentheses when applicable:
+
+    B{package} : (None) If set, must be a string that specifies the package
+    (C{package='packagename'}), component (C{package=':componentname'}), or
+    package and component (C{package='packagename:componentname'}) in which
+    to place the files added while executing this command.
+    Previously-specified C{PackageSpec} or C{ComponentSpec} lines will
+    override the package specification, since all package and component
+    specifications are considered in strict order as provided by the recipe.
+
+    EXAMPLES
+    ========
+
+    C{r.JavaCompile('/path/to/java/files', javacmd='ecj')}
+
+    Demonstrates calling C{r.JavaCompile()}, to compile all java files in a 
+    directory using C{ecj}.
+
+    """
+
+    keywords = {'javacmd': 'javac',
+                'javaArgs': ''}
+    template = 'CLASSPATH="%%(classpath)s" %(javacmd)s %%(dir)s %(javaArgs)s'
+
+    def do(self, macros):
+        macros = macros.copy()
+        assert(len(self.arglist) == 1)
+        macros.dir = self.arglist[0] % macros
+        assert(os.path.exists('%(builddir)s/%(dir)s' % macros))
+        filelist = []
+        util.execute('%s %s' % (self.command % macros, ' '.join(filelist)))
+
 
 
 class CompilePython(BuildCommand):
@@ -763,6 +1004,20 @@ class CompilePython(BuildCommand):
     optimized and compiled Python bytecode files. The paths specified must be
     absolute paths which are interpreted relative to C{%(destdir)s} in order
     for the paths compiled into the bytecode files to be correct.
+
+    KEYWORDS
+    ========
+
+    The C{r.CompilePython()} class accepts the following keywords, with default values
+    shown in parentheses when applicable:
+
+    B{package} : (None) If set, must be a string that specifies the package
+    (C{package='packagename'}), component (C{package=':componentname'}), or
+    package and component (C{package='packagename:componentname'}) in which
+    to place the files added while executing this command.
+    Previously-specified C{PackageSpec} or C{ComponentSpec} lines will
+    override the package specification, since all package and component
+    specifications are considered in strict order as provided by the recipe.
 
     EXAMPLES
     ========
@@ -820,6 +1075,9 @@ class PythonSetup(BuildCommand):
 
     KEYWORDS
     ========
+
+    The C{r.PythonSetup()} class accepts the following keywords, with default values
+    shown in parentheses when applicable:
 
     The C{r.PythonSetup()} class accepts the following keywords, with default
     values shown in parentheses when applicable:
@@ -921,6 +1179,20 @@ class Ldconfig(BuildCommand):
     to be called only for libraries that are not marked as shared
     libraries by the C{SharedLibrary} policy.
 
+    KEYWORDS
+    ========
+
+    The C{r.Ldconfig()} class accepts the following keywords, with default values
+    shown in parentheses when applicable:
+
+    B{package} : (None) If set, must be a string that specifies the package
+    (C{package='packagename'}), component (C{package=':componentname'}), or
+    package and component (C{package='packagename:componentname'}) in which
+    to place the files added while executing this command.
+    Previously-specified C{PackageSpec} or C{ComponentSpec} lines will
+    override the package specification, since all package and component
+    specifications are considered in strict order as provided by the recipe.
+
     EXAMPLES
     ========
 
@@ -940,12 +1212,18 @@ class Ldconfig(BuildCommand):
 
 
 class _FileAction(BuildAction):
-    keywords = {'component': None}
+    keywords = {'component': None, 'package': None}
 
     def __init__(self, recipe, *args, **keywords):
         BuildAction.__init__(self, recipe, *args, **keywords)
         # Add the specified package to the list of packages created by this
         # recipe
+        if self.package:
+            self.package = self.package % recipe.macros
+            if ':' in self.package:
+                self.component = self.package
+            else:
+                self.component = self.package + ':'
         if self.component and self.component.find(':') != -1:
             package = self.component.split(':')[0]
             if package:
@@ -957,13 +1235,16 @@ class _FileAction(BuildAction):
 	    mode=self.mode
 	if mode >= 0:
             # fixup obviously broken permissions
+            destPath = path
+            if isDestFile:
+                destPath = path[len(destdir):]
 	    if _permmap.has_key(mode):
-                log.warning('odd permission %o, correcting to %o: add initial "0"?' \
-                            %(mode, _permmap[mode]))
+                log.warning('odd permission %o for path %s, correcting to 0%o:'
+                            ' add initial "0"?',
+                            mode, destPath, _permmap[mode])
 		mode = _permmap[mode]
 	    isdir = os.path.isdir(path)
             if isDestFile:
-                destPath = path[len(destdir):]
                 if isdir and (mode & 0700) != 0700:
                     # regardless of what permissions go into the package,
                     # we need to be able to traverse this directory as
@@ -1053,6 +1334,14 @@ class Desktopfile(BuildCommand, _FileAction):
 
     B{vendor} : (C{net}) A vendor name for the desktop file.
 
+    B{package} : (None) If set, must be a string that specifies the package
+    (C{package='packagename'}), component (C{package=':componentname'}), or
+    package and component (C{package='packagename:componentname'}) in which
+    to place the files added while executing this command.
+    Previously-specified C{PackageSpec} or C{ComponentSpec} lines will
+    override the package specification, since all package and component
+    specifications are considered in strict order as provided by the recipe.
+
     EXAMPLES
     ========
 
@@ -1132,6 +1421,57 @@ class Environment(BuildAction):
 	action.RecipeAction.__init__(self, recipe, [], **keywords)
     def do(self, macros):
 	os.environ[self.variable] = self.value % macros
+
+
+class ClassPath(BuildCommand):
+    """
+    NAME
+    ====
+
+    B{C{r.ClassPath()}} - Set the CLASSPATH environment variable
+
+    SYNOPSIS
+    ========
+
+    C{r.ClassPath(I{'jars'})}
+
+    DESCRIPTION
+    ===========
+
+    The C{r.ClassPath()} class is called from within a Conary recipe to set
+    the CLASSPATH environment variable using C{r.classpath}.
+
+    KEYWORDS
+    ========
+
+    The C{r.ClassPath()} class accepts the following keywords, with default values
+    shown in parentheses when applicable:
+
+    B{package} : (None) If set, must be a string that specifies the package
+    (C{package='packagename'}), component (C{package=':componentname'}), or
+    package and component (C{package='packagename:componentname'}) in which
+    to place the files added while executing this command.
+    Previously-specified C{PackageSpec} or C{ComponentSpec} lines will
+    override the package specification, since all package and component
+    specifications are considered in strict order as provided by the recipe.
+    EXAMPLES
+    ========
+
+    C{r.Environment('junit', 'servlet-api')}
+    """
+    template = ''
+
+    def do(self, macros):
+        macros.classpath = self.recipe.classpath
+        for jar in self.arglist:
+            if macros.classpath:
+                macros.classpath += ':'
+            if '/' not in jar:
+                log.info(('Adding %%(javadir)s/%s.jar to java class path' % jar) % macros)
+                macros.classpath += '%%(javadir)s/%s.jar' % jar
+            else:
+                log.info('Adding %s.jar to java class path' % jar)
+                macros.classpath += '%s.jar' % jar
 
 
 class SetModes(_FileAction):
@@ -1271,6 +1611,20 @@ class Install(_PutFiles):
     to mode 0755.  If that rule doesn't suffice, use C{mode=0}I{octalmode}
     to set the mode explicitly.
 
+    KEYWORDS
+    ========
+
+    The C{r.Install()} class accepts the following keywords, with default values
+    shown in parentheses when applicable:
+
+    B{package} : (None) If set, must be a string that specifies the package
+    (C{package='packagename'}), component (C{package=':componentname'}), or
+    package and component (C{package='packagename:componentname'}) in which
+    to place the files added while executing this command.
+    Previously-specified C{PackageSpec} or C{ComponentSpec} lines will
+    override the package specification, since all package and component
+    specifications are considered in strict order as provided by the recipe.
+
     EXAMPLES
     ========
 
@@ -1310,6 +1664,20 @@ class Copy(_PutFiles):
     of the file created in the destination directory.  The mode of C{srcfile}
     is used for C{destfile} unless you set C{mode=0}I{octalmode}.
 
+    KEYWORDS
+    ========
+
+    The C{r.Copy()} class accepts the following keywords, with default values
+    shown in parentheses when applicable:
+
+    B{package} : (None) If set, must be a string that specifies the package
+    (C{package='packagename'}), component (C{package=':componentname'}), or
+    package and component (C{package='packagename:componentname'}) in which
+    to place the files added while executing this command.
+    Previously-specified C{PackageSpec} or C{ComponentSpec} lines will
+    override the package specification, since all package and component
+    specifications are considered in strict order as provided by the recipe.
+
     EXAMPLES
     ========
 
@@ -1345,6 +1713,19 @@ class Move(_PutFiles):
     the file created in the destination directory.  The mode is preserved,
     unless you explicitly set the new mode with C{mode=0}I{octalmode}.
 
+    KEYWORDS
+    ========
+
+    The C{r.Move()} class accepts the following keywords, with default values
+    shown in parentheses when applicable:
+
+    B{package} : (None) If set, must be a string that specifies the package
+    (C{package='packagename'}), component (C{package=':componentname'}), or
+    package and component (C{package='packagename:componentname'}) in which
+    to place the files added while executing this command.
+    Previously-specified C{PackageSpec} or C{ComponentSpec} lines will
+    override the package specification, since all package and component
+    specifications are considered in strict order as provided by the recipe.
     EXAMPLES
     ========
 
@@ -1384,6 +1765,14 @@ class Symlink(_FileAction):
 
     The C{r.Symlink()} class accepts the following keywords, with default
     values shown in parentheses when applicable:
+
+    B{package} : (None) If set, must be a string that specifies the package
+    (C{package='packagename'}), component (C{package=':componentname'}), or
+    package and component (C{package='packagename:componentname'}) in which
+    to place the files added while executing this command.
+    Previously-specified C{PackageSpec} or C{ComponentSpec} lines will
+    override the package specification, since all package and component
+    specifications are considered in strict order as provided by the recipe.
 
     EXAMPLES
     ========
@@ -1499,6 +1888,20 @@ class Link(_FileAction):
     Hardlinks are limited to the same directory and symbolic links should
     always be chosen in preference to them.  You should not use hard links
     unless the situation deems using them B{absolutely} necessary.
+
+    KEYWORDS
+    ========
+
+    The C{r.Link()} class accepts the following keywords, with default values
+    shown in parentheses when applicable:
+
+    B{package} : (None) If set, must be a string that specifies the package
+    (C{package='packagename'}), component (C{package=':componentname'}), or
+    package and component (C{package='packagename:componentname'}) in which
+    to place the files added while executing this command.
+    Previously-specified C{PackageSpec} or C{ComponentSpec} lines will
+    override the package specification, since all package and component
+    specifications are considered in strict order as provided by the recipe.
 
     EXAMPLES
     ========
@@ -1794,6 +2197,14 @@ class Doc(_FileAction):
     B{subdir} : Specify a subdirectory to create before placing documentation
     files into it.
 
+    B{package} : (None) If set, must be a string that specifies the package
+    (C{package='packagename'}), component (C{package=':componentname'}), or
+    package and component (C{package='packagename:componentname'}) in which
+    to place the files added while executing this command.
+    Previously-specified C{PackageSpec} or C{ComponentSpec} lines will
+    override the package specification, since all package and component
+    specifications are considered in strict order as provided by the recipe.
+
     EXAMPLES
     ========
 
@@ -1840,6 +2251,71 @@ class Doc(_FileAction):
 	else:
 	    self.paths = args
 
+
+class JavaDoc(Doc):
+    """
+    NAME
+    ====
+
+    B{C{r.JavaDoc()}} - Installs documentation files
+
+    SYNOPSIS
+    ========
+
+    C{r.JavaDoc(I{filename}, [I{subdir=/path}])}
+
+    DESCRIPTION
+    ===========
+
+    The C{r.JavaDoc()} class is called from within a Conary recipe to Install
+    documentation files from the C{%(builddir)s} into
+    C{%(destdir)s/%(thisjavadocdir)s}.
+
+    Specify a single file or directory of files for the C{filename} parameter.
+    The C{subdir=path} keyword argument can be used to create a subdirectory
+    of C{%(destdir)s/%(thisjavadocdir)s} where files may subsequently be located.
+
+    KEYWORDS
+    ========
+
+    The C{r.JavaDoc()} class accepts the following keywords:
+
+    B{subdir} : Specify a subdirectory to create before placing documentation
+    files into it.
+
+    B{package} : (None) If set, must be a string that specifies the package
+    (C{package='packagename'}), component (C{package=':componentname'}), or
+    package and component (C{package='packagename:componentname'}) in which
+    to place the files added while executing this command.
+    Previously-specified C{PackageSpec} or C{ComponentSpec} lines will
+    override the package specification, since all package and component
+    specifications are considered in strict order as provided by the recipe.
+
+    EXAMPLES
+    ========
+
+    C{r.JavaDoc('doc/kbd.FAQ*.html', subdir='html')}
+
+    Demonstrates installing C{doc/kbd.FAQ*.html} files into the C{html}
+    subdirectory after first creating the C{html} subdirectory using
+    C{r.JavaDoc()}.
+
+    C{r.JavaDoc('pam_smb.conf.example')}
+
+    Demonstrates using C{r.JavaDoc} to place the file C{pam_smb.conf.example}
+    into C{%(destdir)s/%(thisjavadocdir)s}.
+
+    C{r.JavaDoc("html/")}
+
+    Demonstrates using C{r.JavaDoc} to place the subdirectory C{html} from
+    C{%(builddir)s} into C{%(destdir)s/%(thisjavadocdir)s}. 
+    """
+    def do(self, macros):
+        macros = macros.copy()
+        macros.thisdocdir = macros.thisjavadocdir
+        Doc.do(self, macros)
+
+
 class Create(_FileAction):
     """
     NAME
@@ -1874,6 +2350,14 @@ class Create(_FileAction):
     B{macros}  : Whether to interpolate macros into the contents
 
     B{mode} : The mode of the file (defaults to 0644)
+
+    B{package} : (None) If set, must be a string that specifies the package
+    (C{package='packagename'}), component (C{package=':componentname'}), or
+    package and component (C{package='packagename:componentname'}) in which
+    to place the files added while executing this command.
+    Previously-specified C{PackageSpec} or C{ComponentSpec} lines will
+    override the package specification, since all package and component
+    specifications are considered in strict order as provided by the recipe.
 
     EXAMPLES
     ========
@@ -1944,6 +2428,14 @@ class MakeDirs(_FileAction):
 
     B{mode} : (0755) Specify directory access permissions
 
+    B{package} : (None) If set, must be a string that specifies the package
+    (C{package='packagename'}), component (C{package=':componentname'}), or
+    package and component (C{package='packagename:componentname'}) in which
+    to place the files added while executing this command.
+    Previously-specified C{PackageSpec} or C{ComponentSpec} lines will
+    override the package specification, since all package and component
+    specifications are considered in strict order as provided by the recipe.
+
     EXAMPLES
     ========
 
@@ -2010,7 +2502,13 @@ class TestSuite(_FileAction):
     The C{r.TestSuite()} class accepts the following keywords, with default
     values shown in parentheses when applicable:
 
-    None
+    B{package} : (None) If set, must be a string that specifies the package
+    (C{package='packagename'}), component (C{package=':componentname'}), or
+    package and component (C{package='packagename:componentname'}) in which
+    to place the files added while executing this command.
+    Previously-specified C{PackageSpec} or C{ComponentSpec} lines will
+    override the package specification, since all package and component
+    specifications are considered in strict order as provided by the recipe.
 
     EXAMPLES
     ========
@@ -2421,6 +2919,14 @@ class XInetdService(_FileAction):
 
     B{otherlines} : (None) Specifies additional service definition lines
 
+    B{package} : (None) If set, must be a string that specifies the package
+    (C{package='packagename'}), component (C{package=':componentname'}), or
+    package and component (C{package='packagename:componentname'}) in which
+    to place the files added while executing this command.
+    Previously-specified C{PackageSpec} or C{ComponentSpec} lines will
+    override the package specification, since all package and component
+    specifications are considered in strict order as provided by the recipe.
+
     EXAMPLES
     ========
     C{r.XInetdService('swat', 'SWAT is the Samba Web Admin Tool. Use swat to
@@ -2599,6 +3105,14 @@ class XMLCatalogEntry(BuildCommand):
     B{catalogDir} : (C{'%(sysconfdir)s/xml'}) The directory where the catalog
     file is located.
 
+    B{package} : (None) If set, must be a string that specifies the package
+    (C{package='packagename'}), component (C{package=':componentname'}), or
+    package and component (C{package='packagename:componentname'}) in which
+    to place the files added while executing this command.
+    Previously-specified C{PackageSpec} or C{ComponentSpec} lines will
+    override the package specification, since all package and component
+    specifications are considered in strict order as provided by the recipe.
+
     EXAMPLES
     ========
 
@@ -2687,6 +3201,14 @@ class SGMLCatalogEntry(BuildCommand):
 
     B{use} : Optional arguments of Use flag(s) telling whether to actually
     perform the action.
+
+    B{package} : (None) If set, must be a string that specifies the package
+    (C{package='packagename'}), component (C{package=':componentname'}), or
+    package and component (C{package='packagename:componentname'}) in which
+    to place the files added while executing this command.
+    Previously-specified C{PackageSpec} or C{ComponentSpec} lines will
+    override the package specification, since all package and component
+    specifications are considered in strict order as provided by the recipe.
 
     EXAMPLES
     ========

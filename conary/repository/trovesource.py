@@ -197,7 +197,7 @@ class SearchableTroveSource(AbstractTroveSource):
         raise NotImplementedError
 
     def createChangeSet(self, jobList, withFiles = True, recurse = False,
-                        withFileContents = False):
+                        withFileContents = False, callback = None):
         # return changeset, and unhandled jobs
         cs = changeset.ReadOnlyChangeSet()
         return cs, jobList
@@ -217,6 +217,9 @@ class SearchableTroveSource(AbstractTroveSource):
         self._bestFlavor = False
         self._getLeavesOnly = False
         self._flavorCheck = _CHECK_TROVE_STRONG_FLAVOR
+
+    def isSearchAsDatabase(self):
+        return self._allowNoLabel
 
     def getTroveVersionList(self, name, withFlavors=False):
         if withFlavors:
@@ -352,7 +355,7 @@ class SearchableTroveSource(AbstractTroveSource):
                                      _GET_TROVE_ALL_VERSIONS, bestFlavor)
 
     def getTroveLeavesByBranch(self, troveSpecs, bestFlavor=True):
-        """ Takes {n : { Version : [f,...]} dict """
+        """ Takes {n : { Version : [f,...]}} dict """
         return self._getTrovesByType(troveSpecs, _GTL_VERSION_TYPE_BRANCH,
                                      _GET_TROVE_VERY_LATEST, bestFlavor)
 
@@ -361,7 +364,7 @@ class SearchableTroveSource(AbstractTroveSource):
                                      _GET_TROVE_ALL_VERSIONS, bestFlavor)
 
     def getTroveVersionFlavors(self, troveSpecs, bestFlavor=True):
-        """ Takes {n : { Version : [f,...]} dict """
+        """ Takes {n : { Version : [f,...]}} dict """
         return self._getTrovesByType(troveSpecs, 
                                      _GTL_VERSION_TYPE_VERSION, 
                                      _GET_TROVE_ALL_VERSIONS, 
@@ -685,7 +688,8 @@ class ChangesetFilesTroveSource(SearchableTroveSource):
         return suggMap
 
     def createChangeSet(self, jobList, withFiles = True, recurse = False,
-                        withFileContents = False, useDatabase = True):
+                        withFileContents = False, useDatabase = True,
+                        callback = None):
         # Returns the changeset plus a remainder list of the bits it
         # couldn't do
         def _findTroveObj(availSet, (name, version, flavor)):
@@ -938,7 +942,13 @@ class TroveSourceStack(SearchableTroveSource):
                     results[index] = trove
             troveList = newTroveList
         return results
-                    
+
+    def isSearchAsDatabase(self):
+        for source in self.sources:
+            if not source._allowNoLabel:
+                return False
+        return True
+
     def findTroves(self, labelPath, troveSpecs, defaultFlavor=None, 
                    acrossLabels=True, acrossFlavors=True, 
                    affinityDatabase=None, allowMissing=False):
@@ -946,13 +956,9 @@ class TroveSourceStack(SearchableTroveSource):
 
         results = {}
 
-        someRequireLabel = False
-        for source in self.sources:
-            if not source._allowNoLabel:
-                assert(labelPath)
-                someRequireLabel = True
-
-                
+        someRequireLabel = not self.isSearchAsDatabase()
+        if someRequireLabel:
+            assert(labelPath)
 
         for source in self.sources[:-1]:
             # FIXME: it should be possible to reuse the trove finder
@@ -1035,7 +1041,7 @@ class TroveSourceStack(SearchableTroveSource):
         return allSugg
 
     def createChangeSet(self, jobList, withFiles = True, recurse = False,
-                        withFileContents = False):
+                        withFileContents = False, callback = None):
 
         cs = changeset.ReadOnlyChangeSet()
 
@@ -1047,7 +1053,8 @@ class TroveSourceStack(SearchableTroveSource):
                 res = source.createChangeSet(jobList, 
                                            withFiles = withFiles,
                                            withFileContents = withFileContents,
-                                           recurse = recurse)
+                                           recurse = recurse, 
+                                           callback = callback)
             except errors.OpenError:
                 res = changeset.ReadOnlyChangeSet(), jobList
             if isinstance(res, (list, tuple)):

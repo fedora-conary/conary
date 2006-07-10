@@ -142,6 +142,9 @@ class SqlDbRepository(trovesource.SearchableTroveSource,
     def iterAllTroveNames(self):
 	return self.db.iterAllTroveNames()
 
+    def iterAllTroves(self):
+	return self.db.iterAllTroves()
+
     def findRemovedByName(self, name):
         return self.db.findRemovedByName(name)
 
@@ -220,10 +223,10 @@ class SqlDbRepository(trovesource.SearchableTroveSource,
     def hasTrove(self, troveName, version, flavor):
         cu = self.db.db.cursor()
 
-        if flavor:
-            flavorTest = "== '%s'" % flavor.freeze()
+        if flavor is None or flavor.isEmpty():
+            flavorTest = "is NULL"
         else:
-            flavorTest = "is NULL";
+            flavorTest = "== '%s'" % flavor.freeze()
 
         cu.execute("""SELECT count(*) FROM Instances
                         JOIN Versions ON
@@ -239,7 +242,7 @@ class SqlDbRepository(trovesource.SearchableTroveSource,
 
         result = cu.next()[0] != 0
 
-	return result;
+	return result
 
     def getTroveVersionList(self, name, withFlavors = False):
 	"""
@@ -388,7 +391,7 @@ class Database(SqlDbRepository):
 
         names = {}
         newGroup = trove.Trove("@update", versions.NewVersion(), 
-                                deps.DependencySet(), None)
+                                deps.Flavor(), None)
         for name, version, flavor in l:
             names[name] = True
             newGroup.addTrove(name, version, flavor)
@@ -407,7 +410,7 @@ class Database(SqlDbRepository):
         # diff tells us how to match them up. anything which doesn't get
         # a match gets removed. got that? 
         instGroup = trove.Trove("@update", versions.NewVersion(), 
-                                deps.DependencySet(), None)
+                                deps.Flavor(), None)
         for info in instList:
             if info not in ineligible:
                 instGroup.addTrove(*info)
@@ -890,7 +893,7 @@ class Database(SqlDbRepository):
         return Rollback(dir, load = True)
 
     def applyRollbackList(self, repos, names, replaceFiles = False,
-                          callback = UpdateCallback()):
+                          callback = UpdateCallback(), tagScript = None):
 	last = self.lastRollback
 	for name in names:
 	    if not self.hasRollback(name):
@@ -962,7 +965,8 @@ class Database(SqlDbRepository):
                                              isRollback = True,
                                              replaceFiles = replaceFiles,
                                              removeHints = removalHints,
-                                             callback = callback)
+                                             callback = callback,
+                                             tagScript = tagScript)
 
                     if not localCs.isEmpty():
                         itemCount += 1
@@ -972,7 +976,8 @@ class Database(SqlDbRepository):
                                              isRollback = True,
                                              updateDatabase = False,
                                              replaceFiles = replaceFiles,
-                                             callback = callback)
+                                             callback = callback,
+                                             tagScript = tagScript)
 
                     rb.removeLast()
                 except CommitError, err:

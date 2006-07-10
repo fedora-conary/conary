@@ -109,19 +109,28 @@ errorMessage = '''
 *** %(filename)s:%(lineno)s
 *** %(errtype)s: %(errmsg)s
 ***
+*** Receiving this message is always a due to a bug in conary, not
+*** user error.
+***
 *** The related traceback has been output to %(stackfile)s
 ***
 *** To report this error, please run the following script:
 ***
 *** conary-debug "%(command)s"
 ***
+*** You can attach the resulting archive to a bug report at
+*** http://issues.rpath.com/.
+***
 *******************************************************************
 
 For more information, or if you have trouble with the conary-debug
-command, go to http://wiki.conary.com/HowToReportProblems for more
-help.
+command, go to: 
 
-To get a debug prompt, rerun this command with --config 'debugExceptions True'
+http://wiki.rpath.com/wiki/Conary:How_To_File_An_Effective_Bug_Report
+
+for more help on reporting issues.
+
+To get a debug prompt, rerun this command with --debug-all
 '''
 _debugAll = False
 
@@ -428,6 +437,17 @@ def checkPath(binary, root=None):
     if it exists; otherwise None.
     """
     path = os.environ.get('PATH', '')
+    if binary[0] == '/':
+        # handle case where binary starts with / seperately 
+        # because os.path.join will not do the right
+        # thing with root set.
+        if root:
+            if os.path.exists(root + binary):
+                return root + binary
+        elif os.path.exists(binary):
+            return binary
+        return None
+
     for path in path.split(os.pathsep):
         if root:
             path = joinPaths(root, path)
