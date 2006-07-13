@@ -69,8 +69,7 @@ class XMLOpener(urllib.FancyURLopener):
             #print "proxy via http:", host, selector
         if not host: raise IOError, ('http error', 'no host given')
         if user_passwd:
-            import base64
-            auth = base64.encodestring(user_passwd).strip()
+            auth = base64.b64encode(user_passwd)
         else:
             auth = None
         if ssl:
@@ -134,7 +133,7 @@ class Transport(xmlrpclib.Transport):
         self.compress = False
         if entitlement is not None:
             self.entitlement = "%s %s" % (entitlement[0],
-                                  base64.encodestring(entitlement[1])[:-1])
+                                          base64.b64encode(entitlement[1]))
         else:
             self.entitlement = None
 

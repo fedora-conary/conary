@@ -46,15 +46,12 @@ def checkAuth(write = False, admin = False):
         def wrapper(self, **kwargs):
             # XXX two xmlrpc calls here could possibly be condensed to one
             # first check the password only
-            ugList = []
-            for serverName in self.serverNameList:
-                ugList += self.repos.getUserGroups(serverName)
-            if not ugList:
+            if not self.repServer.auth.check(self.authToken):
                 raise InvalidPassword
             # now check for proper permissions
-            if write or admin:
-                if not self.repServer.auth.check(self.authToken, write=write, admin=admin):
-                    raise InsufficientPermission
+            if not self.repServer.auth.check(self.authToken, write=write,
+                                             admin=admin):
+                raise InsufficientPermission
 
             return func(self, **kwargs)
         return wrapper
@@ -169,6 +166,22 @@ class HttpHandler(WebHandler):
     @checkAuth(write=True)
     def login(self, auth):
         self._redirect("browse")
+
+    @checkAuth(admin=True)
+    def log(self, auth):
+        """
+        Send the current repository log (if one exists).
+        This method requires admin access.
+        """
+        if not self.cfg.logFile:
+            raise apache.SERVER_RETURN, apache.HTTP_NOT_FOUND
+        if not os.path.exists(self.cfg.logFile):
+            raise apache.SERVER_RETURN, apache.HTTP_NOT_FOUND
+        if not os.access(self.cfg.logFile, os.R_OK):
+            raise apache.SERVER_RETURN, apache.HTTP_FORBIDDEN
+        self.req.content_type = "application/octet-stream"
+        self.req.sendfile(self.cfg.logFile)
+        raise apache.SERVER_RETURN, apache.OK
 
     @strFields(char = '')
     @checkAuth(write=False)
