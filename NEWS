@@ -11,6 +11,20 @@ Changes in 1.1:
       repository by path. (CNY-74)
 
 Changes in @NEW@:
+  o Server Changes:
+    * The server binary access log can now be downloaded by an
+      administrator by visiting the http://servername/conary/log URL.
+    * The Users and Groups tab in the web management UI is no longer
+      highlighted when administrators change their passwords.
+
+  o Bug Fixes:
+    * The Conary Repository web interface no longer returns a
+      HTTP_FORBIDDEN (403) when a bad password is given by the user.
+      This allows the user to re-try authentication.
+    * The --signatures and --buildreqs flags now work with conary
+      showcs.  (CNY-642)
+
+Changes in 1.0.23:
   o API Additions:
     * The interface to create, list and delete access groups and
       modify the users therein through is now exposed though
@@ -21,6 +35,10 @@ Changes in @NEW@:
   o Client Changes:
     * "conary updateall" now accepts the --keep-required command line
       argument.
+    * the mirror script now provides download/commit feedback using
+      display callbacks like other conary commands
+    * the excludeTroves config option will now keep fresh installs from
+      happening when an update job is split due to a pinned trove.
 
   o Server Changes:
     * The repository database migration code now reports an error when
@@ -37,6 +55,14 @@ Changes in @NEW@:
       (CNY-630)
     * Manifest files now handle file names containing "%" characters.
       Fix from Pavel Volkovitskiy. (CNY-627)
+    * Fixed a bug in migrate that caused its behavior to shift when migrating 
+      to the same version that is currently installed.
+    * Fixed a bug in the logcat script that caused the entitlement field to
+      display the user information instead. (CNY-629)
+
+  o Build Changes:
+    * The r.addArchive() source action can now unpack Rock Ridge and
+      Joliet ISO images, with some limitations. (CNY-625)
 
 Changes in 1.0.22:
   o Client Changes:
