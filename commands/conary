@@ -602,6 +602,7 @@ class RepQueryCommand(_AbstractQueryCommand):
         d["best-flavors"] = NO_PARAM
         d["latest-versions"] = NO_PARAM
         d["leaves"] = NO_PARAM
+        d["path"] = MULT_PARAM
         d["what-provides"] = MULT_PARAM
         argDef['Trove Selection'] = d
 
@@ -662,11 +663,12 @@ class RepQueryCommand(_AbstractQueryCommand):
             del argSet['no-recurse']
         whatProvidesList = argSet.pop('what-provides', [])
 
+        pathList = argSet.pop('path', [])
         if argSet: return self.usage()
         troveList = otherArgs[2:]
 
-        queryrep.displayTroves(cfg, troveList, whatProvidesList, versionFilter,
-                               flavorFilter, **kw)
+        queryrep.displayTroves(cfg, troveList, pathList, whatProvidesList,
+                               versionFilter, flavorFilter, **kw)
 _register(RepQueryCommand)
 
 class ShowChangesetCommand(_AbstractQueryCommand):
