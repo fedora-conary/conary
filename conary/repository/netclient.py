@@ -339,6 +339,8 @@ class ServerCache:
                 (",".join([str(x) for x in serverVersions]),
                  ",".join([str(x) for x in CLIENT_VERSIONS])))
 
+        # this is the protocol version we should use when talking
+        # to this repository - the maximum we both understand
         server._protocolVersion = max(intersection)
 
         transporter.setCompress(True)
@@ -365,7 +367,7 @@ class NetworkRepositoryClient(xmlshims.NetworkConvertors,
         # troves _getChangeSet needs when it's building changesets which
         # span repositories. it has no effect on any other operation.
         if pwPrompt is None:
-            pwPrompt = lambda x, y: None, None
+            pwPrompt = lambda x, y: (None, None)
 
         self.downloadRateLimit = downloadRateLimit
         self.uploadRateLimit = uploadRateLimit
