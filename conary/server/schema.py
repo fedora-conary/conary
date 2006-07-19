@@ -12,6 +12,8 @@
 # full details.
 #
 
+import sys
+
 from conary import files, trove, versions
 from conary.dbstore import migration, sqlerrors, idtable
 from conary.lib.tracelog import logMe
@@ -38,7 +40,7 @@ def createInstances(db):
             versionId       INTEGER NOT NULL,
             flavorId        INTEGER NOT NULL,
             clonedFromId    INTEGER,
-            isRedirect      INTEGER NOT NULL DEFAULT 0,
+            troveType       INTEGER NOT NULL DEFAULT 0,
             isPresent       INTEGER NOT NULL DEFAULT 0,
             changed         NUMERIC(14,0) NOT NULL DEFAULT 0,
             CONSTRAINT Instances_itemId_fk
@@ -314,6 +316,7 @@ def createUsers(db):
             canWrite        INTEGER NOT NULL DEFAULT 0,
             capped          INTEGER NOT NULL DEFAULT 0,
             admin           INTEGER NOT NULL DEFAULT 0,
+            canRemove       INTEGER NOT NULL DEFAULT 0,
             changed         NUMERIC(14,0) NOT NULL DEFAULT 0,
             CONSTRAINT Permissions_userGroupId_fk
                 FOREIGN KEY (userGroupId) REFERENCES UserGroups(userGroupId)
@@ -1358,6 +1361,9 @@ class MigrateTo_14(SchemaMigration):
         self.cu.execute("ALTER TABLE FileStreams ADD COLUMN "
                         "sha1        %(BINARY20)s" 
                         % self.db.keywords)
+        self.cu.execute("ALTER TABLE Permissions ADD COLUMN "
+                        "canRemove   INTEGER NOT NULL DEFAULT 0"
+                        % self.db.keywords)
 
         updateCursor = self.db.cursor()
         for (streamId, fileId, stream) in \
@@ -1380,7 +1386,8 @@ class MigrateTo_14(SchemaMigration):
         self.cu.execute("DROP TABLE EntitlementOwners")
         self.cu.execute("DROP TABLE EntitlementGroups")
 
-        # recreate the indexes and triggers
+        # recreate the indexes and triggers - including new path 
+        # index for TroveFiles
         self.db.loadSchema()
         createTroves(self.db)
         createUsers(self.db)
@@ -1396,6 +1403,8 @@ class MigrateTo_14(SchemaMigration):
         self.cu.execute("DROP TABLE Entitlements2")
         self.cu.execute("DROP TABLE EntitlementGroups2")
         self.cu.execute("DROP TABLE EntitlementOwners2")
+
+        #self.db.rename("Instances", "isRedirect", "troveType")
 
         self.db.commit()
 
@@ -1564,21 +1573,9 @@ def loadSchema(db):
     # load the current schema object list
     db.loadSchema()
 
-    # surely there is a more better way of handling this...
-    if version == 1: version = MigrateTo_2(db)()
-    if version == 2: version = MigrateTo_3(db)()
-    if version == 3: version = MigrateTo_4(db)()
-    if version == 4: version = MigrateTo_5(db)()
-    if version == 5: version = MigrateTo_6(db)()
-    if version == 6: version = MigrateTo_7(db)()
-    if version == 7: version = MigrateTo_8(db)()
-    if version == 8: version = MigrateTo_9(db)()
-    if version == 9: version = MigrateTo_10(db)()
-    if version == 10: version = MigrateTo_11(db)()
-    if version == 11: version = MigrateTo_12(db)()
-    if version == 12: version = MigrateTo_13(db)()
-
     if version != 0 and version < 13:
+        import epdb
+        epdb.st()
         raise sqlerrors.SchemaVersionError(
             "Repository schemas from Conary versions older than 1.0 are not "
             "supported. Contact rPath for help converting your repository to "

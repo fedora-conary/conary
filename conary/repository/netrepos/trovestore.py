@@ -85,12 +85,12 @@ class TroveStore:
         return self.items.getOrAddId(item)
 
     def getInstanceId(self, itemId, versionId, flavorId, clonedFromId,
-                      isRedirect, isPresent = True):
+                      troveType, isPresent = True):
  	theId = self.instances.get((itemId, versionId, flavorId), None)
 	if theId == None:
 	    theId = self.instances.addId(itemId, versionId, flavorId,
                                          clonedFromId,
-					 isRedirect, isPresent = isPresent)
+					 troveType, isPresent = isPresent)
         # XXX we shouldn't have to do this unconditionally
         if isPresent:
 	    self.instances.setPresent(theId, 1)
@@ -311,7 +311,7 @@ class TroveStore:
 	# which has already been added)
 	troveInstanceId = self.getInstanceId(troveItemId, troveVersionId,
 					     troveFlavorId, clonedFromId,
-                                             trv.isRedirect(),
+                                             trv.getType(),
                                              isPresent = True)
         assert(cu.execute("SELECT COUNT(*) from TroveTroves WHERE "
                           "instanceId=?", troveInstanceId).next()[0] == 0)
@@ -423,7 +423,7 @@ class TroveStore:
 
 	    instanceId = self.getInstanceId(itemId, versionId, flavorId,
                                             clonedFromId,
-                                            trv.isRedirect(),
+                                            trv.getType(),
                                             isPresent = False)
 
             flags = weakFlag
@@ -597,7 +597,7 @@ class TroveStore:
                        start_transaction = False)
 
         cu.execute("""SELECT %(STRAIGHTJOIN)s gtl.idx, I.instanceId, 
-                             I.isRedirect, Nodes.timeStamps, Changelogs.name,
+                             I.troveType, Nodes.timeStamps, Changelogs.name,
                              ChangeLogs.contact, ChangeLogs.message
                             FROM
                                 gtl, Items, Versions, Flavors, Instances as I,
@@ -691,7 +691,7 @@ class TroveStore:
 
         neededIdx = 0
         while troveIdList:
-            (idx, troveInstanceId, isRedirect, timeStamps,
+            (idx, troveInstanceId, troveType, timeStamps,
              clName, clVersion, clMessage) =  troveIdList.pop(0)
 
             # make sure we've returned something for everything up to this
@@ -715,7 +715,7 @@ class TroveStore:
 
             trv = trove.Trove(singleTroveInfo[0], singleTroveInfo[1],
                               singleTroveInfo[2], changeLog,
-                              isRedirect = isRedirect,
+                              type = troveType,
                               setVersion = False)
 
             try:
@@ -1051,7 +1051,7 @@ class TroveStore:
         else:
             cu.execute("UPDATE Latest SET versionId = ? WHERE "
                        "itemId = ? AND flavorId = ? AND branchId = ?",
-                       itemId, flavorId, branchId)
+                       prevVersionId, itemId, flavorId, branchId)
 
         # do we need the labelmap entry anymore?
         cu.execute("SELECT COUNT(*) FROM Nodes WHERE itemId = ? AND "
@@ -1102,6 +1102,16 @@ class TroveStore:
         # XXX what about metadata?
 
         return filesToRemove
+
+    def markTroveRemoved(self, name, version, flavor):
+        trv = trove.Trove(name, version, flavor, None,
+                          type = trove.TROVE_TYPE_REMOVED)
+
+        shas = self.removeTrove(name, version, flavor)
+        info = self.addTrove(trv)
+        self.addTroveDone(info)
+
+        return shas
 
     def commit(self):
 	if self.needsCleanup:

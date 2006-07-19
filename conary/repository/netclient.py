@@ -49,7 +49,7 @@ PermissionAlreadyExists = errors.PermissionAlreadyExists
 
 shims = xmlshims.NetworkConvertors()
 
-CLIENT_VERSIONS = [ 36, 37 ]
+CLIENT_VERSIONS = [ 36, 37, 38 ]
 
 # this is a quote function that quotes all RFC 2396 reserved characters,
 # including / (which is normally considered "safe" by urllib.quote)
@@ -309,7 +309,6 @@ class ServerCache:
 
         server = ServerProxy(url, serverName, transporter, self.__getPassword,
                              usedMap = usedMap)
-        self.cache[serverName] = server
 
         try:
             serverVersions = server.checkVersion()
@@ -340,7 +339,13 @@ class ServerCache:
                 (",".join([str(x) for x in serverVersions]),
                  ",".join([str(x) for x in CLIENT_VERSIONS])))
 
+        # this is the protocol version we should use when talking
+        # to this repository - the maximum we both understand
+        server._protocolVersion = max(intersection)
+
         transporter.setCompress(True)
+
+        self.cache[serverName] = server
 
 	return server
 
@@ -362,7 +367,7 @@ class NetworkRepositoryClient(xmlshims.NetworkConvertors,
         # troves _getChangeSet needs when it's building changesets which
         # span repositories. it has no effect on any other operation.
         if pwPrompt is None:
-            pwPrompt = lambda x, y: None, None
+            pwPrompt = lambda x, y: (None, None)
 
         self.downloadRateLimit = downloadRateLimit
         self.uploadRateLimit = uploadRateLimit
@@ -512,8 +517,19 @@ class NetworkRepositoryClient(xmlshims.NetworkConvertors,
     def setUserGroupCanMirror(self, reposLabel, userGroup, canMirror):
         self.c[reposLabel].setUserGroupCanMirror(userGroup, canMirror)
 
-    def addAcl(self, reposLabel, userGroup, trovePattern, label, write,
-               capped, admin):
+    def listAcls(self, reposLabel, userGroup):
+        acls = self.c[reposLabel].listAcls(userGroup)
+        returner = list()
+        for acl in acls:
+            if not acl[0]:
+                acl[0] = 'ALL'
+            if not acl[1]:
+                acl[1] = 'ALL'
+            returner.append(acl)
+        return returner
+
+    def addAcl(self, reposLabel, userGroup, trovePattern, label, write = False,
+               capped = False, admin = False, remove = False):
         if not label:
             label = "ALL"
         else:
@@ -522,11 +538,20 @@ class NetworkRepositoryClient(xmlshims.NetworkConvertors,
         if not trovePattern:
             trovePattern = "ALL"
 
+        kwargs = {}
+
+        if remove and self.c[reposLabel]._protocolVersion < 38:
+            raise InvalidServerVersion, "Setting canRemove for an acl " \
+                    "requires a repository running Conary 1.1 or later."
+        elif remove:
+            kwargs['remove'] = True
+
         self.c[reposLabel].addAcl(userGroup, trovePattern, label, write,
-                                  capped, admin)
+                                  capped, admin, **kwargs)
 
     def editAcl(self, reposLabel, userGroup, oldTrovePattern, oldLabel,
-                trovePattern, label, write, capped, admin):
+                trovePattern, label, write = False, capped = False, 
+                admin = False, canRemove = False):
         if not label:
             label = "ALL"
         else:
@@ -543,9 +568,31 @@ class NetworkRepositoryClient(xmlshims.NetworkConvertors,
         if not oldTrovePattern:
             oldTrovePattern = "ALL"
 
-        self.c[reposLabel].editAcl(userGroup, oldTrovePattern, oldLabel,
-                                   trovePattern, label, write, capped, admin)
+        kwargs = {}
 
+        if canRemove and self.c[reposLabel]._protocolVersion < 38:
+            raise InvalidServerVersion, "Setting canRemove for an acl " \
+                    "requires a repository running Conary 1.1 or later."
+        elif canRemove:
+            kwargs['canRemove'] = True
+
+
+        self.c[reposLabel].editAcl(userGroup, oldTrovePattern, oldLabel,
+                                   trovePattern, label, write, capped, admin,
+                                   **kwargs)
+
+        return True
+
+    def deleteAcl(self, reposLabel, userGroup, trovePattern, label):
+        if not label:
+            label = "ALL"
+        else:
+            label = self.fromLabel(label)
+
+        if not trovePattern:
+            trovePattern = "ALL"
+
+        self.c[reposLabel].deleteAcl(userGroup, trovePattern, label)
         return True
 
     def changePassword(self, label, user, newPassword):
@@ -1466,9 +1513,9 @@ class NetworkRepositoryClient(xmlshims.NetworkConvertors,
         return [ (x[0], self.toVersion(x[1]), self.toFlavor(x[2]))
                             for x in l ]
                     
-    def commitChangeSetFile(self, fName, mirror = False):
+    def commitChangeSetFile(self, fName, mirror = False, callback = None):
         cs = changeset.ChangeSetFromFile(fName)
-        return self._commit(cs, fName, mirror = mirror)
+        return self._commit(cs, fName, mirror = mirror, callback = callback)
 
     def commitChangeSet(self, chgSet, callback = None, mirror = False):
 	(outFd, path) = util.mkstemp()
@@ -1634,19 +1681,35 @@ class NetworkRepositoryClient(xmlshims.NetworkConvertors,
         if chgSet.isEmpty():
             raise errors.CommitError('Attempted to commit an empty changeset')
             
+        jobs = []
 	for trove in chgSet.iterNewTroveList():
 	    v = trove.getOldVersion()
 	    if v:
 		if serverName is None:
 		    serverName = v.getHost()
 		assert(serverName == v.getHost())
+                oldVer = self.fromVersion(v)
+                oldFlavor = self.fromFlavor(trove.getOldFlavor())
+            else:
+                oldVer = ''
+                oldFlavor = ''
 
 	    v = trove.getNewVersion()
 	    if serverName is None:
 		serverName = v.getHost()
 	    assert(serverName == v.getHost())
 
-	url = self.c[serverName].prepareChangeSet()
+            jobs.append((trove.getName(), (oldVer, oldFlavor),
+                         (self.fromVersion(trove.getNewVersion()),
+                          self.fromFlavor(trove.getNewFlavor())),
+                         trove.isAbsolute()))
+
+
+
+        if self.c[serverName]._protocolVersion >= 38:
+            url = self.c[serverName].prepareChangeSet(jobs, mirror)
+        else:
+            self.c[serverName].prepareChangeSet()
 
         self._putFile(url, fName, callback = callback)
 

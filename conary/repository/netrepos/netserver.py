@@ -37,7 +37,7 @@ from conary.local import schema as depSchema
 # a list of the protocol versions we understand. Make sure the first
 # one in the list is the lowest protocol version we support and th
 # last one is the current server protocol version
-SERVER_VERSIONS = [ 36, 37 ]
+SERVER_VERSIONS = [ 36, 37, 38 ]
 
 class NetworkRepositoryServer(xmlshims.NetworkConvertors):
 
@@ -74,8 +74,10 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
                         'listAccessGroups',
                         'updateAccessGroupMembers',
                         'setUserGroupCanMirror',
+                        'listAcls',
                         'addAcl',
                         'editAcl',
+                        'deleteAcl',
                         'changePassword',
                         'getUserGroups',
                         'addEntitlements',
@@ -407,8 +409,23 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
         self.auth.setMirror(userGroup, canMirror)
         return True
 
+    def listAcls(self, authToken, clientVersion, userGroup):
+        if not self.auth.check(authToken, admin = True):
+            raise errors.InsufficientPermission
+        self.log(2, authToken[0], userGroup)
+
+        returner = list()
+        for acl in self.auth.iterPermsByGroup(userGroup):
+            acl = list(acl)
+            if acl[0] is None:
+                acl[0] = ""
+            if acl[1] is None:
+                acl[1] = ""
+            returner.append(acl)
+        return returner
+
     def addAcl(self, authToken, clientVersion, userGroup, trovePattern,
-               label, write, capped, admin):
+               label, write, capped, admin, remove = False):
         if not self.auth.check(authToken, admin = True):
             raise errors.InsufficientPermission
         self.log(2, authToken[0], userGroup, trovePattern, label,
@@ -420,12 +437,28 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
             label = None
 
         self.auth.addAcl(userGroup, trovePattern, label, write, capped,
-                         admin)
+                         admin, remove = remove)
+
+        return True
+
+    def deleteAcl(self, authToken, clientVersion, userGroup, trovePattern,
+               label):
+        if not self.auth.check(authToken, admin = True):
+            raise errors.InsufficientPermission
+        self.log(2, authToken[0], userGroup, trovePattern, label)
+        if trovePattern == "":
+            trovePattern = None
+
+        if label == "":
+            label = None
+
+        self.auth.deleteAcl(userGroup, label, trovePattern)
 
         return True
 
     def editAcl(self, authToken, clientVersion, userGroup, oldTrovePattern,
-                oldLabel, trovePattern, label, write, capped, admin):
+                oldLabel, trovePattern, label, write, capped, admin,
+                canRemove = False):
         if not self.auth.check(authToken, admin = True):
             raise errors.InsufficientPermission
         self.log(2, authToken[0], userGroup,
@@ -446,7 +479,7 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
         oldLabelId = idtable.IdTable.get(self.troveStore.versionOps.labels, oldLabel, None)
 
         self.auth.editAcl(userGroup, oldTroveId, oldLabelId, troveId, labelId,
-            write, capped, admin)
+            write, capped, admin, canRemove = canRemove)
 
         return True
 
@@ -1357,19 +1390,44 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
 
         return result
 
+    def _checkCommitPermissions(self, authToken, verList, mirror):
+        for name, oldVer, newVer in verList:
+            assert(newVer)
+            newLabel = newVer.branch().label()
+            if not self.auth.check(authToken, write = True, mirror = mirror,
+                                   label = newLabel,
+                                   trove = name):
+                raise errors.InsufficientPermission
+            if oldVer:
+                oldLabel = oldVer.branch().label()
+                if not self.auth.check(authToken, write = True,
+                                       mirror = mirror, label = oldLabel,
+                                       trove = name):
+                    raise errors.InsufficientPermission
 
+    def prepareChangeSet(self, authToken, clientVersion, jobList=None,
+                         mirror=False):
+        def _convertJobList(jobList):
+            for name, oldInfo, newInfo, absolute in jobList:
+                oldVer = oldInfo[0]
+                newVer = newInfo[0]
+                if oldVer:
+                    oldVer = self.toVersion(oldVer)
+                if newVer:
+                    newVer = self.toVersion(newVer)
+                yield name, oldVer, newVer
 
-    def prepareChangeSet(self, authToken, clientVersion):
-	# make sure they have a valid account and permission to commit to
-	# *something*
-	if not self.auth.check(authToken, write = True):
-	    raise errors.InsufficientPermission
+        if jobList:
+            self._checkCommitPermissions(authToken, _convertJobList(jobList),
+                                         mirror)
+
         self.log(2, authToken[0])
-	(fd, path) = tempfile.mkstemp(dir = self.tmpPath, suffix = '.ccs-in')
-	os.close(fd)
+  	(fd, path) = tempfile.mkstemp(dir = self.tmpPath, suffix = '.ccs-in')
+  	os.close(fd)
 	fileName = os.path.basename(path)
 
         return os.path.join(self.urlBase(), "?%s" % fileName[:-3])
+
 
     def commitChangeSet(self, authToken, clientVersion, url, mirror = False):
 	assert(url.startswith(self.urlBase()))
@@ -1414,16 +1472,27 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
     def _commitChangeSet(self, authToken, cs, mirror = False):
 	# walk through all of the branches this change set commits to
 	# and make sure the user has enough permissions for the operation
+
+        verList = ((x.getName(), x.getOldVersion(), x.getNewVersion())
+                    for x in cs.iterNewTroveList())
+        self._checkCommitPermissions(authToken, verList, mirror)
+
         items = {}
+        # check removed permissions; _checkCommitPermissions can't do
+        # this for us since it's based on the trove type
         for troveCs in cs.iterNewTroveList():
-            name = troveCs.getName()
-            version = troveCs.getNewVersion()
-            flavor = troveCs.getNewFlavor()
-            if not self.auth.check(authToken, write = True, mirror = mirror,
+            if troveCs.troveType() != trove.TROVE_TYPE_REMOVED:
+                continue
+
+            (name, version, flavor) = troveCs.getNewNameVersionFlavor()
+
+            if not self.auth.check(authToken, mirror = mirror, remove = True,
                                    label = version.branch().label(),
                                    trove = name):
                 raise errors.InsufficientPermission
+
             items.setdefault((version, flavor), []).append(name)
+
         self.log(2, authToken[0], 'mirror=%s' % (mirror,),
                  [ (x[1], x[0][0].asString(), x[0][1]) for x in items.iteritems() ])
 	self.repos.commitChangeSet(cs, mirror = mirror)
@@ -1574,7 +1643,7 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
 
         return results
 
-    def getTrovesByPaths(self, authToken, clientVersion, pathList, label, 
+    def getTrovesByPaths(self, authToken, clientVersion, pathList, label,
                          all=False):
         self.log(2, pathList, label, all)
         cu = self.db.cursor()
@@ -1629,6 +1698,8 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
         if all:
             results = [[] for x in pathList]
             for idx, name, versionStr, flavor, timeStamps, pattern in cu:
+                if not self.auth.checkTrove(pattern, name):
+                    continue
                 version = versions.VersionFromString(versionStr, 
                         timeStamps=[float(x) for x in timeStamps.split(':')])
                 branch = version.branch()
