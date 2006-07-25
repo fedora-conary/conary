@@ -29,6 +29,19 @@ Changes in @NEW@:
       on an x86_64 system (CNY-628)
     * Fixed a bug that caused migrate behavior to not respect pins when 
       the pinned troves were set to be erased (CNY-680).
+    * Calling r.ComponentSpec(':foo') works again; it is exactly
+      equivalent to r.ComponentSpec('foo'). (CNY-637)
+    * Calling r.Move() with only one argument now fails explicitly
+      rather than silently doing nothing. (CNY-614)
+
+  o Build Changes:
+    * When pulling files out of a src.rpm file, Conary now stores the
+      src.rpm file itself in the repository rather than the files
+      pulled from it. (CNY-684)
+    * Mono dependency version mappings are now discovered in CIL policy
+      .config files. (CNY-686)
+    * The internal util.literalRegex function has been replaced by
+      use of re.escape. (CNY-634)
 
 Changes in 1.0.23:
   o API Additions:

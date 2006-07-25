@@ -19,6 +19,7 @@ import errno
 import log
 import misc
 import os
+import re
 import select
 import shutil
 import signal
@@ -109,7 +110,7 @@ errorMessage = '''
 *** %(filename)s:%(lineno)s
 *** %(errtype)s: %(errmsg)s
 ***
-*** Receiving this message is always a due to a bug in conary, not
+*** Receiving this message is always due to a bug in conary, not
 *** user error.
 ***
 *** The related traceback has been output to %(stackfile)s
@@ -240,13 +241,7 @@ def find(s, subs, start=0):
     return (ret, found)
 
 def literalRegex(s):
-    "escape all regex magic characters in s"
-    l = []
-    for character in s:
-        if character in '+*[].&^$+{}()\\':
-            l.append('\\')
-        l.append(character)
-    return ''.join(l)
+    return re.escape(s)
 
 
 # shutil module extensions, with {}-expansion and globbing
