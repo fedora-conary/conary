@@ -1363,12 +1363,14 @@ class MigrateTo_13(SchemaMigration):
 class MigrateTo_14(SchemaMigration):
     Version = 14
     def migrate(self):
-        self.message('WARNING: do NOT try to interrupt this migration, you will leave your DB in a messy state')
+        self.message('WARNING: do NOT interrupt this migration, you will leave your DB in a messy state')
 
         updateCursor = self.db.cursor()
-        self.cu.execute("""CREATE TEMPORARY TABLE tmpSha1s (streamId INTEGER,
-                                                            sha1  BINARY(20))""",
-                                                        start_transaction=False)
+        self.cu.execute("""
+        CREATE TEMPORARY TABLE tmpSha1s(
+        streamId INTEGER,
+        sha1  BINARY(20))""",
+                        start_transaction=False)
         self.cu.execute('CREATE INDEX tmpSha1sIdx ON tmpSha1s(streamId)')
         total = self.cu.execute('SELECT max(streamId) FROM FileStreams').fetchall()[0][0]
         pct = 0
@@ -1378,13 +1380,12 @@ class MigrateTo_14(SchemaMigration):
             if stream and files.frozenFileHasContents(stream):
                 contents = files.frozenFileContentInfo(stream)
                 sha1 = contents.sha1()
-                self.cu.execute("""UPDATE tmpSha1s SET sha1=?
-                                        WHERE streamId=?""",
-                                     sha1, streamId, start_transaction=False)
+                self.cu.execute("INSERT INTO tmpSha1s (streamId, sha1) VALUES (?,?)",
+                                (sha1, streamId), start_transaction=False)
             newPct = (streamId * 100)/total
-            if newPct - 5 >= pct:
-                pct = newPct
-                self.message('Calculating sha1 for fileStream %s/%s (%s%%)...' % (streamId, total, pct))
+            if newPct >= pct:
+                self.message('Calculating sha1 for fileStream %s/%s (%02d%%)...' % (streamId, total, pct))
+                pct = newPct + 5
 
         self.message('Populating FileStream Table with sha1s...')
 
@@ -1393,16 +1394,18 @@ class MigrateTo_14(SchemaMigration):
         self.cu.execute("ALTER TABLE FileStreams ADD COLUMN "
                         "sha1        %(BINARY20)s"
                         % self.db.keywords)
-        self.cu.execute("ALTER TABLE Permissions ADD COLUMN "
-                        "canRemove   INTEGER NOT NULL DEFAULT 0"
-                        % self.db.keywords)
 
-        self.cu.execute("""UPDATE FileStreams
-                            SET sha1 =
-                                (SELECT sha1 FROM tmpSha1s
-                                 WHERE FileStreams.streamid=tmpSha1s.streamid)""")
+        self.cu.execute("""
+        UPDATE FileStreams
+        SET sha1 = (
+            SELECT sha1 FROM tmpSha1s
+            WHERE FileStreams.streamid = tmpSha1s.streamid )
+        """)
         self.cu.execute('DROP TABLE tmpSha1s')
 
+        # because of the foreign key ereferntial mess, we need to
+        # destroy the FKs relationships, recreate the Entitlement
+        # tables, and restore the data
         self.message('Updating Entitlements...')
         self.cu.execute("CREATE TABLE Entitlements2 AS SELECT * FROM "
                         "Entitlements")
@@ -1423,34 +1426,32 @@ class MigrateTo_14(SchemaMigration):
                         "userGroupId) SELECT entGroupId, userGroupId FROM "
                         "EntitlementGroups2")
         self.cu.execute("INSERT INTO Entitlements SELECT * FROM Entitlements2")
-        self.cu.execute("INSERT INTO EntitlementOwners SELECT * FROM "
-                        "EntitlementOwners2")
+        self.cu.execute("INSERT INTO EntitlementOwners SELECT * FROM EntitlementOwners2")
         self.cu.execute("DROP TABLE Entitlements2")
         self.cu.execute("DROP TABLE EntitlementGroups2")
         self.cu.execute("DROP TABLE EntitlementOwners2")
 
-        #self.db.rename("Instances", "isRedirect", "troveType")
-        self.cu.execute('ALTER TABLE Instances RENAME TO InstancesOld')
-        for idx in self.db.tables['Instances']:
-            self.cu.execute('DROP INDEX %s' % idx)
+        self.message("Updating the Permissions table...")
+        self.cu.execute("ALTER TABLE Permissions ADD COLUMN "
+                        "canRemove   INTEGER NOT NULL DEFAULT 0"
+                        % self.db.keywords)
 
+        self.message("Updating Instances table...")
+        self.db.renameColumn("Instances", "isRedirect", "troveType")
         self.db.loadSchema()
-        # recreate the indexes and triggers - including new path 
+
+        # recreate the indexes and triggers - including new path
         # index for TroveFiles.  Also recreates the indexes table.
         self.message('Recreating indexes... (this could take a while)')
         createTroves(self.db)
         self.message('Indexes created.')
 
-        self.message('Updating instances table column name')
-        createInstances(self.db)
-        self.cu.execute('INSERT INTO Instances SELECT * FROM InstancesOld')
-        self.cu.execute('DROP TABLE InstancesOld')
-
-        self.db.commit()
+        return self.Version
 
 class MigrateTo_15(SchemaMigration):
     Version = 15
     def migrate(self):
+        self.message("Updating the Latest table... 1/3")
         self.cu.execute("ALTER TABLE Latest ADD COLUMN "
                         "latestType      INTEGER NOT NULL")
         self.db.dropIndex("Latest", "LatestIdx")
@@ -1460,6 +1461,7 @@ class MigrateTo_15(SchemaMigration):
         self.cu.execute("UPDATE Latest SET latestType=%d" %
                         versionops.LATEST_TYPE_ANY)
 
+        self.message("Updating the Latest table... 2/3")
         self.cu.execute("""
             insert into Latest (itemId, branchId, flavorId, versionId,
                                 latestType)
@@ -1493,6 +1495,7 @@ class MigrateTo_15(SchemaMigration):
                       instances.flavorid = tmp.flavorid
         """ % (versionops.LATEST_TYPE_PRESENT, trove.TROVE_TYPE_REMOVED))
 
+        self.message("Updating the Latest table... 3/3")
         self.cu.execute("""
             insert into Latest (itemId, branchId, flavorId, versionId,
                                 latestType)
@@ -1525,6 +1528,9 @@ class MigrateTo_15(SchemaMigration):
                       nodes.versionid = instances.versionid and
                       instances.flavorid = tmp.flavorid
         """ % (versionops.LATEST_TYPE_NORMAL, trove.TROVE_TYPE_NORMAL))
+        self.message("Done updating the Latest table")
+
+        return self.Version
 
 # sets up temporary tables for a brand new connection
 def setupTempTables(db):
