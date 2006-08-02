@@ -7,6 +7,11 @@ Changes in 1.0.26:
       requested for a file type which has no contents (such as a symlink)
     * The server returns a new exception type, FileStreamsMissing, when
       the client requests file streams w/ getFileVersion(s) (SUP-16)
+    * Added assertions to prevent the wrong Trove.add* methods being called
+      between normal troves and redirects
+    * Assert that redirects in troves are to branches, not to versions
+    * Trove equality checks did not work for redirects
+    * Redirect flavors were not stored properly in the trovestore
 
   o Build Changes:
     * The fix for CNY-684 introduced in Conary 1.0.24, storing src.rpm
@@ -48,6 +53,8 @@ Changes in 1.0.26:
   o Bug Fixes:
     * Fixed a case where an updateall could result in the same trove
       being erased from the system twice due to a local update (CNY-603)
+    * Attempts to clone to a version are now caught (can only clone to 
+      branches) (CNY-709)
 
 Changes in 1.0.25:
   o Build Changes:
