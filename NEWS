@@ -63,9 +63,15 @@ Changes in 1.0.26:
 
   o Server Changes:
     * Flavored redirects could not be loaded properly from a repository
+    * The Conary web interface now provides a method to rely solely on
+      a remote repository server to do authentication checks. (CNY-705)
 
   o Script Changes:
     * resha1 script skip troves which aren't present in the repository
+
+  o Bug Fixes:
+    * Fixed a case where an updateall could result in the same trove
+      being erased from the system twice due to a local update (CNY-603)
 
 Changes in 1.0.25:
   o Build Changes:
