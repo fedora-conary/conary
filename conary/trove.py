@@ -794,7 +794,6 @@ class Trove(streams.StreamSet):
 	@param presentOkay: replace if this is a duplicate, don't complain
 	@type presentOkay: boolean
 	"""
-        assert(self.type() == TROVE_TYPE_NORMAL)
         if weakRef:
             troveGroup = self.weakTroves
         else:
