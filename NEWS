@@ -19,6 +19,11 @@ Changes in @NEW@:
     * ACL patterns now match to the end of the trove name instead of
       partial strings (CNY-719)
 
+  o Bug Fixes:
+    * The Conary repository server now invalidates changeset cache
+      entries when adding a digital signature to a previously mirrored
+      trove.
+
 Changes in 1.0.26:
   o Build Changes:
     * When cooking a group, adding "--debug" to the "cvc cook" command
