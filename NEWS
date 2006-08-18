@@ -1,3 +1,15 @@
+Changes in @NEW@:
+  o Bug Fixes:
+    * Conary rq <with no arguments> no longer hides troves if the flavor that
+      matches the system flavor is not built for the latest version (CNY-784).
+    * cvc cook now displays the correct label of the thing its building,
+      even when it is not the build label.
+
+  o Client Changes:
+    * --debug should now provide information that is useful to the end-user
+      on update, and --debug --debug will provide output that is useful
+      to conary developers.
+
 Changes in 1.1.2:
   o Bug Fixes:
     * Conary now removes sources from the lookaside before unpacking SRPMs to
@@ -6,9 +18,9 @@ Changes in 1.1.2:
     * Errors found in the recipe while checking in will now display file name
       and line number information along with the error found.
     * The trove browser no longer shows duplicate entries for multihomed
-      repositories
+      repositories.
     * A bug that kept sqlite-based 64-bit mirrors from being used as a source 
-      for further mirrors has been fixed
+      for further mirrors has been fixed.
 
   o Build Changes:
     * Conary no longer prints policy error messages three times; it
