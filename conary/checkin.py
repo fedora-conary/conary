@@ -38,6 +38,7 @@ from conary.build import errors as builderrors
 from conary.build.macros import Macros
 from conary.build.packagerecipe import loadMacros
 from conary.build.cook import signAbsoluteChangeset
+from conary.build import cook
 from conary.conarycfg import selectSignatureKey
 from conary.conaryclient import cmdline
 from conary.lib import log
@@ -273,10 +274,7 @@ def commit(repos, cfg, message, callback=None, test=False):
         log.setVerbosity(log.INFO)
         if not 'abstractBaseClass' in recipeObj.__class__.__dict__ or not recipeObj.abstractBaseClass:
             if hasattr(recipeObj, 'setup'):
-                try:
-                    recipeObj.setup()
-                except Exception, err:
-                    raise errors.CvcError('Error calling setup: %s' % err)
+                cook._callSetup(cfg, recipeObj)
             else:
                 log.error('you need a setup method for your recipe')
 
@@ -873,7 +871,10 @@ def updateSrc(repos, versionStr = None, callback = None):
     state = conaryState.getSourceState()
     pkgName = state.getName()
     baseVersion = state.getVersion()
-    
+    if baseVersion == versions.NewVersion():
+        log.error("cannot update source directory for package '%s' - it was created with newpkg and has never been checked in." % pkgName)
+        return
+
     if not versionStr:
 	headVersion = repos.getTroveLatestVersion(pkgName, state.getBranch())
 	head = repos.getTrove(pkgName, headVersion, deps.deps.Flavor())

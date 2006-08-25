@@ -31,7 +31,7 @@ def _regexp(pattern, item):
     return regexp.match(item) is not None
 # a timestamp function compatible with other backends
 def _timestamp():
-    return int(time.strftime("%Y%m%d%H%M%S"))
+    return long(time.strftime("%Y%m%d%H%M%S", time.gmtime(time.time())))
 
 class Cursor(BaseCursor):
     driver = "sqlite"
@@ -204,7 +204,8 @@ class Database(BaseDatabase):
             return self.version
         for (type, name, tbl_name) in slist:
             if type == "table":
-                if name in ["sqlite_master", "sqlite_sequence"]:
+                # skip internal sqlite tables
+                if name.startswith('sqlite_'):
                     continue
                 if name.endswith("_sequence"):
                     self.sequences.setdefault(name[:-len("_sequence")], None)

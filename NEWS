@@ -1,23 +1,111 @@
+Changes in @NEW@:
+  o Client Changes:
+    * The "--debug" command line flag now provides information that is
+      useful to the end-user on update.  The "--debug=all" flag will
+      provide output that is useful to conary developers.  A side
+      effect of this change affects the "cvc" command line.  To use
+      the "--resume" command line argument to specify that you wish to
+      resume at a particular location, you must use "--resume=<loc>".
+      "--resume <loc>" will not work anymore.  This removes an
+      ambiguity in how we parse optional parameters in Conary.
+    * The output of --debug has been modified when performing
+      dependency resolution - The output should be more helpful to end
+      users.  Also rearranged the output given when dependencies
+      fail. (CNY-779)
+    * cvc merge and cvc update are now more verbose when patching. (CNY-406)
+    * cvc clone now requires that you specify a message when cloning source
+      components unless you specify --message.  It also gives more output
+      about what it is doing (CNY-766, CNY-430).
+    * cvc clone now has a --test parameter that runs through all steps of
+      cloning without performing the clone.  --info is now more lightweight -
+      it no longer downloads all of the file contents that would be cloned.
+    * /etc/conary/mirrors/gnu has been added to enable mirror://
+      references to the GNU mirror system.
+    * /etc/conary/mirrors/cpan has been added to enable mirror:// references to
+    * the Comprehensive Perl Archive network mirror system.
+    * Paths moving between troves as part of a single job are now treated
+      as file updates instead of separate add/remove events (CNY-750,
+      CNY-786, CNY-359)
+
+  o Optimizations
+    On a test system, "conary updateall --info" is around 24% faster
+    than previous versions of Conary.
+
+    * The SQL query used to retrieve troves from the local database
+      has been optimized.  The new code is nearly four times faster
+      for operations like "conary q group-dist --info".
+    * The SQL query in getTroveContainers() used to determine the
+      parent package(s) and groups(s) of a set of troves as recorded
+      in the local database has been optimized.  The new code is
+      almost 95 times faster. (0.2 seconds versus 19 seconds)
+    * The code in getCompleteTroveSet() that creates Version and
+      Flavor objects from entries in the database now caches the
+      created object.  This is approximately a 4.5 times speed
+      up. (2.10 seconds versus 9.4 seconds)
+    * The code in iterUpdateContainerInfo has had similar version
+      and flavor caching optimizations that make the code about 
+      2.5 times faster (from 10 seconds to 4 seconds).
+
   o Bug Fixes:
+    * "conary rq" (with no arguments) no longer hides troves if the
+      flavor that matches the system flavor is not built for the
+      latest version. (CNY-784)
+    * "cvc cook" now displays the correct label of the thing its
+      building, even when it is not the build label.
+    * Calling "cvc update" on a new package will fail with an
+      appropriate error message instead of displaying a
+      traceback. (CNY-715)
     * Conary can now update a file from a non-directory to a directory.
 
-Changes in @NEW@:
+Changes in 1.0.29:
   o Bug Fixes:
-    * Conary now resets the timeStamps in all cases when getSourceVersion is 
-      called (CNY-708).
-    * Sqlite ANALYZE locks the database after it is run, causing updates to
-      fail.
-    * Lists in configure files (for example, installLabelPath) now allow there 
-      to be more than one space between items.
-    * Locally changed files weren't marked properly in rollbacks which were
-      stored locally (incluing rollbacks for locally built troves) (CNY-645)
+    * Conary now removes sources from the lookaside before unpacking SRPMs to
+      ensure that the source referenced from the SRPM is actually contained in
+      the SRPM. (CNY-771)
+    * Errors found in the recipe while checking in will now display file name
+      and line number information along with the error found.
+    * The trove browser no longer shows duplicate entries for multihomed
+      repositories.
+    * A bug that kept sqlite-based 64-bit mirrors from being used as a source 
+      for further mirrors has been fixed.
+
+  o Build Changes:
+    * Conary no longer prints policy error messages three times; it
+      now prints each error immediately when it is found, and then
+      summarizes all policy errors once (instead of twice) at the
+      end of the build process. (CNY-776)
+
+Changes in 1.0.28:
+  o Client Changes:
+    * Migrate no longer replaces by default as if --replace-files was
+      specified. (CNY-769)
+
+  o Server Changes:
+    * The log retrieval function now returns a HTTP_NOT_IMPLEMENTED
+      (501) instead of a HTTP_NOT_FOUND (404) if the logFile
+      directive is not configured.
 
   o Build Changes:
     * Conary now recognizes that pkgconfig finds its files in
       /usr/share/pkgconfig as well as /usr/lib*/pkgconfig. (CNY-754)
-    * Added the /etc/conary/mirrors/cran file to enable mirror://
+    * /etc/conary/mirrors/cran has been added to enable mirror://
       references to the Comprehensive R Archive Network. (CNY-761)
- 
+
+  o Bug Fixes:
+    * Conary now resets the timeStamps in all cases when
+      getSourceVersion is called (CNY-708).
+    * SQLite ANALYZE locks the database after it is run, causing
+      updates to fail.
+    * A bug that caused lists such as installLabelPath in
+      configuration files to be parsed incorrectly when more than one
+      space was between list elements has been fixed
+    * A bug that caused Locally changed files to no be marked properly
+      in rollbacks that were stored locally (including rollbacks for
+      locally built troves) has been fixed. (CNY-645)
+    * A bug that could cause "cvc cook" to create groups that include
+      components needed to resolve dependencies that are already
+      included not-by-default has been fixed.
+
 Changes in 1.0.27:
   o Client Changes:
     * A "files preupdate" tag script method has been Implemented which

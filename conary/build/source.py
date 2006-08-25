@@ -279,7 +279,7 @@ class Archive(_Source):
     the destdir.  Note that only Rock Ridge or Joliet images are handled,
     and that permissions and special files are not preserved.
 
-    C{r.addArchive('mirror://sourceforge/%(name)s/%(name)s-%(version)s.tar.gz', keyid='9BB19A22')
+    C{r.addArchive('mirror://sourceforge/%(name)s/%(name)s-%(version)s.tar.gz', keyid='9BB19A22')}
 
     Demonstrates use with mirror URL and C{sourceforge} mirrors list for
     retrieving package source from SourceForge.
@@ -743,7 +743,7 @@ class Source(_Source):
         C{%(cflags)s} to be replaced with the current setting of
         C{recipe.macros.cflags}. Defaults to False.
     @keyword mode: If set, provides the mode to set on the file.
-        use : A Use flag, or boolean, or a tuple of Use flags, and/or boolean
+    @keyword use : A Use flag, or boolean, or a tuple of Use flags, and/or boolean
         values which determine whether the source code archive is actually
         unpacked, or merely stored in the archive.
     @keyword rpm: If the C{rpm} keyword is used, C{addArchive} looks in the file,
@@ -910,6 +910,8 @@ def _extractFilesFromRPM(rpm, targetfile=None, directory=None):
 	directory = os.path.dirname(targetfile)
     cpioArgs = ['/bin/cpio', 'cpio', '-iumd', '--quiet']
     if targetfile:
+        if os.path.exists(targetfile):
+            os.remove(targetfile)
 	filename = os.path.basename(targetfile)
 	cpioArgs.append(filename)
 	errorMessage = 'extracting %s from RPM %s' %(
