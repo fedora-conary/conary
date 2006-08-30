@@ -30,6 +30,8 @@ Changes in @NEW@:
     * Paths moving between troves as part of a single job are now treated
       as file updates instead of separate add/remove events (CNY-750,
       CNY-786, CNY-359)
+    * Entitlements can be passed into ConaryClient and NetworkRepositoryClient
+      objects directly (CNY-640)
 
   o Optimizations
     On a test system, "conary updateall --info" is around 24% faster
@@ -56,6 +58,13 @@ Changes in @NEW@:
       provides the --prefix, --install-purelib, and --install-platlib
       arguments.  This allows it to work correctly with a greater
       number of packages. (CNY-809)
+    * Python dependencies were previously incorrectly calculated
+      for certain module path elements added in some Python C
+      code (for example, contents of the lib-dynload directory);
+      these errors are now resolved by using external python
+      to find system path elements. (CNY-813)
+    * The "cvc cook" command now prints the flavor being built,
+      as well as the version. (CNY-817)
 
   o Bug Fixes:
     * "conary rq" (with no arguments) no longer hides troves if the
