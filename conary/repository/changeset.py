@@ -623,7 +623,7 @@ class ChangeSet(streams.StreamSet):
             newVer.incrementBuildCount()
 
             if repos.hasTrove(name, newVer, troveCs.getNewFlavor()):
-                newVer = repos.getTroveLatestVersion(name, newVer.branch())
+                newVer = repos.getTroveLatestVersion(name, newVer.branch()).copy()
                 newVer.incrementBuildCount()
 
             newTrv = oldTrv.copy()
@@ -774,8 +774,8 @@ class ReadOnlyChangeSet(ChangeSet):
     fileQueueCmp = staticmethod(fileQueueCmp)
 
     def configFileIsDiff(self, pathId):
-        (tag, str, compressed) = self.configCache.get(pathId, 
-                                                      (None, None, None))
+        (tag, cont, compressed) = self.configCache.get(pathId, 
+                                                       (None, None, None))
         return tag == ChangedFileTypes.diff
 
     def _nextFile(self):
@@ -803,10 +803,7 @@ class ReadOnlyChangeSet(ChangeSet):
             name = pathId
 	    (tag, contents, compressed) = self.configCache[pathId]
 
-            if type(contents) == str:
-                cont = filecontents.FromString(contents)
-            else:
-                cont = contents
+            cont = contents
 	else:
             self.filesRead = True
 
@@ -1001,18 +998,6 @@ Cannot apply a relative changeset to an incomplete trove.  Please upgrade conary
 
 		newFiles.append((oldFileId, newFileId, filecs))
 
-		if (hash and oldVersion and oldFile.flags.isConfig()
-                    and fileObj.flags.isConfig()):
-		    contType = ChangedFileTypes.file
-		    cont = filecontents.FromChangeSet(self, pathId)
-		    if oldVersion:
-			(contType, cont) = fileContentsDiff(oldFile, oldCont, 
-                                                            fileObj, cont)
-
-                    if contType == ChangedFileTypes.diff:
-                        self.configCache[pathId] = (contType,
-                                                    cont.get().read(), False)
-
         # leave the old files in place; we my need those diffs for a
         # trvCs which hasn't been rooted yet
 	for tup in newFiles:
@@ -1051,8 +1036,6 @@ Cannot apply a relative changeset to an incomplete trove.  Please upgrade conary
         allContents = {}
         for pathId in idList:
             (tag, contents, compressed) = self.configCache[pathId]
-            if isinstance(contents, str):
-                contents = filecontents.FromString(contents)
             if tag == ChangedFileTypes.file:
                 allContents[pathId] = (ChangedFileTypes.file, contents, False)
 
@@ -1119,20 +1102,9 @@ Cannot apply a relative changeset to an incomplete trove.  Please upgrade conary
 
         else:
             assert(otherCs.__class__ ==  ChangeSet)
-
-            # make a copy. the configCache should only store diffs
-            configs = {}
-
-            for (pathId, (contType, contents, compressed)) in \
-                                    otherCs.configCache.iteritems():
-                assert(not compressed)
-                if contType == ChangedFileTypes.diff:
-                    self.configCache[pathId] = (contType, contents, compressed)
-                else:
-                    configs[pathId] = (contType, contents, compressed)
+            self.configCache.update(otherCs.configCache)
 
             wrapper = DictAsCsf(otherCs.fileContents)
-            wrapper.addConfigs(configs)
             self.csfWrappers.append(wrapper)
             entry = wrapper.getNextFile()
             if entry:
@@ -1180,7 +1152,11 @@ class ChangeSetFromFile(ReadOnlyChangeSet):
                     raise errors.ConaryError(
                                 "Error opening changeset '%s': %s" % 
                                     (fileName, err.strerror))
-                csf = filecontainer.FileContainer(f)
+                try:
+                    csf = filecontainer.FileContainer(f)
+                except IOError, err:
+                    raise filecontainer.BadContainer(
+                                "File %s is not a valid conary changeset: %s" % (fileName, err))
             else:
                 csf = filecontainer.FileContainer(fileName)
 
@@ -1220,17 +1196,18 @@ class ChangeSetFromFile(ReadOnlyChangeSet):
             tag = 'cft-' + tag
             isConfig = isConfig == "1"
 
-            # relative change sets only need diffs cached; absolute change
-            # sets get all of their config files cached so we can turn
-            # those into diffs. those cached values are replaced by the
-            # diffs when this happens though, so this isn't a big loss
-            if tag != ChangedFileTypes.diff and not(self.absolute and isConfig):
+            # cache all config files because:
+            #   1. diffs are needed both to precompute a job and to store
+            #      the new config contents in the database
+            #   2. full contents are needed if the config file moves components
+            #      and we need to generate a diff and then store that config
+            #      file in the database
+            # (there are other cases as well)
+            if not isConfig:
                 break
 
             cont = filecontents.FromFile(gzip.GzipFile(None, 'r', fileobj = f))
-            s = cont.get().read()
-            self.configCache[name] = (tag, s, False)
-            cont = filecontents.FromString(s)
+            self.configCache[name] = (tag, cont, False)
 
             nextFile = csf.getNextFile()
 

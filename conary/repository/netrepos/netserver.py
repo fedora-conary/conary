@@ -310,7 +310,7 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
             return (False, True, ('FileStreamMissing',
                            self.fromFileId(e.fileId)))
         elif isinstance(e, sqlerrors.DatabaseLocked):
-            return (False, True, ('RepositoryLocked'))
+            return (False, True, ('RepositoryLocked',))
         elif isinstance(e, errors.TroveIntegrityError):
             return (False, True, (e.__class__.__name__, str(e),
                                   self.fromTroveTup(e.nvf)))
@@ -884,9 +884,8 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
                 assert(latestFilter == self._GET_TROVE_ALL_VERSIONS)
                 assert(withFlavors)
 
-                version = versions.VersionFromString(versionStr)
-                version.setTimeStamps([float(x) for x in
-                                            timeStamps.split(":")])
+                ts = [float(x) for x in timeStamps.split(":")]
+                version = versions.VersionFromString(versionStr, timeStamps=ts)
 
                 d = troveVersions.get(troveName, None)
                 if d is None:
@@ -912,9 +911,8 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
 
                 for (finalTimestamp, flavorScore, versionStr, timeStamps,
                      flavor) in versionDict.itervalues():
-                    version = versions.VersionFromString(versionStr)
-                    version.setTimeStamps([float(x) for x in
-                                                timeStamps.split(":")])
+                    ts = [float(x) for x in timeStamps.split(":")]
+                    version = versions.VersionFromString(versionStr, timeStamps=ts)
                     version = self.freezeVersion(version)
 
                     if withFlavors:

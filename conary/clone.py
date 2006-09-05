@@ -13,15 +13,16 @@
 #
 import itertools
 
+from conary import callbacks
 from conary import errors
 from conary import versions
+from conary import conaryclient
 from conary.conaryclient import ConaryClient, cmdline
 from conary.build.cook import signAbsoluteChangeset
 from conary.conarycfg import selectSignatureKey
 from conary.deps import deps
 
 def displayCloneJob(cs):
-    
     indent = '   '
     for csTrove in cs.iterNewTroveList():
         newInfo = str(csTrove.getNewVersion())
@@ -32,7 +33,8 @@ def displayCloneJob(cs):
         print "%sClone  %-20s (%s)" % (indent, csTrove.getName(), newInfo)
 
 def CloneTrove(cfg, targetBranch, troveSpecList, updateBuildInfo = True,
-               info = False, cloneSources = False):
+               info = False, cloneSources = False, message = None, 
+               test = False, fullRecurse = False):
     client = ConaryClient(cfg)
     repos = client.getRepos()
 
@@ -50,34 +52,27 @@ def CloneTrove(cfg, targetBranch, troveSpecList, updateBuildInfo = True,
 
     trovesToClone = repos.findTroves(cfg.installLabelPath, 
                                     troveSpecs, cfg.flavor)
-    trovesToClone = list(itertools.chain(*trovesToClone.itervalues()))
+    trovesToClone = list(set(itertools.chain(*trovesToClone.itervalues())))
 
-    if cloneSources:
-        binaries = [ x for x in trovesToClone if not x[0].endswith(':source')]
-        seen = set(binaries)
-        while binaries:
-            troves = repos.getTroves(binaries, withFiles=False)
-            binaries = []
-            for trove in troves:
-                trovesToClone.append((trove.getSourceName(),
-                                      trove.getVersion().getSourceVersion(),
-                                      deps.Flavor()))
-                for troveTup in trove.iterTroveList(strongRefs=True,
-                                                    weakRefs=True):
-                    if troveTup not in seen:
-                        binaries.append(troveTup)
-            seen.update(binaries)
-
-        trovesToClone = list(set(trovesToClone))
+    if not client.cfg.quiet:
+        callback = conaryclient.callbacks.CloneCallback(client.cfg, message)
+    else:
+        callback = callbacks.CloneCallback()
 
     okay, cs = client.createCloneChangeSet(targetBranch, trovesToClone,
-                                           updateBuildInfo=updateBuildInfo)
+                                           updateBuildInfo=updateBuildInfo,
+                                           infoOnly=info, callback=callback,
+                                           fullRecurse=fullRecurse,
+                                           cloneSources=cloneSources)
     if not okay:
         return
 
     if cfg.interactive or info:
         print 'The following clones will be created:'
         displayCloneJob(cs)
+
+    if info:
+        return
 
     if cfg.interactive:
         print
@@ -88,5 +83,5 @@ def CloneTrove(cfg, targetBranch, troveSpecList, updateBuildInfo = True,
     sigKey = selectSignatureKey(cfg, str(targetBranch.label()))
     signAbsoluteChangeset(cs, sigKey)
 
-    if not info:
-        client.repos.commitChangeSet(cs)
+    if not test:
+        client.repos.commitChangeSet(cs, callback=callback)

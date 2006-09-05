@@ -23,6 +23,27 @@ class Tags(idtable.CachedIdTable):
     def __init__(self, db):
 	idtable.CachedIdTable.__init__(self, db, "Tags", "tagId", "tag")
 
+class VersionCache(dict):
+    def get(self, vs, ts):
+        key = vs, ts
+        if self.has_key(key):
+            return self[key]
+        ts = [ float(x) for x in ts.split(":") ]
+        v = versions.VersionFromString(vs, timeStamps = ts)
+        self[key] = v
+        return v
+
+class FlavorCache(dict):
+    def get(self, frozen):
+        if self.has_key(frozen):
+            return self[frozen]
+        if frozen is None:
+            f = deps.deps.Flavor()
+        else:
+            f = deps.deps.ThawFlavor(frozen)
+        self[frozen] = f
+        return f
+
 class DBTroveFiles:
     """
     pathId, versionId, path, instanceId, stream
@@ -266,8 +287,8 @@ class DBInstanceTable:
 		      WHERE instanceId=?""", instanceId)
 	try:
 	    (s, t) = cu.next()
-	    v = versions.VersionFromString(s)
-	    v.setTimeStamps([ float(x) for x in t.split(":") ])
+            ts = [ float(x) for x in t.split(":") ]
+	    v = versions.VersionFromString(s, timeStamps=ts)
 	    return v
 	except StopIteration:
             raise KeyError, instanceId
@@ -443,6 +464,8 @@ class Database:
     def getAllTroveFlavors(self, troveDict):
         outD = {}
         cu = self.db.cursor()
+        versionCache = VersionCache()
+        flavorCache = FlavorCache()
         for name, versionList in troveDict.iteritems():
             d = {}.fromkeys(versionList)
             outD[name] = d
@@ -455,10 +478,9 @@ class Database:
                         ON Instances.flavorid = Flavors.flavorid
                 WHERE troveName=? AND isPresent=1""", name)
             for (match, timeStamps, flavor) in cu:
-                ts = [float(x) for x in timeStamps.split(':')]
-                version = versions.VersionFromString(match, timeStamps=ts)
+                version = versionCache.get(match, timeStamps)
                 if outD[name].has_key(version):
-                    outD[name][version].append(deps.deps.ThawFlavor(flavor))
+                    outD[name][version].append(flavorCache.get(flavor))
         return outD
 
     def iterAllTroves(self):
@@ -469,10 +491,12 @@ class Database:
                 INNER JOIN Flavors
                     ON Instances.flavorid = Flavors.flavorid
             WHERE isPresent=1""")
+        versionCache = VersionCache()
+        flavorCache = FlavorCache()
         for (troveName, version, timeStamps, flavor) in cu:
-            ts = [float(x) for x in timeStamps.split(':')]
-            version = versions.VersionFromString(version, timeStamps=ts)
-            yield troveName, version, deps.deps.ThawFlavor(flavor)
+            version = versionCache.get(version, timeStamps)
+            flavor = flavorCache.get(flavor)
+            yield troveName, version, flavor
 
     def pinTroves(self, name, version, flavor, pin = True):
         if flavor is None or flavor.isEmpty():
@@ -752,15 +776,12 @@ order by
                                   deps.deps.Flavor(), None)
         instanceDict = {}
         origIncluded = set()
+        versionCache = VersionCache()
+        flavorCache = FlavorCache()
         for (includedId, name, version, flavor, isPresent,
                                             inPristine, timeStamps) in cu:
-            if flavor is None:
-                flavor = deps.deps.Flavor()
-            else:
-                flavor = deps.deps.ThawFlavor(flavor)
-
-            version = versions.VersionFromString(version)
-	    version.setTimeStamps([ float(x) for x in timeStamps.split(":") ])
+            flavor = flavorCache.get(flavor)
+            version = versionCache.get(version, timeStamps)
 
             instanceDict[(name, version, flavor)] = includedId
             origIncluded.add((name, version, flavor))
@@ -1122,8 +1143,6 @@ order by
 	trv = trove.Trove(troveName, troveVersion, troveFlavor, None,
                           setVersion = False)
 
-	flavorCache = {}
-
 	# add all of the troves which are references from this trove; the
 	# flavor cache is already complete
 	cu = self.db.cursor()
@@ -1133,34 +1152,29 @@ order by
             pristineClause = "Instances.isPresent = 1"
 
 	cu.execute("""
-	    SELECT troveName, versionId, flags, timeStamps, 
-                   Flavors.flavorId, flavor FROM 
-		TroveTroves INNER JOIN Instances INNER JOIN Flavors ON 
+	    SELECT troveName, version, flags, timeStamps, flavor
+                FROM TroveTroves
+                JOIN Instances
+                JOIN Versions ON
+                    Versions.versionId = Instances.versionId
+                JOIN Flavors ON
 		    TroveTroves.includedId = Instances.instanceId AND
 		    Flavors.flavorId = Instances.flavorId
 		WHERE TroveTroves.instanceId = ? AND
                       %s
 	""" % pristineClause, troveInstanceId)
 
-	versionCache = {}
-	for (name, versionId, flags, timeStamps, flavorId, flavorStr) in cu:
-	    version = self.versionTable.getBareId(versionId)
-	    version.setTimeStamps([ float(x) for x in timeStamps.split(":") ])
-
-	    if not flavorId:
-		flavor = deps.deps.Flavor()
-	    else:
-		flavor = flavorCache.get(flavorId, None)
-		if flavor is None:
-		    flavor = deps.deps.ThawFlavor(flavorStr)
-		    flavorCache[flavorId] = flavor
+        versionCache = VersionCache()
+        flavorCache = FlavorCache()
+	for name, versionStr, flags, timeStamps, flavorStr in cu:
+            version = versionCache.get(versionStr, timeStamps)
+            flavor = flavorCache.get(flavorStr)
 
             byDefault = (flags & schema.TROVE_TROVES_BYDEFAULT) != 0
             weakRef = (flags & schema.TROVE_TROVES_WEAKREF) != 0
 
 	    trv.addTrove(name, version, flavor, byDefault = byDefault,
                          weakRef = weakRef)
-
         if withDeps:
             self.depTables.get(cu, trv, troveInstanceId)
 
@@ -1169,16 +1183,15 @@ order by
         if not withFiles:
             return trv
 
-        cu.execute("SELECT pathId, path, versionId, fileId, isPresent FROM "
-                   "DBTroveFiles WHERE instanceId = ?", troveInstanceId)
-	for (pathId, path, versionId, fileId, isPresent) in cu:
+        cu.execute("""SELECT pathId, path, version, fileId, isPresent
+                      FROM DBTroveFiles
+                      JOIN Versions ON
+                          Versions.versionId = DBTroveFiles.versionId
+                      WHERE instanceId = ?""", troveInstanceId)
+	for (pathId, path, version, fileId, isPresent) in cu:
 	    if not pristine and not isPresent:
 		continue
-	    version = versionCache.get(versionId, None)
-	    if not version:
-		version = self.versionTable.getBareId(versionId)
-		versionCache[versionId] = version
-
+	    version = versions.VersionFromString(version)
 	    trv.addFile(pathId, path, version, fileId)
 
 	return trv
@@ -1442,7 +1455,8 @@ order by
 
     def getTroveContainers(self, l):
         cu = self.db.cursor()
-        cu.execute("CREATE TEMPORARY TABLE ftc(idx INTEGER, name STRING, "
+        cu.execute("CREATE TEMPORARY TABLE ftc(idx INTEGER PRIMARY KEY, "
+                                              "name STRING, "
                                               "version STRING, "
                                               "flavor STRING)",
                                               start_transaction = False)
@@ -1453,26 +1467,28 @@ order by
                        start_transaction = False)
             result.append([])
 
-        cu.execute("""SELECT idx, Instances.troveName, Versions.version,
+        cu.execute("""SELECT idx, instances.troveName, Versions.version,
                              Flavors.flavor, flags
-                        FROM ftc JOIN Versions AS IncVersion ON
-                            ftc.version = IncVersion.version
-                        JOIN Flavors AS IncFlavor ON
-                            ftc.flavor = IncFlavor.flavor OR
-                            (ftc.flavor = "" AND IncFlavor.flavor IS NULL)
-                        JOIN Instances AS IncInst ON
-                            ftc.name = IncInst.troveName AND
-                            IncVersion.versionId = IncInst.versionId AND
-                            IncFlavor.flavorId = IncInst.flavorId
-                        JOIN TroveTroves ON
-                            IncInst.instanceId = TroveTroves.includedId
-                        JOIN Instances ON
-                            TroveTroves.instanceId = Instances.instanceId
-                        JOIN Flavors ON
-                            Instances.flavorId = Flavors.flavorId
-                        JOIN Versions ON
-                            Instances.versionId = Versions.versionId
-                """)
+                      FROM ftc
+                      JOIN Instances AS IncInst ON
+                          IncInst.troveName = ftc.name
+                      JOIN Versions AS IncVersion ON
+                          IncVersion.versionId = IncInst.versionId
+                      JOIN Flavors AS IncFlavor ON
+                          IncFlavor.flavorId = IncInst.flavorId
+                      JOIN TroveTroves ON
+                          TroveTroves.includedId = IncInst.instanceId
+                      JOIN Instances ON
+                          Instances.instanceId = TroveTroves.instanceId
+                      JOIN Versions ON
+                          Versions.versionId = Instances.versionId
+                      JOIN Flavors ON
+                          Flavors.flavorId = Instances.flavorId
+                      WHERE
+                          IncVersion.version = ftc.version AND
+                          (IncFlavor.flavor = ftc.flavor OR
+                           (IncFlavor.flavor IS NULL AND ftc.flavor = ""))
+                   """)
         for (idx, name, version, flavor, flags) in cu:
             if flags & schema.TROVE_TROVES_WEAKREF:
                 # don't include weak references, they are not direct
@@ -1683,30 +1699,76 @@ order by
         WHERE (NotReferenced.instanceId IS NULL
               AND (TroveTroves.inPristine=1 
                     OR TroveTroves.inPristine is NULL)
-                    )
+              )
         """ % fromClause)
 
-        VFS = versions.VersionFromString
-        Flavor = deps.deps.ThawFlavor
-
+        versionCache = VersionCache()
+        flavorCache = FlavorCache()
         for (isPresent, name, versionStr, timeStamps, flavorStr, 
-             parentName, parentVersion, parentTimeStamps, parentFlavor,
+             parentName, parentVersionStr, parentTimeStamps, parentFlavor,
              flags) in cu:
             if parentName:
                 weakRef = flags & schema.TROVE_TROVES_WEAKREF
-                parentVersion = VFS(parentVersion, 
-                    timeStamps=[ float(x) for x in parentTimeStamps.split(':')])
-                parentInfo = (parentName, parentVersion, Flavor(parentFlavor))
+                v = versionCache.get(parentVersionStr, parentTimeStamps)
+                f = flavorCache.get(parentFlavor)
+                parentInfo = (parentName, v, f)
             else:
                 weakRef = False
                 parentInfo = None
 
-            version = VFS(versionStr,
-                          timeStamps=[ float(x) for x in timeStamps.split(':')])
-            yield ((name, version, Flavor(flavorStr)), parentInfo, isPresent, weakRef)
+            version = versionCache.get(versionStr, timeStamps)
+            flavor = flavorCache.get(flavorStr)
+            yield ((name, version, flavor), parentInfo, isPresent, weakRef)
 
         if troveNames:
             cu.execute("DROP TABLE tmpInst", start_transaction = False)
+
+    def getPathHashesForTroveList(self, troveList):
+        """ 
+            Returns the pathHashes for the given trove list.
+        """
+        # returns a list parallel to troveList
+        cu = self.db.cursor()
+
+        cu.execute("""CREATE TEMPORARY TABLE getTrovesTbl(
+                                idx %(PRIMARYKEY)s,
+                                troveName STRING,
+                                versionId INT,
+                                flavorId INT)
+                   """ % self.db.keywords, start_transaction = False)
+
+        i = -1
+        for i, (name, version, flavor) in enumerate(troveList):
+            flavorId = self.flavors.get(flavor, None)
+            if flavorId is None:
+                continue
+            versionId = self.versionTable.get(version, None)
+            if versionId is None:
+                continue
+
+            cu.execute("INSERT INTO getTrovesTbl VALUES(?, ?, ?, ?)",
+                       i, name, versionId, flavorId,
+                       start_transaction = False)
+
+        cu.execute("""SELECT idx, TroveInfo.data FROM getTrovesTbl
+                        INNER JOIN Instances ON
+                            getTrovesTbl.troveName == Instances.troveName AND
+                            getTrovesTbl.flavorId == Instances.flavorId AND
+                            getTrovesTbl.versionId == Instances.versionId AND
+                            Instances.isPresent == 1
+                        INNER JOIN TroveInfo USING (instanceId)
+                        WHERE TroveInfo.infoType = ?
+                    """, trove._TROVEINFO_TAG_PATH_HASHES)
+
+        r = [ None ] * (i + 1)
+        for (idx, data) in cu:
+            r[idx] = trove.PathHashes(data)
+
+        cu.execute("DROP TABLE getTrovesTbl", start_transaction = False)
+
+        return r
+
+
 
     def findRemovedByName(self, name):
         """
@@ -1740,11 +1802,12 @@ order by
                                 troveName IN (%s)""" %
                     ",".join(["'%s'" % x for x in nameList]))
 
+        versionCache = VersionCache()
+        flavorCache = FlavorCache()
         l = []
         for (name, version, flavor, timeStamps) in cu:
-            version = versions.VersionFromString(version)
-	    version.setTimeStamps([ float(x) for x in timeStamps.split(":") ])
-            flavor = deps.deps.ThawFlavor(flavor)
+            version = versionCache.get(version, timeStamps)
+            flavor = flavorCache.get(flavor)
             l.append((name, version, flavor))
 
         return l
@@ -1795,7 +1858,6 @@ order by
         for name in names:
             cu.execute("INSERT INTO gcts VALUES (?)", name,
                        start_transaction = False)
-
         cu.execute("""
                 SELECT Instances.troveName, version, flavor, isPresent,
                        timeStamps, TroveTroves.flags, TroveTroves.inPristine 
@@ -1819,15 +1881,13 @@ order by
         referencedStrong = []
         referencedWeak = []
 
-        for (name, version, flavor, isPresent, timeStamps, 
-                                               flags, hasParent) in cu:
-            if flavor is None:
-                flavor = ""
-
-            v = versions.VersionFromString(version)
-	    v.setTimeStamps([ float(x) for x in timeStamps.split(":") ])
-
-            info = (name, v, deps.deps.ThawFlavor(flavor))
+        versionCache = VersionCache()
+        flavorCache = FlavorCache()
+        for (name, version, flavor, isPresent, timeStamps, flags,
+             hasParent) in cu:
+            v = versionCache.get(version, timeStamps)
+            f = flavorCache.get(flavor)
+            info = (name, v, f)
 
             if isPresent:
                 if hasParent:

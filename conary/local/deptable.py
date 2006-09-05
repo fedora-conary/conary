@@ -249,13 +249,22 @@ class DependencyChecker:
 
         return nodeId
 
-    def _buildEdges(self, oldOldEdges, newNewEdges, collectionEdges):
+    def _buildEdges(self, oldOldEdges, newNewEdges, collectionEdges, 
+                    linkedIds):
         for (reqNodeId, provNodeId, depId) in oldOldEdges:
             # remove the provider after removing the requirer
             self.g.addEdge(reqNodeId, provNodeId)
 
         for (reqNodeId, provNodeId, depId) in newNewEdges:
             self.g.addEdge(provNodeId, reqNodeId)
+
+        for nodeIdList in linkedIds:
+            # create a circular link here, to make sure
+            # these troves have to be in the same job:
+            #  a -> b -> c -> a.
+            l = len(nodeIdList)
+            for i in range(l):
+                self.g.addEdge(nodeIdList[i], nodeIdList[(i + 1) % l])
 
         for leafId in self.g.getDisconnected():
             # if nothing depends on a node and the node 
@@ -646,11 +655,19 @@ class DependencyChecker:
                 if ':' not in comp[0]:
                     BIsPackage = 1
 
+            jobSets = []
+            # the versions might not have timestamps in them (thus
+            # might not be comparable.  Make them strings instead
+            for jobSet in jobSetA, jobSetB:
+                jobSets.append(
+                    [((x[0][0], (str(x[0][1][0]), x[0][1][1]),
+                                (str(x[0][2][0]), x[0][1][1]), x[0][2]),
+                      x[1]) for x in jobSet ])
             # if A has info- components and B doesn't, we want A
             # to be first.  Otherwise, sort by the components in the jobSets
             # (which should already be internally sorted)
-            return cmp((-AHasInfo, -AIsPackage, jobSetA),
-                       (-BHasInfo, -BIsPackage, jobSetB))
+            return cmp((-AHasInfo, -AIsPackage, jobSets[0]),
+                       (-BHasInfo, -BIsPackage, jobSets[1]))
 
         # get sets of strongly connected components - each component has
         # a cycle where something at the beginning requires something at the
@@ -688,9 +705,9 @@ class DependencyChecker:
                                     nodeSort=lambda a, b: cmp(a[1],  b[1]))
         return [ [y[0] for y in jobSets[x]] for x in orderedComponents ]
 
-    def _findOrdering(self, result, brokenByErase, satisfied):
-        changeSetList = []
-
+    def _createDepGraph(self, result, brokenByErase, satisfied, 
+                            linkedJobSets, createCollectionEdges=False):
+        #self.g = graph.DirectedGraph()
         # there are four kinds of edges -- old needs old, old needs new,
         # new needs new, and new needs old. Each edge carries a depId
         # to aid in cancelling them out. Our initial edge representation
@@ -698,11 +715,14 @@ class DependencyChecker:
         oldNewEdges, oldOldEdges, newNewEdges, newOldEdges = \
                     self._createDependencyEdges(result, self.depList)
 
-        # Create dependencies from collections to the things they include.
-        # This forces collections to be installed after all of their
-        # elements.  We include weak references in case the intermediate
-        # trove is not part of the update job.
-        collectionEdges =  (self._createCollectionEdges())
+        if createCollectionEdges:
+            # Create dependencies from collections to the things they include.
+            # This forces collections to be installed after all of their
+            # elements.  We include weak references in case the intermediate
+            # trove is not part of the update job.
+            collectionEdges =  (self._createCollectionEdges())
+        else:
+            collectionEdges = []
 
         resatisfied = set(brokenByErase) & set(satisfied)
         if resatisfied:
@@ -726,6 +746,8 @@ class DependencyChecker:
         # Remove nodes which cancel each other
         self._collapseEdges(oldOldEdges, oldNewEdges, newOldEdges, newNewEdges)
 
+        linkedNodes  = self._getLinkedNodes(linkedJobSets)
+
         # the edges left in oldNewEdges represent dependencies which troves
         # slated for removal have on troves being installed. either those
         # dependencies will already be guaranteed by edges in oldOldEdges,
@@ -743,16 +765,37 @@ class DependencyChecker:
         # and the particular depId no longer matter. The direction here is
         # a bit different, and defines the ordering for the operation, not
         # the order of the dependency
-        self._buildEdges(oldOldEdges, newNewEdges, collectionEdges)
+        self._buildEdges(oldOldEdges, newNewEdges, collectionEdges, linkedNodes)
         del oldOldEdges
         del newNewEdges
+        return self.g
 
+    def _findOrdering(self, result, brokenByErase, satisfied, linkedJobSets):
+        changeSetList = []
+        self._createDepGraph(result, brokenByErase, satisfied, linkedJobSets,
+                             createCollectionEdges=True)
         componentLists = self._stronglyConnect()
 
         for componentList in componentLists:
             changeSetList.append(list(componentList))
 
         return changeSetList
+
+    def _getLinkedNodes(self, linkedJobSets):
+        # convert from jobSets -> a bunch of nodes that need
+        # to be updated together.
+        linkedNodes = []
+        for jobSet in linkedJobSets:
+            nodeList = []
+            for job in jobSet:
+                if job[1][0]:
+                    nodeId = self.oldInfoToNodeId[job[0], job[1][0], job[1][1]]
+                else:
+                    nodeId = self.newInfoToNodeId[job[0], job[2][0], job[2][1]]
+                nodeList.append(nodeId)
+            linkedNodes.append(nodeList)
+
+        return linkedNodes
 
     def iterNodes(self):
         # skips the None node on the front
@@ -800,7 +843,8 @@ class DependencyChecker:
         self.workTables.merge()
         self.workTables.mergeRemoves()
 
-    def check(self, findOrdering = False):
+    def _check(self, findOrdering = False, linkedJobs = None, 
+               createGraph = False):
         # dependencies which could have been resolved by something in
         # RemovedIds, but instead weren't resolved at all are considered
         # "unresolvable" dependencies. (they could be resolved by something
@@ -822,7 +866,7 @@ class DependencyChecker:
 
         # it's a shame we instantiate this, but merging _gatherResoltion
         # and _findOrdering doesn't seem like any fun
-        result = [ x for x in self.cu ]
+        result = self.cu.fetchall()
 
         # None in depList means the dependency got resolved; we track
         # would have been resolved by something which has been removed as
@@ -836,11 +880,18 @@ class DependencyChecker:
         satisfied, brokenByErase, wasIn, unresolveable = \
                                 self._gatherResolution(result)
 
+        if linkedJobs is None:
+            linkedJobs = set()
         if findOrdering:
-            changeSetList = self._findOrdering(result, brokenByErase,
-                                               satisfied)
+            changeSetList = self._findOrdering(result, brokenByErase, satisfied,
+                                               linkedJobSets=linkedJobs)
         else:
             changeSetList = []
+        if createGraph:
+            depGraph = self._createDepGraph(result, brokenByErase, satisfied,
+                                            linkedJobSets=linkedJobs)
+        else:
+            depGraph = None
 
         brokenByErase = set(brokenByErase)
         satisfied = set(satisfied)
@@ -850,7 +901,29 @@ class DependencyChecker:
                                                 unresolveable,
                                                 wasIn)
 
+        return unsatisfiedList, unresolveableList, changeSetList, depGraph
+
+    def check(self, findOrdering = False, linkedJobs = None):
+        unsatisfiedList, unresolveableList, changeSetList, depGraph = \
+                self._check(findOrdering=findOrdering, linkedJobs=linkedJobs,
+                            createGraph=False)
         return unsatisfiedList, unresolveableList, changeSetList
+
+    def createDepGraph(self, linkedJobs=None):
+        unsatisfiedList, unresolveableList, changeSetList, depGraph = \
+                self._check(findOrdering=False, linkedJobs=linkedJobs,
+                            createGraph=True)
+
+        externalDepGraph = graph.DirectedGraph()
+        for nodeId in depGraph.iterNodes():
+            # translate from nodeId -> job for external consumption
+            job = self.nodes[nodeId][0]
+            externalDepGraph.addNode(job)
+        for fromNode, toNode in depGraph.iterEdges():
+            externalDepGraph.addEdge(self.nodes[fromNode][0], 
+                                     self.nodes[toNode][0])
+
+        return unsatisfiedList, unresolveableList, externalDepGraph
 
     def done(self):
         if self.inTransaction:

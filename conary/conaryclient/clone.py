@@ -13,6 +13,8 @@
 
 import itertools
 
+from conary import callbacks
+from conary import changelog
 from conary import errors
 from conary import versions
 from conary.build.nextversion import nextVersion
@@ -24,13 +26,18 @@ V_LOADED = 0
 V_BREQ = 1
 V_REFTRV = 2
 
+# don't change 
+DEFAULT_MESSAGE = 1
+
 class ClientClone:
 
     def createCloneChangeSet(self, targetBranch, troveList = [],
-                             updateBuildInfo=True):
+                             updateBuildInfo=True, message=DEFAULT_MESSAGE,
+                             infoOnly=False, fullRecurse=False,
+                             cloneSources=False,
+                             callback=None):
         # if updateBuildInfo is True, rewrite buildreqs and loadedTroves
         # info
-
         def _createSourceVersion(targetBranch, targetBranchVersionList, 
                                  sourceVersion):
             # sort oldest to newest
@@ -70,8 +77,8 @@ class ClientClone:
                 verBranch = verBranch.parentBranch()
                 if uphillBranch == verBranch:
                     return True
-            
-            return False 
+
+            return False
 
         def _isSibling(ver, possibleSibling):
             if isinstance(ver, versions.Version) and \
@@ -128,7 +135,7 @@ class ClientClone:
 
             trvs = repos.getTroves([ (name, version, singleFlavor) for
                                         name, version in dupCheck.iteritems() ],
-                                   withFiles = False)
+                                   withFiles = False, callback = callback)
 
 
 
@@ -183,12 +190,21 @@ class ClientClone:
                 
             return infoList, buildVersion
 
-        def _needsRewrite(sourceBranch, targetBranch, verToCheck, kind):
-            # if this version is for a referenced trove, we can be 
-            # sure that trove is being cloned as well, and so we always 
-            # need to rewrite its version.
+        def _needsRewrite(sourceBranch, targetBranch, infoToCheck, kind,
+                          allTroveInfo):
+            name, verToCheck, flavor = infoToCheck
+
             if kind == V_REFTRV:
-                return True
+                # if fullRecurse is False then we don't want
+                # to pull in extra troves to clone automatically.
+                # otherwise, if this version is for a referenced trove, 
+                # we can be sure that trove is being cloned as well, and so we 
+                # always 
+                # need to rewrite its version.
+                if not fullRecurse and infoToCheck not in allTroveInfo:
+                    return False
+                else:
+                    return True
 
             branchToCheck = verToCheck.branch()
 
@@ -249,7 +265,8 @@ class ClientClone:
         def _versionsNeeded(needDict, trv, sourceBranch, targetBranch,
                             rewriteTroveInfo):
             for (mark, src) in _iterAllVersions(trv, rewriteTroveInfo):
-                if _needsRewrite(sourceBranch, targetBranch, src[1], mark[0]):
+                if _needsRewrite(sourceBranch, targetBranch, src, mark[0],
+                                 allTroveInfo):
                     l = needDict.setdefault(src, [])
                     l.append(mark)
 
@@ -258,29 +275,64 @@ class ClientClone:
 
             raise CloneIncomplete(needs)
                 
+        if callback is None:
+            callback = callbacks.CloneCallback()
+        callback.determiningCloneTroves()
         # get the transitive closure
+
+        seen = set()
         allTroveInfo = set()
         allTroves = dict()
-        cloneSources = troveList
-        while cloneSources:
+        originalSources = set(troveList)
+        toClone = troveList
+        while toClone:
             needed = []
 
-            for info in cloneSources:
+            for info in toClone:
                 if info[0].startswith("fileset"):
                     raise CloneError, "File sets cannot be cloned"
 
-                if info not in allTroveInfo:
+                if info not in seen:
                     needed.append(info)
-                    allTroveInfo.add(info)
+                    seen.add(info)
 
-            troves = self.repos.getTroves(needed, withFiles = False)
-            allTroves.update(x for x in itertools.izip(needed, troves))
-            cloneSources = [ x for x in itertools.chain(
-                        *(t.iterTroveList(weakRefs=True,
-                                          strongRefs=True) for t in troves)) ]
+            troves = self.repos.getTroves(needed, withFiles = False, 
+                                          callback = callback)
+            newToClone = []
+            for info, trv in itertools.izip(needed, troves):
+                if not trv.getName().endswith(':source'):
+                    sourceName = trv.getSourceName()
+                    if not sourceName:
+                        sourceName = trv.getName().split(':')[0] + ':source'
+                    if not fullRecurse:
+                        sourcePackage = sourceName.split(':')[0]
+                        parentPackage = (sourcePackage, trv.getVersion(),
+                                         trv.getFlavor())
+                        if parentPackage not in originalSources:
+                            # if we're not recursing, we still want to 
+                            # clone this as long as the parent package is
+                            # the same (this works for groups as well as
+                            # for components)
+                            continue
+
+                    if cloneSources:
+                        sourceTup = (sourceName,
+                                     trv.getVersion().getSourceVersion(),
+                                     deps.Flavor())
+                        newToClone.append(sourceTup)
+
+                allTroves[info] = trv
+                allTroveInfo.add(info)
+
+                newToClone.extend(trv.iterTroveList(weakRefs=True,
+                                                    strongRefs=True))
+
+            toClone = newToClone
+
 
         # make sure there are no zeroed timeStamps - targetBranch may be
         # a user-supplied string
+        targetBranch = targetBranch.copy()
         targetBranch.resetTimeStamps()
 
         # split out the binary and sources
@@ -296,6 +348,7 @@ class ClientClone:
                                # version of that trove on the target branch
         cloneJob = []          # (info, newVersion) tuples
 
+        callback.determiningTargets()
         # start off by finding new version numbers for the sources
         for info in sourceTroveInfo:
             name, version = info[:2]
@@ -434,7 +487,8 @@ class ClientClone:
         for name, verDict in currentVersions.iteritems():
             for version, flavorList in verDict.iteritems():
                 matches += [ (name, version, flavor) for flavor in flavorList ]
-        trvs = self.repos.getTroves(matches, withFiles = False)
+        trvs = self.repos.getTroves(matches, withFiles = False, 
+                                    callback = callback)
         trvDict = dict(((info[0], info[2]), trv) for (info, trv) in
                             itertools.izip(matches, trvs))
 
@@ -447,11 +501,14 @@ class ClientClone:
 
         _checkNeedsFulfilled(needDict)
 
+
         assert(not needDict)
         del trvs
         del trvDict
         del currentVersions
         del needDict
+
+        callback.rewritingFileVersions()
 
         for (info, newVersion), trv in itertools.izip(cloneJob, allTroves):
             assert(newVersion == versionMap[(trv.getName(), trv.getVersion(),
@@ -485,6 +542,7 @@ class ClientClone:
 
             trv.changeVersion(newVersion)
 
+
             # look through files which aren't already on the right host for
             # inclusion in the change set (this could include too many)
             for (pathId, path, fileId, version) in trv.iterFileList():
@@ -493,11 +551,14 @@ class ClientClone:
 
             needsNewVersions = []
             for (mark, src) in _iterAllVersions(trv, updateBuildInfo):
-                if _needsRewrite(sourceBranch, targetBranch, src[1], mark[0]):
+                if _needsRewrite(sourceBranch, targetBranch, src, mark[0],
+                                 allTroveInfo):
                     _updateVersion(trv, mark, versionMap[src])
 
             for (pathId, path, fileId, version) in trv.iterFileList():
-                if _needsRewrite(sourceBranch, targetBranch, version, None):
+                if _needsRewrite(sourceBranch, targetBranch, 
+                                 (trv.getName(), version, None), None,
+                                 allTroveInfo):
                     needsNewVersions.append((pathId, path, fileId))
 
             # need to be reversioned
@@ -514,16 +575,27 @@ class ClientClone:
                     ver = map.get((pathId, fileId), newVersion)
                     trv.updateFile(pathId, path, ver, fileId)
 
+            if trv.getName().endswith(':source') and not infoOnly:
+                cl = callback.getCloneChangeLog(trv)
+                if cl is None:
+                    log.error("no change log message was given"
+                              " for %s." % trv.getName())
+                    return False, None
+                trv.changeChangeLog(cl)
             # reset the signatures, because all the versions have now
             # changed, thus invalidating the old sha1 hash
             trv.troveInfo.sigs.reset()
-            trv.computeSignatures()
+            if not infoOnly: # not computing signatures will make sure this 
+                             # doesn't get committed
+                trv.computeSignatures()
             trvCs = trv.diff(None, absolute = True)[0]
             cs.newTrove(trvCs)
 
             if ":" not in trv.getName():
                 cs.addPrimaryTrove(trv.getName(), trv.getVersion(), 
                                    trv.getFlavor())
+        if infoOnly:
+            return True, cs
 
         # the list(set()) removes duplicates
         newFilesNeeded = []
@@ -536,29 +608,33 @@ class ClientClone:
 
             newFilesNeeded.append((pathId, newFileId, newFileVersion))
 
+        callback.gettingCloneData()
         fileObjs = self.repos.getFileVersions(newFilesNeeded)
         contentsNeeded = []
         pathIdsNeeded = []
         fileObjsNeeded = []
         
-        for (pathId, newFileId, newFileVersion), fileObj in \
+        total = len(newFilesNeeded)
+        for ((pathId, newFileId, newFileVersion), fileObj) in \
                             itertools.izip(newFilesNeeded, fileObjs):
-            (filecs, contentsHash) = changeset.fileChangeSet(pathId, None, 
+            (filecs, contentsHash) = changeset.fileChangeSet(pathId, None,
                                                              fileObj)
             cs.addFile(None, newFileId, filecs)
-            
             if fileObj.hasContents:
                 contentsNeeded.append((newFileId, newFileVersion))
                 pathIdsNeeded.append(pathId)
                 fileObjsNeeded.append(fileObj)
 
-        contents = self.repos.getFileContents(contentsNeeded)
+        contents = self.repos.getFileContents(contentsNeeded, callback=callback)
+        i = 0
         for pathId, (fileId, fileVersion), fileCont, fileObj in \
                 itertools.izip(pathIdsNeeded, contentsNeeded, contents, 
                                fileObjsNeeded):
+
             cs.addFileContents(pathId, changeset.ChangedFileTypes.file, 
                                fileCont, cfgFile = fileObj.flags.isConfig(), 
                                compressed = False)
+        callback.done()
 
         return True, cs
 
