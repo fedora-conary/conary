@@ -1,3 +1,11 @@
+Changes in @NEW@:
+  o Client Changes:
+    * Added "cvc set" command to change files between binary and text mode.
+    * "cvc add" no longer assumes files it doesn't know to be binary are text
+      files; there are lists for both binary and text types, and files which are
+      added which aren't in either list need to be added with "--text" or
+      "--binary"
+
 Changes in 1.0.30:
   o System Update Changes:
     These changes make Conary much more robust when applying updates
@@ -80,8 +88,8 @@ Changes in 1.0.30:
     * The PythonSetup build action no longer provides the older
       --single-version-externally-managed argument, and instead
       provides the --prefix, --install-purelib, --install-platlib,
-      and --data arguments, each of which can be overridden with
-      the purelib, platlib, and data keyword arguments.  This
+      and --install-data arguments, which can be overridden with the
+      purelib, platlib, and data keyword arguments, respectively.  This
       allows it to work correctly with a greater number of packages.
       It also provides the option of providing a "purePython=False"
       argument for python packages that mix architecture-specific
