@@ -20,6 +20,7 @@ and committing changes back to the repository.
 import difflib
 import errno
 import os
+import re
 import stat
 import sys
 import time
@@ -47,6 +48,27 @@ from conary.lib import util
 from conary.local import update
 from conary.repository import changeset
 from conary.state import ConaryState, ConaryStateFromFile, SourceState
+
+nonCfgRe = re.compile(r'^.*\.(%s)$' % '|'.join((
+    'bz2', 'ccs', 'data', 'eps', 'gif', 'gz', 'ico', 'img',
+    'jar', 'jpeg', 'jpg', 'lss', 'pdf', 'png', 'ps',
+    'rpm', 'run',
+    'tar', 'tbz', 'tbz2', 'tgz', 'tiff', 'ttf',
+    'zip',
+)))
+cfgRe = re.compile(r'(^.*\.(%s)|(^|/)(%s))$' % ('|'.join((
+    # extensions
+    '(1|2|3|4|5|6|7|8|9)',
+    'c', 'cnf', 'conf', 'CONFIG.*', 'console.*', 'cron.*', '(c|)sh',
+    'desktop', 'diff', 'h', 'init', 'logrotate',
+    'pam(d|)', 'patch', 'pl', 'py',
+    'recipe', 'sysconfig',
+    'tag(handler|description)', 'tmpwatch', 'txt',
+    )),
+    '|'.join((
+    # full filenames
+    r'Makefile(|\..*)',
+    ))))
 
 # mix UpdateCallback and CookCallback, since we use both.
 class CheckinCallback(callbacks.UpdateCallback, callbacks.CookCallback):
@@ -182,9 +204,10 @@ use cvc co %s=<branch> for the following branches:
     for (pathId, path, fileId, version) in troveCs.getNewFileList():
 	fullPath = workDir + "/" + path
 
-	sourceState.addFile(pathId, path, version, fileId)
-
 	fileObj = files.ThawFile(cs.getFileChange(None, fileId), pathId)
+        sourceState.addFile(pathId, path, version, fileId,
+                            isConfig = fileObj.flags.isConfig())
+
         if fileObj.flags.isAutoSource():
             continue
 
@@ -216,7 +239,7 @@ def commit(repos, cfg, message, callback=None, test=False):
 	log.error("name and contact information must be set for commits")
 	return
 
-    conaryState = ConaryStateFromFile("CONARY")
+    conaryState = ConaryStateFromFile("CONARY", repos)
     state = conaryState.getSourceState()
 
     troveName = state.getName()
@@ -306,7 +329,8 @@ def commit(repos, cfg, message, callback=None, test=False):
                     return
 
                 pathId = makePathId()
-                state.addFile(pathId, base, versions.NewVersion(), "0" * 20)
+                state.addFile(pathId, base, versions.NewVersion(), "0" * 20,
+                              isConfig = False)
 
             if os.path.dirname(fullPath) != cwd:
                 srcMap[base] = fullPath
@@ -501,7 +525,7 @@ def commit(repos, cfg, message, callback=None, test=False):
     #FIXME: SIGN HERE
 
 def annotate(repos, filename):
-    state = ConaryStateFromFile("CONARY").getSourceState()
+    state = ConaryStateFromFile("CONARY", repos).getSourceState()
     curVersion = state.getVersion()
     branch = state.getBranch()
     troveName = state.getName()
@@ -527,9 +551,13 @@ def annotate(repos, filename):
             break
 
     if not found:
-        log.error("%s is not a member of this source trove", pathId)
+        log.error("%s is not a member of this source trove", filename)
         return
-    
+
+    if not state.fileIsConfig(pathId):
+        log.error("%s is not a text file", filename)
+        return
+
     # finalLines contains the current version of the file and the 
     # annotated information about its creation
     finalLines = []
@@ -757,7 +785,7 @@ def rdiff(repos, buildLabel, troveName, oldVersion, newVersion):
     _showChangeSet(repos, cs, old, new)
 
 def diff(repos, versionStr = None):
-    state = ConaryStateFromFile("CONARY").getSourceState()
+    state = ConaryStateFromFile("CONARY", repos).getSourceState()
 
     if state.getVersion() == versions.NewVersion():
 	log.error("no versions have been committed")
@@ -867,7 +895,7 @@ def _showChangeSet(repos, changeSet, oldTrove, newTrove):
 def updateSrc(repos, versionStr = None, callback = None):
     if not callback:
         callback = CheckinCallback()
-    conaryState = ConaryStateFromFile("CONARY")
+    conaryState = ConaryStateFromFile("CONARY", repos)
     state = conaryState.getSourceState()
     pkgName = state.getName()
     baseVersion = state.getVersion()
@@ -957,7 +985,7 @@ def merge(repos, versionSpec=None, callback=None):
     # merges the head of the current shadow with the head of the branch
     # it shadowed from
     try:
-        conaryState = ConaryStateFromFile("CONARY")
+        conaryState = ConaryStateFromFile("CONARY", repos)
         state = conaryState.getSourceState()
     except OSError:
         return
@@ -1054,27 +1082,29 @@ def merge(repos, versionSpec=None, callback=None):
     conaryState.setSourceState(newState)
     conaryState.write("CONARY")
 
-def addFiles(fileList, ignoreExisting=False):
+def addFiles(fileList, ignoreExisting=False, text=False, binary=False, 
+             repos=None, defaultToText=True):
+    assert(not text or not binary)
     try:
-        conaryState = ConaryStateFromFile("CONARY")
+        conaryState = ConaryStateFromFile("CONARY", repos=repos)
         state = conaryState.getSourceState()
     except OSError:
         return
 
-    for file in fileList:
-        if file == "." or file == "..":
-            log.error("cannot add special directory %s to trove" % file)
+    for filename in fileList:
+        if filename == "." or filename == "..":
+            log.error("cannot add special directory %s to trove" % filename)
             continue
 
 	try:
-	    os.lstat(file)
+	    os.lstat(filename)
 	except OSError:
-	    log.error("file %s does not exist", file)
+	    log.error("file %s does not exist", filename)
 	    continue
 
 	found = False
 	for (pathId, path, fileId, version) in state.iterFileList():
-	    if path == file:
+	    if path == filename:
                 if not ignoreExisting:
                     log.error("file %s is already part of this source component" % path)
 		found = True
@@ -1082,22 +1112,55 @@ def addFiles(fileList, ignoreExisting=False):
 	if found: 
 	    continue
 
-	fileMagic = magic.magic(file)
+	fileMagic = magic.magic(filename)
 	if fileMagic and fileMagic.name == "changeset":
 	    log.error("do not add changesets to source components")
 	    continue
-	elif file == "CONARY":
+	elif filename == "CONARY":
 	    log.error("refusing to add CONARY to the list of managed sources")
 	    continue
 
 	pathId = makePathId()
 
-	state.addFile(pathId, file, versions.NewVersion(), "0" * 20)
+        sb = os.lstat(filename)
+
+        if not(stat.S_ISREG(sb.st_mode)) or binary or nonCfgRe.match(filename):
+            isConfig = False
+        elif text or cfgRe.match(filename) or (
+            fileMagic and isinstance(fileMagic, magic.script)):
+            isConfig = True
+        elif defaultToText:
+            # this option should most likely not be used for modern clients
+            # that are adding files, however, for backwards compatibility
+            # purposes we need to allow this setting to be passed in.
+            log.warning('unknown file type for %s - setting to text mode.' % filename)
+            isConfig = True
+        else:
+            log.error("cannot determine if %s is binary or text. please add "
+                      "--binary or --text and rerun cvc add for %s",
+                      filename, filename)
+            continue
+
+        if isConfig:
+            sb = os.stat(filename)
+            if sb.st_size > 0 and stat.S_ISREG(sb.st_mode):
+                fd = os.open(filename, os.O_RDONLY)
+                os.lseek(fd, -1, 2)
+                term = os.read(fd, 1)
+                if term != '\n':
+                    log.error("%s does not end with a trailing new line", 
+                                filename)
+
+                    os.close(fd)
+                    return
+
+	state.addFile(pathId, filename, versions.NewVersion(), "0" * 20,
+                      isConfig = isConfig)
 
     conaryState.write("CONARY")
 
-def removeFile(file):
-    conaryState = ConaryStateFromFile("CONARY")
+def removeFile(file, repos=None):
+    conaryState = ConaryStateFromFile("CONARY", repos)
     if not conaryState.getSourceState().removeFilePath(file):
 	log.error("file %s is not under management" % file)
         return 1
@@ -1188,14 +1251,14 @@ def newTrove(repos, cfg, name, dir = None, template = None):
         try:
             os.chdir(dir)
             pathId = makePathId()
-            sourceState.addFile(pathId, recipeFile, versions.NewVersion(), "0" * 20)
+            sourceState.addFile(pathId, recipeFile, versions.NewVersion(), "0" * 20, isConfig = True)
         finally:
             os.chdir(cwd)
 
     conaryState.write(os.path.join(dir, "CONARY"))
 
-def renameFile(oldName, newName):
-    conaryState = ConaryStateFromFile("CONARY")
+def renameFile(oldName, newName, repos=None):
+    conaryState = ConaryStateFromFile("CONARY", repos=repos)
     sourceState = conaryState.getSourceState()
 
     if not os.path.exists(oldName):
@@ -1213,14 +1276,15 @@ def renameFile(oldName, newName):
     for (pathId, path, fileId, version) in sourceState.iterFileList():
 	if path == oldName:
 	    os.rename(oldName, newName)
-	    sourceState.addFile(pathId, newName, version, fileId)
+	    sourceState.addFile(pathId, newName, version, fileId,
+                                isConfig = sourceState.fileIsConfig(pathId))
 	    conaryState.write("CONARY")
 	    return
     
     log.error("file %s is not under management" % oldName)
 
 def showLog(repos, branch = None):
-    state = ConaryStateFromFile("CONARY").getSourceState()
+    state = ConaryStateFromFile("CONARY", repos).getSourceState()
     if not branch:
 	branch = state.getBranch()
     else:
@@ -1319,7 +1383,7 @@ def fullLabel(defaultLabel, version, versionStr):
     else:
 	return version.branch()
 
-def setContext(cfg, contextName=None, ask=False):
+def setContext(cfg, contextName=None, ask=False, repos=None):
     def _ask(txt, *args):
         if len(args) == 0:
             default = defaultText = None
@@ -1344,7 +1408,7 @@ def setContext(cfg, contextName=None, ask=False):
         return
 
     if os.path.exists('CONARY'):
-        state = ConaryStateFromFile('CONARY')
+        state = ConaryStateFromFile('CONARY', repos)
     else:
         state = ConaryState()
 
@@ -1397,3 +1461,26 @@ def setContext(cfg, contextName=None, ask=False):
 
     state.setContext(contextName)
     state.write('CONARY')
+
+def setFileFlags(repos, paths, text = False, binary = False):
+    state = ConaryStateFromFile('CONARY', repos)
+    sourceState = state.getSourceState()
+
+    assert(not text or not binary)
+
+    if text:
+        isConfig = 1
+    elif binary:
+        isConfig = 0
+    else:
+        isConfig = None
+
+    for path in paths:
+        for (pathId, path, fileId, version) in sourceState.iterFileList():
+            if path in paths:
+                if isConfig is not None:
+                    sourceState.fileIsConfig(pathId, set = isConfig)
+
+    state.write('CONARY')
+    
+
