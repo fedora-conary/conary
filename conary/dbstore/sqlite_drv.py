@@ -36,39 +36,15 @@ def _timestamp():
 class Cursor(BaseCursor):
     driver = "sqlite"
 
-    # this is basically the BaseCursor's execute with special handling
-    # for start_transaction
-    def _execute(self, sql, *args, **kw):
-        assert(len(sql) > 0)
-        assert(self.dbh and self._cursor)
-        self.description = None
-        # force dbi compliance here. we prefer args over the kw
-        if len(args) == 0:
-            return self._cursor.execute(sql, **kw)
-        if len(args) == 1 and isinstance(args[0], dict):
-            kw.update(args[0])
-            return self._cursor.execute(sql, **kw)
-        # special case the start_transaction parameter
-        st = kw.pop("start_transaction", True)
-        if len(kw):
-            raise sqlerrors.CursorError(
-                "Do not pass both positional and named bind arguments",
-                *args, **kw)
-        if len(args) == 1:
-            return self._cursor.execute(sql, args[0], start_transaction = st)
-        kw["start_transaction"] = st
-        return self._cursor.execute(sql, *args, **kw)
-
     # sqlite is smart - this is only a noop
     def binary(self, s):
         return s
 
-    def execute(self, sql, *params, **kw):
+    # capture and translate exceptions
+    def _tryExecute(self, func, *params, **kw):
         try:
-            ret = self._execute(sql, *params, **kw)
+            ret = func(*params, **kw)
         except sqlite3.ProgrammingError, e:
-            #if self.dbh.inTransaction:
-            #    self.dbh.rollback()
             if e.args[0].startswith("column") and e.args[0].endswith("not unique"):
                 raise sqlerrors.ColumnNotUnique(e)
             elif e.args[0] == 'attempt to write a readonly database':
@@ -80,39 +56,35 @@ class Cursor(BaseCursor):
             if e.args[0].startswith("no such table"):
                 raise sqlerrors.InvalidTable(str(e))
             raise sqlerrors.CursorError(e.args[0], e)
-        else:
-            if ret == self._cursor:
-                return self
-            return ret
-
-    # deprecated - this breaks programs by commiting stuff before its due time
-    def executeWithCommit(self, sql, *params, **kw):
-        try:
-            inAutoTrans = False
-            if not self.dbh.inTransaction:
-                inAutoTrans = True
-            ret = self._execute(sql, *params, **kw)
-            # commit any transactions which were opened automatically
-            # by the sqlite3 bindings and left hanging:
-            if inAutoTrans and self.dbh.inTransaction:
-                self.dbh.commit()
-        except sqlite3.ProgrammingError, e:
-            if inAutoTrans and self.dbh.inTransaction:
-                self.dbh.rollback()
-            if e.args[0].startswith("column") and e.args[0].endswith("not unique"):
-                raise sqlerrors.ColumnNotUnique(e)
-            raise sqlerrors.CursorError(e)
-        except:
-            if inAutoTrans and self.dbh.inTransaction:
-                self.dbh.rollback()
-            raise
         return ret
+
+    def execute(self, sql, *args, **kw):
+        self._executeCheck(sql)
+        args, kw = self._executeArgs(args, kw)
+        if len(args) == 0:
+            ret = self._tryExecute(self._cursor.execute, sql, **kw)
+        else:
+            st = kw.pop("start_transaction", True)
+            if len(kw):
+                raise sqlerrors.CursorError(
+                    "Do not pass both positional and named bind arguments",
+                    *args, **kw)
+            kw["start_transaction"] = st
+            ret = self._tryExecute(self._cursor.execute, sql, *args, **kw)
+        if ret == self._cursor:
+            return self
+        return ret
+
+    # we need to wrap this one through the exception translation layer
+    def executemany(self, sql, paramList, **kw):
+        self._executeCheck(sql)
+        return self._tryExecute(self._cursor.executemany, sql, paramList, **kw)
 
     def compile(self, sql):
         return self._cursor.compile(sql)
 
     def execstmt(self, stmt, *args):
-        return self._cursor.execstmt(stmt, *args)
+        return self._tryExecute(self._cursor.execstmt, stmt, *args)
 
 # Sequence implementation for sqlite
 class Sequence(BaseSequence):

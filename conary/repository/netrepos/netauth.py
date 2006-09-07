@@ -240,7 +240,7 @@ class NetworkAuthorization:
             cacheTimeout = cacheTimeout, entCheckUrl = entCheckURL)
 
     def getAuthGroups(self, cu, authToken):
-        self.log(3, authToken[0], authToken[2], authToken[3])
+        self.log(4, authToken[0], authToken[2], authToken[3])
         # Find what group this user belongs to
         # anonymous users should come through as anonymous, not None
         assert(authToken[0])
@@ -287,7 +287,7 @@ class NetworkAuthorization:
                     UserGroups JOIN Permissions USING (userGroupId)
                     WHERE
                         userGroupId IN (%s) AND
-                        (canMirror =1 OR admin = 1)
+                        (canMirror = 1 OR admin = 1)
                 """ % ",".join("%d" % x for x in groupIds))
             if not cu.fetchall():
                 return False
@@ -340,29 +340,18 @@ class NetworkAuthorization:
             return True
         return False
 
-    def addAcl(self, userGroup, trovePattern, label, write = False, 
+    def addAcl(self, userGroup, trovePattern, label, write = False,
                capped = False, admin = False, remove = False):
         self.log(3, userGroup, trovePattern, label, write, admin, remove)
         cu = self.db.cursor()
 
-        if write:
-            write = 1
-        else:
-            write = 0
-
+        # these need to show up as 0/1 regardless of what we pass in
+        write = int(bool(write))
+        admin = int(bool(admin))
+        remove = int(bool(remove))
+        capped = int(bool(capped))
         assert(not capped)
-
         capId = 0
-
-        if admin:
-            admin = 1
-        else:
-            admin = 0
-
-        if remove:
-            remove = 1
-        else:
-            remove = 0
 
         # XXX This functionality is available in the TroveStore class
         #     refactor so that the code is not in two places
@@ -394,11 +383,9 @@ class NetworkAuthorization:
         try:
             cu.execute("""
             INSERT INTO Permissions
-                (userGroupId, labelId, itemId, canWrite, capId, admin,
-                 canRemove)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            """, (userGroupId, labelId, itemId, write, capId, admin, 
-                  remove))
+            (userGroupId, labelId, itemId, canWrite, capId, admin, canRemove)
+            VALUES (?, ?, ?, ?, ?, ?, ?)""", (
+                userGroupId, labelId, itemId, write, capId, admin, remove))
         except sqlerrors.ColumnNotUnique:
             self.db.rollback()
             raise errors.PermissionAlreadyExists, "labelId: '%s', itemId: '%s'" % (labelId, itemId)
@@ -412,24 +399,14 @@ class NetworkAuthorization:
 
         userGroupId = self._getGroupIdByName(userGroup)
 
-        if write:
-            write = 1
-        else:
-            write = 0
+        # these need to show up as 0/1 regardless of what we pass in
+        write = int(bool(write))
+        admin = int(bool(admin))
+        canRemove = int(bool(canRemove))
 
+        capped = int(bool(capped))
         assert(not capped)
-
         capId = 0
-
-        if admin:
-            admin = 1
-        else:
-            admin = 0
-
-        if canRemove:
-            canRemove = 1
-        else:
-            canRemove = 0
 
         try:
             cu.execute("""
@@ -492,8 +469,9 @@ class NetworkAuthorization:
     def setMirror(self, userGroup, canMirror):
         self.log(3, userGroup, canMirror)
         cu = self.db.transaction()
+        canMirror = int(bool(canMirror))
         cu.execute("update userGroups set canMirror=? where userGroup=?",
-                   canMirror, userGroup)
+                   (canMirror, userGroup))
         self.db.commit()
 
     def addUserByMD5(self, user, salt, password):
