@@ -12,6 +12,7 @@
 # full details.
 
 import itertools
+import re
 import os
 import traceback
 import sys
@@ -26,6 +27,51 @@ from conary.local import database
 from conary.repository import changeset, trovesource
 from conary.repository.errors import TroveMissing
 from conary import trove, versions
+
+class CriticalUpdateInfo(object):
+    """
+        Defines update settings regarding critical jobs - those required
+        to go first and those required to go last.
+    """
+
+    criticalTroveRegexps = []
+    finalTroveRegexps = []
+
+    def _match(self, regexpList, jobList):
+        l = []
+        for job in jobList:
+            for regexp in regexpList:
+                if re.match(regexp, job[0]):
+                    l.append(job)
+        return l
+
+    def findCriticalJobs(self, jobList):
+        return self._match(self.criticalTroveRegexps, jobList)
+
+    def setFinalTroveRegexps(self, regexpList):
+        self.finalTroveRegexps = regexpList
+
+    def setCriticalTroveRegexps(self, regexpList):
+        self.criticalTroveRegexps = regexpList
+
+    def findFinalJobs(self, jobList):
+        return self._match(self.finalTroveRegexps, jobList)
+
+    def addChangeSet(self, cs):
+        """ Store a changeset usable by the update determination code """
+        self.changeSetList.append(cs)
+
+    def iterChangeSets(self):
+        return iter(self.changeSetList)
+
+    def isCriticalOnlyUpdate(self):
+        """ Returns true if this job should just apply critical updates """
+        return self.criticalOnly
+
+    def __init__(self, criticalOnly=False):
+        self.criticalOnly = criticalOnly
+        self.changeSetList = []
+
 
 class UpdateChangeSet(changeset.ReadOnlyChangeSet):
 
@@ -46,12 +92,14 @@ class ClientUpdate:
 
     def _resolveDependencies(self, uJob, jobSet, split = False,
                              resolveDeps = True, useRepos = True,
-                             resolveSource = None, keepRequired = True):
+                             resolveSource = None, keepRequired = True,
+                             criticalUpdateInfo = None):
         return self.resolver.resolveDependencies(uJob, jobSet, split=split,
-                                                 resolveDeps=resolveDeps,
-                                                 useRepos=useRepos,
-                                                 resolveSource=resolveSource,
-                                                 keepRequired = keepRequired)
+                                     resolveDeps=resolveDeps,
+                                     useRepos=useRepos,
+                                     resolveSource=resolveSource,
+                                     keepRequired = keepRequired,
+                                     criticalUpdateInfo = criticalUpdateInfo)
 
     def _processRedirects(self, csSource, uJob, jobSet, transitiveClosure,
                           recurse):
@@ -535,7 +583,8 @@ class ClientUpdate:
 
         # The job between referencedTroves and installedTroves tells us
         # a lot about what the user has done to his system. 
-        localUpdates = self.getPrimaryLocalUpdates(names)
+        primaryLocalUpdates = self.getPrimaryLocalUpdates(names)
+        localUpdates = list(primaryLocalUpdates)
         if localUpdates:
             localUpdates += self.getChildLocalUpdates(uJob.getSearchSource(),
                                                       localUpdates,
@@ -558,7 +607,8 @@ class ClientUpdate:
                  dict( ((job[0], job[1][0], job[1][1]), job[2]) for
                         job in localUpdates if job[1][0] is not None and
                                                job[2][0] is not None)
-
+        primaryLocalUpdates = set((job[0], job[2][0], job[2][1]) 
+                                  for job in primaryLocalUpdates)
 
         # Troves which were locally updated to version on the same branch
         # no longer need to be listed as referenced. The trove which replaced
@@ -727,6 +777,8 @@ followLocalChanges: %s
                     # but count it as 'added' for the purposes of
                     # whether or not to recurse
                     jobAdded = True
+                    job = (newInfo[0], (newInfo[1], newInfo[2]),
+                                       (newInfo[1], newInfo[2]), False)
                     log.lowlevel('SKIP: already installed')
                     break
                 elif newInfo in ineligible:
@@ -881,11 +933,11 @@ followLocalChanges: %s
                             # affinity concerns.  If the user has made
                             # a local change that would make this new 
                             # install a downgrade, skip it.
-                            if not isPrimary:
-                                if replacedInfo in sameBranchLocalUpdates:
-                                    notInstalledFlavor = sameBranchLocalUpdates[replacedInfo][1]
-                                if (newInfo[1] < replaced[0]
-                                    and replacedInfo in sameBranchLocalUpdates):
+                            if (not isPrimary
+                                and newInfo[1] < replaced[0]
+                                and replacedInfo in sameBranchLocalUpdates
+                                and (replacedInfo in primaryLocalUpdates 
+                                     or not parentUpdated)):
                                     log.lowlevel('SKIP: avoiding downgrade')
 
                                     # don't let this trove be erased, pretend
@@ -1349,7 +1401,7 @@ conary erase '%s=%s[%s]'
                 if job[1][0] is None:
                     oldTrv = None
                 else:
-                    oldTrv = db.getTroves((job[0], job[1][0], job[1][1]),
+                    oldTrv = db.getTroves([(job[0], job[1][0], job[1][1])],
                                      withFiles = False, pristine = False)[0]
                     if oldTrv is None:
                         # XXX batching these would be much more efficient
@@ -2172,7 +2224,8 @@ conary erase '%s=%s[%s]'
                         resolveRepos = True, syncChildren = False,
                         updateOnly = False, resolveGroupList=None,
                         installMissing = False, removeNotByDefault = False,
-                        keepRequired = False, migrate = False):
+                        keepRequired = False, migrate = False,
+                        criticalUpdateInfo=None):
         """
         Creates a changeset to update the system based on a set of trove update
         and erase operations. If self.cfg.autoResolve is set, dependencies
@@ -2231,6 +2284,9 @@ conary erase '%s=%s[%s]'
         update installed troves.
         @param installMissing: If True, always install missing troves
         @param removeNotByDefault: remove child troves that are not by default.
+        @param criticalUpdateInfo: Settings and data needed for critical
+        updates
+        @type: CriticalUpdateInfo instance
         @rtype: tuple
         """
         # FIXME: this API has gotten far out of hand.  Refactor when 
@@ -2242,7 +2298,13 @@ conary erase '%s=%s[%s]'
         assert(split)
         callback.preparingChangeSet()
 
+        if criticalUpdateInfo is None:
+            criticalUpdateInfo = CriticalUpdateInfo()
+
         uJob = database.UpdateJob(self.db)
+
+        for changeSet in criticalUpdateInfo.iterChangeSets():
+            uJob.getTroveSource().addChangeSet(changeSet)
 
         forceJobClosure = False
         resolveSource = None
@@ -2327,13 +2389,14 @@ conary erase '%s=%s[%s]'
 
         # this updates jobSet w/ resolutions, and splitJob reflects the
         # jobs in the updated jobSet
-        (depList, suggMap, cannotResolve, splitJob, keepList) = \
-            self._resolveDependencies(uJob, jobSet, split = split,
+        (depList, suggMap, cannotResolve, splitJob, keepList, 
+         criticalUpdates) = \
+        info = self._resolveDependencies(uJob, jobSet, split = split,
                                       resolveDeps = resolveDeps,
                                       useRepos = resolveRepos,
                                       resolveSource = resolveSource,
-                                      keepRequired = keepRequired)
-
+                                      keepRequired = keepRequired,
+                                      criticalUpdateInfo = criticalUpdateInfo)
         if keepList:
             callback.done()
             for job, depSet, reqInfo in sorted(keepList):
@@ -2341,11 +2404,14 @@ conary erase '%s=%s[%s]'
                             job[0], reqInfo[0])
 
         if depList:
-            raise DepResolutionFailure(depList, self.cfg)
+            raise DepResolutionFailure(self.cfg, depList, suggMap,
+                                       cannotResolve, splitJob, criticalUpdates)
         elif suggMap and not self.cfg.autoResolve:
-            raise NeededTrovesFailure(suggMap, self.cfg)
+            raise NeededTrovesFailure(self.cfg, depList, suggMap,
+                                      cannotResolve, splitJob, criticalUpdates)
         elif cannotResolve:
-            raise EraseDepFailure(cannotResolve, self.cfg)
+            raise EraseDepFailure(self.cfg, depList, suggMap,
+                                  cannotResolve, splitJob, criticalUpdates)
 
         # look for troves which look like they'll conflict (same name/branch
         # and incompatible install paths)
@@ -2374,6 +2440,13 @@ conary erase '%s=%s[%s]'
             if conflicts:
                 raise InstallPathConflicts(conflicts)
 
+        if criticalUpdates:
+            criticalJobs = [ splitJob[x] for x in criticalUpdates ]
+        else:
+            criticalJobs = []
+
+        finalCriticalJobs = []
+
         startNew = True
         newJob = []
         for jobList in splitJob:
@@ -2382,6 +2455,9 @@ conary erase '%s=%s[%s]'
                 startNew = False
                 count = 0
                 newJobIsInfo = False
+
+            isCritical = jobList in criticalJobs
+
 
             foundCollection = False
 
@@ -2421,13 +2497,20 @@ conary erase '%s=%s[%s]'
                 newJobIsInfo = isInfo
                 newJob += jobList
 
-            if (foundCollection or 
+            if (foundCollection or isCritical or
                 (updateThreshold and (count >= updateThreshold))): 
+                if isCritical:
+                    finalCriticalJobs.append(len(uJob.getJobs()))
                 uJob.addJob(newJob)
                 startNew = True
 
         if not startNew:
+            # we don't care if the final job is critical - there 
+            # will be no need for a restart in that case.
+            #if isCritical:
+            #    finalCriticalJobs.append(len(uJob.getJobs()))
             uJob.addJob(newJob)
+        uJob.setCriticalJobs(finalCriticalJobs)
 
         return (uJob, suggMap)
 
@@ -2667,14 +2750,49 @@ conary unpin '%s=%s[%s]'
 conary erase '%s=%s[%s]'
 """ % ((name, name) + self.pinnedTrove + self.pinnedTrove)
 
-            
-
 class NoNewTrovesError(UpdateError):
     def __str__(self):
         return "no new troves were found"
 
 class DependencyFailure(UpdateError):
     """ Base class for dependency failures """
+    def __init__(self, cfg, depList, suggMap, cannotResolve,
+                 jobSets, criticalUpdates):
+        self.cfg = cfg
+        self.depList = depList
+        self.suggMap = suggMap
+        self.cannotResolve = cannotResolve
+        self.jobSets = jobSets
+        self.criticalUpdates = criticalUpdates
+        self.errorMessage = self._initErrorMessage()
+
+    def __str__(self):
+        return self.errorMessage
+
+    def setErrorMessage(self, errorMessage):
+        self.errorMessage = errorMessage
+
+    def getErrorMessage(self):
+        return self.errorMessage
+
+    def hasCriticalUpdates(self):
+        return bool(self.criticalUpdates)
+
+    def getCriticalUpdates(self):
+        return self.criticalUpdates
+
+    def getSuggestions(self):
+        return self.suggMap
+
+    def getDepList(self):
+        return self.depList
+
+    def getCannotResolve(self):
+        return self.cannotResolve
+
+    def getJobSets(self):
+        return self.jobSets
+
     def formatNVF(self, troveTup, showVersion=True):
         if not self.cfg:
             return '%s=%s' % (troveTup[0], troveTup[1].trailingRevision())
@@ -2700,16 +2818,13 @@ class DependencyFailure(UpdateError):
 
 class DepResolutionFailure(DependencyFailure):
     """ Unable to resolve dependencies """
-    def __init__(self, failures, cfg=None):
-        self.failures = failures
-        self.cfg = cfg
 
     def getFailures(self):
-        return self.failures
+        return self.depList
 
-    def __str__(self):
+    def _initErrorMessage(self):
         res = ["The following dependencies could not be resolved:"]
-        for (troveInfo, depSet) in self.failures:
+        for (troveInfo, depSet) in self.depList:
             res.append("    %s:\n\t%s" %  \
                        (self.formatNVF(troveInfo),
                         "\n\t".join(str(depSet).split("\n"))))
@@ -2717,13 +2832,14 @@ class DepResolutionFailure(DependencyFailure):
 
 class EraseDepFailure(DepResolutionFailure):
     """ Unable to resolve dependencies due to erase """
-    def getFailures(self):
-        return self.failures
 
-    def __str__(self):
+    def getFailures(self):
+        return self.cannotResolve
+
+    def _initErrorMessage(self):
         res = []
         res.append("Troves being removed create unresolved dependencies:")
-        for (reqBy, depSet, providedBy) in self.failures:
+        for (reqBy, depSet, providedBy) in self.getFailures():
             res.append("    %s requires %s:\n\t%s" %
                        (self.formatNVF(reqBy),
                         ' or '.join(self.formatNVF(x) for x in providedBy),
@@ -2732,14 +2848,8 @@ class EraseDepFailure(DepResolutionFailure):
 
 class NeededTrovesFailure(DependencyFailure):
     """ Dependencies needed and resolve wasn't used """
-    def __init__(self, suggMap, cfg=None):
-         self.suggMap = suggMap
-         self.cfg = cfg
 
-    def getSuggestions(self):
-        return self.suggMap
-
-    def __str__(self):
+    def _initErrorMessage(self):
         res = []
         requiredBy = {}
         for (reqInfo, suggList) in self.suggMap.iteritems():

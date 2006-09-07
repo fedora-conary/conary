@@ -746,8 +746,12 @@ class NetworkAuthorization:
         if not self.check(authToken, admin = True):
             raise errors.InsufficientPermission
 
-        entGroupId = cu.execute("SELECT entGroupId FROM entitlementGroups "
-                                "WHERE entGroup = ?", entGroup).next()[0]
+        try:
+            entGroupId = cu.execute("SELECT entGroupId FROM entitlementGroups "
+                                    "WHERE entGroup = ?", entGroup).next()[0]
+        except StopIteration:
+            raise errors.UnknownEntitlementGroup
+
         cu.execute("DELETE FROM EntitlementAccessMap WHERE entGroupId=?",
                    entGroupId)
         cu.execute("DELETE FROM Entitlements WHERE entGroupId=?",
@@ -854,6 +858,21 @@ class NetworkAuthorization:
         except:
             return None
 
+    def _getIds(self, cu, entGroup, userGroup):
+        cu.execute("SELECT entGroupId FROM entitlementGroups "
+                   "WHERE entGroup = ?", entGroup)
+        try:
+            entGroupId = cu.next()[0]
+        except StopIteration:
+            raise errors.UnknownEntitlementGroup
+        cu.execute("SELECT userGroupId FROM userGroups "
+                   "WHERE userGroup = ?", userGroup)
+        try:
+            userGroupId = cu.next()[0]
+        except StopIteration:
+            raise errors.GroupNotFound
+        return entGroupId, userGroupId
+
     def addEntitlementOwnerAcl(self, authToken, userGroup, entGroup):
         """
         Gives the userGroup ownership permission for the entGroup entitlement
@@ -863,10 +882,7 @@ class NetworkAuthorization:
             raise errors.InsufficientPermission
         self.log(2, "userGroup=%s entGroup=%s" % (userGroup, entGroup))
         cu = self.db.cursor()
-        entGroupId = cu.execute("SELECT entGroupId FROM entitlementGroups "
-                                "WHERE entGroup = ?", entGroup).next()[0]
-        userGroupId = cu.execute("SELECT userGroupId FROM userGroups "
-                                 "WHERE userGroup = ?", userGroup).next()[0]
+        entGroupId, userGroupId = self._getIds(cu, entGroup, userGroup)
         cu.execute("INSERT INTO EntitlementOwners (entGroupId, ownerGroupId) "
                    "VALUES (?, ?)",
                    (entGroupId, userGroupId))
@@ -877,10 +893,7 @@ class NetworkAuthorization:
             raise errors.InsufficientPermission
         self.log(2, "userGroup=%s entGroup=%s" % (userGroup, entGroup))
         cu = self.db.cursor()
-        entGroupId = cu.execute("SELECT entGroupId FROM entitlementGroups "
-                                "WHERE entGroup = ?", entGroup).next()[0]
-        userGroupId = cu.execute("SELECT userGroupId FROM userGroups "
-                                 "WHERE userGroup = ?", userGroup).next()[0]
+        entGroupId, userGroupId = self._getIds(cu, entGroup, userGroup)
         cu.execute("DELETE FROM EntitlementOwners WHERE "
                    "entGroupId=? AND ownerGroupId=?",
                    entGroupId, userGroupId)

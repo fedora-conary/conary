@@ -9,10 +9,28 @@ Changes in @NEW@:
     * The conary repository client now retries when a DNS lookup of a
       server hostname fails with a "temporary failure in name
       resolution" error.
+    * "cvc annotate" no longer displays pathIds in the error message for the
+      specified path not being included in the source trove
+    * "cvc annotate" now gives an error when it is run on a binary file
+    * Conary now restarts itself after updating critical conary components
+      (currently, that consists of conary).  Hooks have been added for
+      other components using the conary api to specify other troves as
+      critical.  Also, hooks have been added for other components to specify
+      a trove to update last. (CNY-805, CNY-808)
 
   o Bug Fixes:
-    * Conary commands do not perform an unnecessary database checks on the 
+    * Conary commands do not perform an unnecessary database checks on the
       local system. (CNY-571)
+    * Fixed a bug that could allow conary to consider a noop update as an
+      install (and could result in tracebacks in some situations). (CNY-845)
+    * If you've made a local modification to a package and then try to
+      downgrade it later, conary will downgrade included components as well.
+      (CNY-805)
+    * The error message produced by "cvc cook" when a source component
+      exists on multiple branches with the same trailing label has
+      been improved. (CNY-714)
+    * Error handling when manipulating entitlements via XML-RPC has
+      been improved. (CNY-692)
 
 Changes in 1.1.3:
   o System Update Changes:

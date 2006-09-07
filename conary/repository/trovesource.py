@@ -98,7 +98,8 @@ class AbstractTroveSource:
     def findTroves(self, labelPath, troves, defaultFlavor=None, 
                    acrossLabels=True, acrossFlavors=True, 
                    affinityDatabase=None, allowMissing=False, 
-                   bestFlavor=None, getLeaves=None, troveTypes=TROVE_QUERY_PRESENT):
+                   bestFlavor=None, getLeaves=None, 
+                   troveTypes=TROVE_QUERY_PRESENT):
 
         if bestFlavor is None:
             bestFlavor = self._bestFlavor
@@ -727,6 +728,9 @@ class ChangesetFilesTroveSource(SearchableTroveSource):
         else:
             info = (name, oldVer, oldFla)
             return self.erasuresMap[info]
+
+    def iterChangeSets(self):
+        return iter(self.csList)
 
     def resolveDependencies(self, label, depList):
         assert(self.storeDeps)

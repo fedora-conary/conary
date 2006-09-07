@@ -551,9 +551,13 @@ def annotate(repos, filename):
             break
 
     if not found:
-        log.error("%s is not a member of this source trove", pathId)
+        log.error("%s is not a member of this source trove", filename)
         return
-    
+
+    if not state.fileIsConfig(pathId):
+        log.error("%s is not a text file", filename)
+        return
+
     # finalLines contains the current version of the file and the 
     # annotated information about its creation
     finalLines = []
@@ -1124,7 +1128,7 @@ def markRemoved(cfg, repos, troveSpec):
     repos.commitChangeSet(cs)
 
 def addFiles(fileList, ignoreExisting=False, text=False, binary=False, 
-             repos=None):
+             repos=None, defaultToText=True):
     assert(not text or not binary)
     try:
         conaryState = ConaryStateFromFile("CONARY", repos=repos)
@@ -1170,6 +1174,19 @@ def addFiles(fileList, ignoreExisting=False, text=False, binary=False,
         elif text or cfgRe.match(filename) or (
             fileMagic and isinstance(fileMagic, magic.script)):
             isConfig = True
+        elif defaultToText:
+            # this option should most likely not be used for modern clients
+            # that are adding files, however, for backwards compatibility
+            # purposes we need to allow this setting to be passed in.
+            log.warning('unknown file type for %s - setting to text mode.' % filename)
+            isConfig = True
+        else:
+            log.error("cannot determine if %s is binary or text. please add "
+                      "--binary or --text and rerun cvc add for %s",
+                      filename, filename)
+            continue
+
+        if isConfig:
             sb = os.stat(filename)
             if sb.st_size > 0 and stat.S_ISREG(sb.st_mode):
                 fd = os.open(filename, os.O_RDONLY)
@@ -1181,11 +1198,6 @@ def addFiles(fileList, ignoreExisting=False, text=False, binary=False,
 
                     os.close(fd)
                     return
-        else:
-            log.error("cannot determine if %s is binary or text. please add "
-                      "--binary or --text and rerun cvc add for %s",
-                      filename, filename)
-            continue
 
 	state.addFile(pathId, filename, versions.NewVersion(), "0" * 20,
                       isConfig = isConfig)
