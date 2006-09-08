@@ -34,7 +34,7 @@ def displayCloneJob(cs):
 
 def CloneTrove(cfg, targetBranch, troveSpecList, updateBuildInfo = True,
                info = False, cloneSources = False, message = None, 
-               test = False, fullRecurse = False):
+               test = False, fullRecurse = False, forceConflicts = False):
     client = ConaryClient(cfg)
     repos = client.getRepos()
 
@@ -70,6 +70,20 @@ def CloneTrove(cfg, targetBranch, troveSpecList, updateBuildInfo = True,
     if cfg.interactive or info:
         print 'The following clones will be created:'
         displayCloneJob(cs)
+
+    labelConflicts = client._checkChangeSetForLabelConflicts(cs)
+    if labelConflicts and not forceConflicts:
+        print
+        print 'WARNING: performing this clone will create label conflicts:'
+        for troveTups in labelConflicts:
+            print
+            print '%s=%s[%s]' % (troveTups[0])
+            print '  conflicts with %s=%s[%s]' % (troveTups[1])
+
+        if not cfg.interactive and not info:
+            print
+            print 'error: interactive mode is required for when creating label conflicts'
+            return
 
     if info:
         return

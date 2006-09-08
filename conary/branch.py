@@ -56,7 +56,7 @@ def displayBranchJob(cs, shadow=False):
 
 def branch(repos, cfg, newLabel, troveSpecs, makeShadow = False,
            sourceOnly = False, binaryOnly = False, info = False,
-           forceBinary = False):
+           forceBinary = False, forceConflicts = False):
     branchType = _getBranchType(binaryOnly, sourceOnly)
 
     client = conaryclient.ConaryClient(cfg)
@@ -98,6 +98,20 @@ def branch(repos, cfg, newLabel, troveSpecs, makeShadow = False,
     if cfg.interactive or info:
         print 'The following %s will be created:' % branchOps
         displayBranchJob(cs, shadow=makeShadow)
+
+    labelConflicts = client._checkChangeSetForLabelConflicts(cs)
+    if labelConflicts and not forceConflicts:
+        print
+        print 'WARNING: performing this %s will create label conflicts:' % branchOps
+        for troveTups in labelConflicts:
+            print 
+            print '%s=%s[%s]' % (troveTups[0])
+            print '  conflicts with %s=%s[%s]' % (troveTups[1])
+
+        if not cfg.interactive and not info:
+            print
+            print 'error: Interactive mode is required when creating label conflicts'
+            return
 
     if cfg.interactive:
         print
