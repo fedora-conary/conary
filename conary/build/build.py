@@ -1010,7 +1010,7 @@ class PythonSetup(BuildCommand):
     SYNOPSIS
     ========
 
-    C{r.PythonSetup(I{srcname}, I{destname})}
+    C{r.PythonSetup([I{setupfile}])}
 
     DESCRIPTION
     ===========
@@ -1067,7 +1067,10 @@ class PythonSetup(BuildCommand):
     """
     template = (
         '%%(cdcmd)s'
-        '%%(pythonsetup)s'
+        ' CFLAGS="%%(cflags)s" CXXFLAGS="%%(cflags)s %%(cxxflags)s"'
+        ' CPPFLAGS="%%(cppflags)s"'
+        ' LDFLAGS="%%(ldflags)s" CC=%%(cc)s CXX=%%(cxx)s'
+        ' %%(pythonsetup)s'
         ' %(action)s'
         ' --prefix=%%(prefix)s'
         ' %%(purelib)s'
@@ -2146,7 +2149,13 @@ class Replace(BuildAction):
         unchanged = []
         for path in paths:
             if not util.isregular(path):
-                log.warning("%s is not a regular file, not applying Replace")
+                if path.startswith(macros.destdir):
+                    path = path[len(macros.destdir):]
+                elif path.startswith(macros.builddir):
+                    # +1 takes off the leading '/', since builddir is relative
+                    path = path[len(macros.builddir)+1:]
+                log.warning("%s is not a regular file, not applying Replace",
+                            path)
                 continue
 
             fd, tmppath = tempfile.mkstemp(suffix='rep',
