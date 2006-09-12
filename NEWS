@@ -27,6 +27,17 @@ Changes in @NEW@:
     * Conary no longer tries to display the contents of autosource files
       in "cvc diff" (CNY-866)
 
+  o Build (cvc) Changes:
+    * The new "cvc refresh" command allows you to request that cvc
+      fetch new upstream versions of files referenced by URL.  Thanks
+      to Pavel Volkovitskiy for the initial implementation of this
+      feature. (CNY-743)
+    * The PythonSetup() build action has been modified to be more consistent
+      with other build actions. The "setupName" paramater has been added, which
+      can specify a command to run (defaults to "setup.py"). The first
+      argument, similar to Configure(), passes arguments to the command being
+      specified by setupName. (CNY-355)
+
   o Bug Fixes:
     * Conary commands do not perform an unnecessary database checks on the
       local system. (CNY-571)
@@ -58,6 +69,8 @@ Changes in @NEW@:
     * The PythonSetup command ignored any C compiler macros that had been
       set.  The template has been changed to use them in the same way that
       Configure() uses them; as environment variables.
+    * The warning message produced when r.Replace() refuses to modify
+      a non-regular file now includes the path, as intended.  (CNY-844)
 
   o Optimizations
     * The getFileContents and getFileVersions server side calls have

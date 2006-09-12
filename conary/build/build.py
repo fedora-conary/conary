@@ -1010,7 +1010,7 @@ class PythonSetup(BuildCommand):
     SYNOPSIS
     ========
 
-    C{r.PythonSetup([I{setupfile}])}
+    C{r.PythonSetup(I{extra args}, [I{action},] [I{purePython},] [I{allowNonPure},] [I{bootstrap},] [I{dir},] [I{rootDir},] [I{purelib},] [I{platlib},] [I{data},] )}
 
     DESCRIPTION
     ===========
@@ -1025,9 +1025,6 @@ class PythonSetup(BuildCommand):
 
     KEYWORDS
     ========
-
-    The C{r.PythonSetup()} class accepts the following keywords, with default values
-    shown in parentheses when applicable:
 
     The C{r.PythonSetup()} class accepts the following keywords, with default
     values shown in parentheses when applicable:
@@ -1058,6 +1055,8 @@ class PythonSetup(BuildCommand):
     B{purelib}, B{platlib}, and B{data} : allow overriding the choice
     of C{--purelib}, C{--platlib}, and C{--data} arguments, respectively.
 
+    B{setupName} : (setup.py) Define the name of the file to call
+
     EXAMPLES
     ========
 
@@ -1077,6 +1076,7 @@ class PythonSetup(BuildCommand):
         ' %%(platlib)s'
         ' %%(data)s'
         ' --root=%%(rootdir)s'
+        ' %%(arguments)s'
     )
     keywords = {
         'action': 'install',
@@ -1088,6 +1088,7 @@ class PythonSetup(BuildCommand):
         'allowNonPure': False,
         'dir': '',
         'rootDir': '',
+        'setupName': 'setup.py',
     }
 
     def do(self, macros):
@@ -1107,11 +1108,13 @@ class PythonSetup(BuildCommand):
             macros.rootdir = '%(destdir)s/' + self.rootDir
         else:
             macros.rootdir = '%(destdir)s'
+        
+        macros.setupName = self.setupName
 
         if self.arglist:
-            macros.setup = self.arglist[0]
+            macros.arguments = self.arglist[0]
         else:
-            macros.setup = 'setup.py'
+            macros.arguments = ''
 
         # workout arguments and multilib status:
         if self.purelib is None:
@@ -1129,12 +1132,12 @@ class PythonSetup(BuildCommand):
         macros.data = self.data
 
         # now figure out which kind of setup.py this is
-        if re.compile('(import setuptools|from setuptools import)').search(file('%s/%s' %(rundir, macros.setup)).read()):
-            macros.pythonsetup = 'python %(setup)s '
+        if re.compile('(import setuptools|from setuptools import)').search(file('%s/%s' %(rundir, self.setupName)).read()):
+            macros.pythonsetup = 'python %s ' % self.setupName
         else:
             # hack to use setuptools instead of disttools
             macros.pythonsetup = (
-                '''python -c "import setuptools;execfile('%(setup)s')"''')
+                '''python -c "import setuptools;execfile('%(setupName)s')"''')
 
         # prepare to test for multilib problems
         if macros.lib != 'lib':
@@ -2149,7 +2152,13 @@ class Replace(BuildAction):
         unchanged = []
         for path in paths:
             if not util.isregular(path):
-                log.warning("%s is not a regular file, not applying Replace")
+                if path.startswith(macros.destdir):
+                    path = path[len(macros.destdir):]
+                elif path.startswith(macros.builddir):
+                    # +1 takes off the leading '/', since builddir is relative
+                    path = path[len(macros.builddir)+1:]
+                log.warning("%s is not a regular file, not applying Replace",
+                            path)
                 continue
 
             fd, tmppath = tempfile.mkstemp(suffix='rep',
