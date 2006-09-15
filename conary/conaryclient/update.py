@@ -2661,7 +2661,12 @@ conary erase '%s=%s[%s]'
                     callback.updateDone()
             else:
                 import Queue
-                from threading import Event, Thread
+                from conary.lib.fixedthreading import Thread
+                # turn up the thread verbosity if we're in --debug=lowlevel
+                if log.getVerbosity() == log.LOWLEVEL:
+                    import threading
+                    threading._VERBOSE = True
+                from threading import Event
 
                 csQueue = Queue.Queue(5)
                 stopDownloadEvent = Event()

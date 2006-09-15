@@ -130,6 +130,9 @@ class ShimServerProxy(netclient.ServerProxy):
         self._protocol = protocol
         self._port = port
 
+    def setAbortCheck(self, *args):
+        pass
+
     def __getattr__(self, name):
         return _ShimMethod(self._server,
             self._protocol, self._port,

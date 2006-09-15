@@ -231,6 +231,9 @@ class ServerProxy(xmlrpclib.ServerProxy):
                        self.__passwordCallback, self.__usedAnonymousCallback,
                        self.__altHostCallback)
 
+    def setAbortCheck(self, check):
+        self.__transport.setAbortCheck(check)
+
     def __init__(self, url, serverName, transporter, pwCallback, usedMap):
         xmlrpclib.ServerProxy.__init__(self, url, transporter)
         self.__pwCallback = pwCallback
@@ -239,8 +242,8 @@ class ServerProxy(xmlrpclib.ServerProxy):
         self.__usedMap = usedMap
 
 class ServerCache:
-
-    def __init__(self, repMap, userMap, pwPrompt, entitlementDir, entitlements):
+    def __init__(self, repMap, userMap, pwPrompt, entitlementDir,
+                 entitlements, callback=None):
 	self.cache = {}
 	self.map = repMap
 	self.userMap = userMap
@@ -318,7 +321,7 @@ class ServerCache:
         protocol, uri = urllib.splittype(url)
         transporter = transport.Transport(https = (protocol == 'https'),
                                           entitlement = ent)
-
+        transporter.setCompress(True)
         server = ServerProxy(url, serverName, transporter, self.__getPassword,
                              usedMap = usedMap)
 
@@ -354,8 +357,6 @@ class ServerCache:
         # this is the protocol version we should use when talking
         # to this repository - the maximum we both understand
         server._protocolVersion = max(intersection)
-
-        transporter.setCompress(True)
         self.cache[serverName] = server
 
         self.cache[serverName] = server
@@ -1122,18 +1123,22 @@ class NetworkRepositoryClient(xmlshims.NetworkConvertors,
             removedList = []
 
             for serverName, job in serverJobs.iteritems():
+                server = self.c[serverName]
+                abortCheck = None
                 if callback:
                     callback.requestingChangeSet()
-                l = self.c[serverName].getChangeSet(job, recurse,
-                                                      withFiles,
-                                                      withFileContents,
-                                                      excludeAutoSource)
-                if self.c[serverName]._protocolVersion < 38:
+                server.setAbortCheck(abortCheck)
+                l = server.getChangeSet(job, recurse,
+                                        withFiles,
+                                        withFileContents,
+                                        excludeAutoSource)
+                if server._protocolVersion < 38:
                     (url, sizes, extraTroveList, extraFileList) = l
                     removedTroveList = []
                 else:
                     (url, sizes, extraTroveList,
                      extraFileList, removedTroveList) = l
+                server.setAbortCheck(None)
 
                 chgSetList += _cvtTroveList(extraTroveList)
                 filesNeeded += _cvtFileList(extraFileList)
@@ -1809,10 +1814,12 @@ class NetworkRepositoryClient(xmlshims.NetworkConvertors,
 
 
 
-        if self.c[serverName]._protocolVersion >= 38:
-            url = self.c[serverName].prepareChangeSet(jobs, mirror)
+        server = self.c[serverName]
+        url = server.prepareChangeSet()
+        if server._protocolVersion >= 38:
+            url = server.prepareChangeSet(jobs, mirror)
         else:
-            url = self.c[serverName].prepareChangeSet()
+            url = server.prepareChangeSet()
 
         self._putFile(url, fName, callback = callback)
 
@@ -1820,9 +1827,9 @@ class NetworkRepositoryClient(xmlshims.NetworkConvertors,
             # avoid sending the mirror keyword unless we have to.
             # this helps preserve backwards compatibility with old
             # servers.
-            self.c[serverName].commitChangeSet(url, mirror)
+            server.commitChangeSet(url, mirror)
         else:
-            self.c[serverName].commitChangeSet(url)
+            server.commitChangeSet(url)
 
     def _putFile(self, url, path, callback = None):
         """

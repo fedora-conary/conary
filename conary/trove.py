@@ -38,8 +38,11 @@ TROVE_VERSION=10
 # and we allow group redirects; 11 is used *only* for those situations
 TROVE_VERSION_1_1=11
 
-def troveIsCollection(str):
-    return not(":" in str or str.startswith("fileset-"))
+def troveIsCollection(troveName):
+    return not(":" in troveName or troveName.startswith("fileset-"))
+
+def troveNameIsValid(troveName):
+    return not True in (x in troveName for x in '/[]!~,:=()')
 
 class TroveTuple(streams.StreamSet):
     _SINGLE_TROVE_TUP_NAME    = 0
