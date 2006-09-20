@@ -28,8 +28,7 @@ from conary import metadata
 from conary import versions
 from conary import conarycfg
 from conary.deps import deps
-from conary.repository import shimclient
-from conary.repository.errors import GroupAlreadyExists, PermissionAlreadyExists, InsufficientPermission
+from conary.repository import shimclient, errors
 from conary.repository.netrepos import netserver
 from conary.server import templates
 from conary.web.fields import strFields, intFields, listFields, boolFields
@@ -60,7 +59,7 @@ def checkAuth(write = False, admin = False):
                 # now check for proper permissions
                 if not self.repServer.auth.check(self.authToken, write=write,
                                                  admin=admin):
-                    raise InsufficientPermission
+                    raise errors.InsufficientPermission
 
             return func(self, **kwargs)
         return wrapper
@@ -135,13 +134,13 @@ class HttpHandler(WebHandler):
             output = method(**d)
             self.req.write(output)
             return apache.OK
-        except InsufficientPermission:
+        except errors.InsufficientPermission:
             if auth[0] == "anonymous":
-                # if an anonymous user raises InsufficientPermission,
+                # if an anonymous user raises errors.InsufficientPermission,
                 # ask for a real login.
                 return self._requestAuth()
             else:
-                # if a real user raises InsufficientPermission, forbid access.
+                # if a real user raises errors.InsufficientPermission, forbid access.
                 return apache.HTTP_FORBIDDEN
         except InvalidPassword:
             # if password is invalid, request a new one
@@ -492,7 +491,7 @@ class HttpHandler(WebHandler):
         try:
             self.repServer.addAcl(self.authToken, 0, group, trove, label,
                writeperm, capped, admin, remove = remove)
-        except PermissionAlreadyExists, e:
+        except errors.PermissionAlreadyExists, e:
             return self._write("error", shortError="Duplicate Permission",
                 error = "Permissions have already been set for %s, please go back and select a different User, Label or Trove." % str(e))
 
@@ -512,7 +511,7 @@ class HttpHandler(WebHandler):
         try:
             self.repServer.editAcl(auth, 0, group, oldtrove, oldlabel, trove,
                label, writeperm, capped, admin, canRemove = remove)
-        except PermissionAlreadyExists, e:
+        except errors.PermissionAlreadyExists, e:
             return self._write("error", shortError="Duplicate Permission",
                 error = "Permissions have already been set for %s, please go back and select a different User, Label or Trove." % str(e))
 
@@ -541,7 +540,7 @@ class HttpHandler(WebHandler):
         if userGroupName != newUserGroupName:
             try:
                 self.repServer.auth.renameGroup(userGroupName, newUserGroupName)
-            except GroupAlreadyExists:
+            except errors.GroupAlreadyExists:
                 return self._write("error", shortError="Invalid Group Name",
                     error = "The group name you have chosen is already in use.")
 
@@ -559,7 +558,7 @@ class HttpHandler(WebHandler):
     def addGroup(self, auth, newUserGroupName, memberList, canMirror):
         try:
             self.repServer.auth.addGroup(newUserGroupName)
-        except GroupAlreadyExists:
+        except errors.GroupAlreadyExists:
             return self._write("error", shortError="Invalid Group Name",
                 error = "The group name you have chosen is already in use.")
 
@@ -629,7 +628,7 @@ class HttpHandler(WebHandler):
 
         if username != self.authToken[0]:
             if not admin:
-                raise InsufficientPermission
+                raise errors.InsufficientPermission
 
         if self.authToken[1] != oldPassword and self.authToken[0] == username and not admin:
             return self._write("error", error = "Error: old password is incorrect")
@@ -716,10 +715,13 @@ class HttpHandler(WebHandler):
     def addEntClass(self, auth, entOwner, userGroupList, entClass):
         if len(userGroupList) < 1:
             return self._write("error", error="No access groups specified")
-        self.repServer.auth.addEntitlementGroup(auth, entClass,
-                                                userGroupList[0])
-        self.repServer.auth.setEntitlementClassAccessGroup(auth,
-                                                { entClass : userGroupList } )
+        try:
+            self.repServer.auth.addEntitlementGroup(auth, entClass,
+                                                    userGroupList[0])
+            self.repServer.auth.setEntitlementClassAccessGroup(auth,
+                                                 { entClass : userGroupList } )
+        except errors.GroupNotFound:
+            return self._write("error", error="Access group does not exist")
         if entOwner != '*none*':
             self.repServer.auth.addEntitlementOwnerAcl(auth, entOwner,
                                                        entClass)
@@ -732,11 +734,6 @@ class HttpHandler(WebHandler):
     def configEntClass(self, auth, entOwner, userGroupList, entClass):
         self.repServer.auth.setEntitlementClassAccessGroup(auth,
                                                 { entClass : userGroupList } )
-
-        oldOwner = self.repServer.auth.getEntitlementOwnerAcl(auth, entClass)
-        if oldOwner:
-            self.repServer.auth.deleteEntitlementOwnerAcl(auth, oldOwner,
-                                                          entClass)
         if entOwner != '*none*':
             self.repServer.auth.addEntitlementOwnerAcl(auth, entOwner,
                                                        entClass)

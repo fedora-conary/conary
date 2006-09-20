@@ -2047,6 +2047,10 @@ class AbstractTroveChangeSet(streams.StreamSet):
     def getNewFlavor(self):
         return self.newFlavor()
 
+    def getNewPathHashes(self):
+        assert(self.oldVersion() is None)
+        return TroveInfo.find(_TROVEINFO_TAG_PATH_HASHES, self.troveInfoDiff())
+
 class TroveChangeSet(AbstractTroveChangeSet):
 
     def __init__(self, name, changeLog, oldVersion, newVersion, 
