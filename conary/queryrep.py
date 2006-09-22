@@ -346,7 +346,7 @@ def getTrovesToDisplay(repos, troveSpecs, pathList, whatProvidesList,
             # must be done client side...
             flavor = None
             bestFlavor = False
-            affintyDb = None # XXX for now turn off.
+            affinityDb = None # XXX for now turn off.
 
         resultsDict = {}
 
