@@ -132,7 +132,7 @@ def displayTroves(cfg, troveSpecs=[], pathList = [], whatProvidesList=[],
 
     dcfg = display.DisplayConfig(repos, affinityDb)
 
-    dcfg.setTroveDisplay(deps=showDeps, info=info, 
+    dcfg.setTroveDisplay(deps=showDeps, info=info,
                          showBuildReqs=showBuildReqs,
                          digSigs=digSigs, fullVersions=cfg.fullVersions,
                          showLabels=cfg.showLabels, fullFlavors=cfg.fullFlavors,
@@ -227,9 +227,13 @@ def getTrovesToDisplay(repos, troveSpecs, pathList, whatProvidesList,
 
 
         if not troveSpecs:
-            return sorted(troveTups)
-        troveSpecs = [ cmdline.parseTroveSpec(x, allowEmptyName=False)
-                       for x in troveSpecs ]
+            return sorted(troveTups, display._sortTroves)
+
+        # Search for troves using findTroves.  The options we
+        # specify to findTroves are determined by the version and 
+        # flavor filter.
+        troveSpecs = [ cmdline.parseTroveSpec(x, allowEmptyName=False) \
+                                                        for x in troveSpecs ]
         searchFlavor = defaultFlavor
 
         acrossLabels = True
@@ -418,7 +422,7 @@ def getTrovesToDisplay(repos, troveSpecs, pathList, whatProvidesList,
                         added = True
                     if added and versionFilter == VERSION_FILTER_LATEST:
                         continue
-    return sorted(troveTups)
+    return sorted(troveTups, display._sortTroves)
 
 
 def getTrovesByPath(repos, pathList, versionFilter, flavorFilter, labelPath,

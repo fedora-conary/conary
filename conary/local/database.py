@@ -187,6 +187,8 @@ class SqlDbRepository(trovesource.SearchableTroveSource,
 
     def getTroves(self, troveList, pristine = True, withFiles = True,
                   withDeps = True):
+        if not troveList:
+            return []
         return self.db.getTroves(troveList, pristine, withFiles = withFiles,
                                  withDeps = withDeps)
 
@@ -228,6 +230,8 @@ class SqlDbRepository(trovesource.SearchableTroveSource,
                     for x in self.db.iterVersionByName(name, True) ]
 
     def hasTroves(self, troves):
+        if not troves:
+            return []
         return self.db.hasTroves(troves)
 
     def hasTrove(self, troveName, version, flavor):
@@ -1052,11 +1056,23 @@ class Database(SqlDbRepository):
     def iterFindPathReferences(self, path, justPresent = False):
         return self.db.iterFindPathReferences(path, justPresent = justPresent)
 
-    def getTrovesWithProvides(self, depSetList):
+    def getTrovesWithProvides(self, depSetList, splitByDep=False):
         """Returns a dict { depSet : [troveTup, troveTup] } of local 
            troves that provide each dependency set listed.
+           @param splitByDep (added for backwards compatibility) If True, 
+           returns dependeny solutions in the standard format, where the 
+           solution for each dependency set is a list of lists, where within
+           each list is the solution for one dependency in the dependency set.
+           If false, all those lists are combined together into one list
+           of solutions for the entire dependency set.
+           @type splitByDep bool (default False)
         """
-        return self.db.getTrovesWithProvides(depSetList)
+        rc = self.db.getTrovesWithProvides(depSetList)
+        if splitByDep:
+            return rc
+        return dict((x[0], list(set(itertools.chain(*x[1]))))
+                     for x in rc.items())
+
 
     def getTransitiveProvidesClosure(self, depSetList):
         """
