@@ -18,11 +18,13 @@ from conary import files, metadata, trove, versions, changelog
 from conary.deps import deps
 from conary.lib import util, tracelog
 from conary.local import deptable
+from conary.local.sqldb import VersionCache, FlavorCache
 from conary.local import versiontable
 from conary.repository import errors
 from conary.repository.netrepos import instances, items, keytable, flavors
 from conary.repository.netrepos import troveinfo, versionops, cltable
 from conary.server import schema
+
 
 class LocalRepVersionTable(versiontable.VersionTable):
 
@@ -623,13 +625,8 @@ class TroveStore:
                                 I.versionId = Versions.versionId AND
                                 I.flavorId = flavors.flavorId AND
                                 I.itemId = Nodes.itemId AND
-                                I.versionId = Nodes.versionId 
-                                /*I.isPresent=1 - FIXME: broken code on the
-                                  client createChangeset side falls into an
-                                  infinite loop when this check is added.
-                                  When that code is fixed we should add back
-                                  this check.
-                                */
+                                I.versionId = Nodes.versionId AND
+                                I.isPresent = 1
                             ORDER BY
                                 gtl.idx""" % self.db.keywords)
 
@@ -707,6 +704,9 @@ class TroveStore:
 
 
         neededIdx = 0
+        versionObjCache = {}
+        versionCache = VersionCache()
+        flavorCache = FlavorCache()
         while troveIdList:
             (idx, troveInstanceId, troveType, timeStamps,
              clName, clVersion, clMessage) =  troveIdList.pop(0)
@@ -727,8 +727,13 @@ class TroveStore:
             else:
                 changeLog = None
 
-            v = singleTroveInfo[1].copy()
-            v.setTimeStamps([ float(x) for x in timeStamps.split(":") ])
+            v = singleTroveInfo[1]
+            key = (v, timeStamps)
+            if versionCache.has_key(key):
+                v = versionCache(key)
+            else:
+                v = v.copy()
+                v.setTimeStamps([ float(x) for x in timeStamps.split(":") ])
 
             trv = trove.Trove(singleTroveInfo[0], v,
                               singleTroveInfo[2], changeLog,
@@ -739,9 +744,8 @@ class TroveStore:
                 while troveTrovesCursor.peek()[0] == idx:
                     idxA, name, version, flavor, flags, timeStamps = \
                                                 troveTrovesCursor.next()
-                    ts = [ float(x) for x in timeStamps.split(":") ]
-                    version = versions.VersionFromString(version, timeStamps=ts)
-                    flavor = deps.ThawFlavor(flavor)
+                    version = versionCache.get(version, timeStamps)
+                    flavor = flavorCache.get(flavor)
                     byDefault = (flags & schema.TROVE_TROVES_BYDEFAULT) != 0
                     weakRef = (flags & schema.TROVE_TROVES_WEAKREF) != 0
                     trv.addTrove(name, version, flavor, byDefault = byDefault,

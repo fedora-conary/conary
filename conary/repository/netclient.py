@@ -262,14 +262,14 @@ class ServerCache:
 	if isinstance(item, (versions.Label, versions.VersionSequence)):
 	    serverName = item.getHost()
 	elif isinstance(item, str):
-            # Detect a label passed in as a string instead of a label object.
-            # This is only useful for misbehaving consumers of the ShimNetClient.
-            # That code should be fixed by passing in a Label object or a
-            # server name as a string, not a label as a string.
-            if '@' in item:
-                serverName = item.split('@')[0]
-            else:
-                serverName = item
+             # Detect a label passed in as a string instead of a label object.
+             # This is only useful for misbehaving consumers of the ShimNetClient.
+             # That code should be fixed by passing in a Label object or a
+             # server name as a string, not a label as a string.
+             if '@' in item:
+                 serverName = item.split('@')[0]
+             else:
+                 serverName = item
         else:
             serverName = str(item)
 
@@ -970,6 +970,11 @@ class NetworkRepositoryClient(xmlshims.NetworkConvertors,
                     else:
                         workingJob.append(job)
 
+                if not brokenJob:
+                    # we can't figure out what exactly is broken -
+                    # it's included implicitly due to recurse.
+                    raise
+
                 allJobs.append( (brokenJob, True) )
                 allJobs.append( (workingJob, False) )
 
@@ -1180,7 +1185,8 @@ class NetworkRepositoryClient(xmlshims.NetworkConvertors,
                 start += size
 
             assert(totalSize == 0)
-            return cs
+            return (cs, _cvtTroveList(extraTroveList),
+                    _cvtFileList(extraFileList))
 
         def _getCsFromShim(target, cs, server, job, recurse, withFiles,
                            withFileContents, excludeAutoSource,
@@ -1189,9 +1195,7 @@ class NetworkRepositoryClient(xmlshims.NetworkConvertors,
                   server.getChangeSetObj(job, recurse,
                                          withFiles, withFileContents,
                                          excludeAutoSource)
-            chgSetList += extraTroveList
-            filesNeeded += extraFileList
-            return cs
+            return cs, extraTroveList, extraFileList
 
         if not chgSetList:
             # no need to work hard to find this out
@@ -1234,10 +1238,13 @@ class NetworkRepositoryClient(xmlshims.NetworkConvertors,
                         filesNeeded, chgSetList, removedList)
                 if server.__class__ == ServerProxy:
                     # this is a XML-RPC proxy for a remote repository
-                    cs = _getCsFromRepos(*args)
+                    cs, extraTroveList, extraFileList = _getCsFromRepos(*args)
                 else:
                     # assume we are a shim repository
-                    cs = _getCsFromShim(*args)
+                    cs, extraTroveList, extraFileList = _getCsFromShim(*args)
+
+                chgSetList += extraTroveList
+                filesNeeded += extraFileList
 
             if (ourJobList or filesNeeded) and not internalCs:
                 internalCs = changeset.ChangeSet()
@@ -1276,9 +1283,8 @@ class NetworkRepositoryClient(xmlshims.NetworkConvertors,
             allTrovesNeeded = []
             for (troveName, (oldVersion, oldFlavor),
                             (newVersion, newFlavor), absolute) in ourJobList:
-                # old version and new version are both set, otherwise
-                # we wouldn't need to generate the change set ourself
-                allTrovesNeeded.append((troveName, oldVersion, oldFlavor))
+                if oldVersion is not None:
+                    allTrovesNeeded.append((troveName, oldVersion, oldFlavor))
                 allTrovesNeeded.append((troveName, newVersion, newFlavor))
 
             troves = _getLocalTroves(allTrovesNeeded)
@@ -1299,9 +1305,14 @@ class NetworkRepositoryClient(xmlshims.NetworkConvertors,
             i = 0
             for (troveName, (oldVersion, oldFlavor),
                             (newVersion, newFlavor), absolute) in ourJobList:
-                old = troves[i]
-                new = troves[i + 1]
-                i += 2
+                if oldVersion is not None:
+                    old = troves[i]
+                    i += 1
+                else:
+                    old = None
+
+                new = troves[i]
+                i += 1
 
                 (troveChgSet, newFilesNeeded, pkgsNeeded) = \
                                 new.diff(old, absolute = absolute)

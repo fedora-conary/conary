@@ -411,7 +411,9 @@ class DependencyChecker:
 
     def _gatherDependencyErrors(self, satisfied, brokenByErase, unresolveable, 
                                 wasIn):
-
+        from conary.local import sqldb
+        flavorCache = sqldb.FlavorCache()
+        versionCache = sqldb.VersionCache()
         def _depItemsToSet(idxList, depInfoList, provInfo = True,
                            wasIn = None):
             failedSets = [ ((x[0], x[2][0], x[2][1]), None, None, None) 
@@ -475,7 +477,7 @@ class DependencyChecker:
             for (troveName, troveVersion, troveFlavor, depClass, depName,
                             flag, depNum) in cu:
                 info = (troveName, versions.VersionFromString(troveVersion),
-                        deps.ThawFlavor(troveFlavor))
+                        flavorCache.get(troveFlavor))
 
                 if info not in failedSets:
                     failedSets[info] = (deps.DependencySet(), [])
@@ -513,7 +515,7 @@ class DependencyChecker:
                         flavor = ""
                     provideList.append((name,
                                         versions.VersionFromString(version),
-                                        deps.ThawFlavor(flavor)))
+                                        flavorCache.get(flavor)))
         # def _gatherDependencyErrors starts here
 
         # things which are listed in satisfied should be removed from
@@ -1228,35 +1230,35 @@ class DependencyTables:
                             Nodes.finalTimestamp DESC
                         """
         if troveList:
+            # we need to extract the instanceids for the troves we
+            # were passed in, plus the instanceIds of their included
+            # troves
             cu = self.db.cursor()
             schema.resetTable(cu, "tmpInstances")
             schema.resetTable(cu, "tmpInstances2")
-            instanceIds = []
-            cu.executemany('''
-                    INSERT INTO tmpInstances SELECT instanceId FROM Instances
-                        WHERE itemId=(SELECT itemId FROM Items
-                                        WHERE item=?)
-                          AND versionId=(SELECT versionId FROM Versions
-                                         WHERE version=?)
-                          AND flavorId=(SELECT flavorId FROM Flavors
-                                         WHERE flavor=?)
-                    ''', ( (n, v.asString(), f.freeze()) for (n, v, f)
+            cu.executemany("""
+            INSERT INTO tmpInstances
+                SELECT instanceId
+            FROM Instances
+            JOIN Items ON Instances.itemId = Items.itemId
+            JOIN Versions ON Instances.versionId = Versions.versionId
+            JOIN Flavors ON Instances.flavorId = Flavors.flavorId
+            WHERE Items.item = ? AND Versions.version = ? AND Flavors.flavor = ?
+            """, ( (n, v.asString(), f.freeze()) for (n, v, f)
                            in troveList), start_transaction = False )
-            instanceIds = [ x[0] for x in
-                            cu.execute("SELECT instanceId FROM tmpInstances") ]
-
-            cu.execute('''INSERT INTO tmpInstances2 
-                                   SELECT DISTINCT includedId 
-                                   FROM TroveTroves
-                                   LEFT JOIN tmpInstances ON
-                                     includedId = tmpInstances.instanceId
-                                   WHERE
-                                     tmpInstances.instanceId IS NULL
-                       ''', start_transaction=False)
-            cu.execute('''INSERT INTO tmpInstances 
-                          SELECT instanceId FROM tmpInstances2''',
-                          start_transaction=False)
-
+            # now grab the instanceIds of their included troves, avoiding duplicates
+            # and the instanceIds that already exist
+            cu.execute("""
+            INSERT INTO tmpInstances2
+                SELECT DISTINCT TT.includedId
+            FROM tmpInstances AS TI
+            JOIN TroveTroves AS TT USING(instanceId)
+            LEFT JOIN tmpInstances as haveTI ON
+                TT.includedId = haveTI.instanceId
+            WHERE haveTI.instanceId IS NULL
+            """, start_transaction=False)
+            cu.execute("INSERT INTO tmpInstances SELECT instanceId FROM tmpInstances2",
+                       start_transaction=False)
             restrictBy = None
             restrictor = self._restrictResolveByTrove
         else:
@@ -1323,6 +1325,9 @@ class DependencyTables:
 
     def getLocalProvides(self, depSetList):
         # dep set list must be unique and indexable.
+        from conary.local import sqldb
+        flavorCache = sqldb.FlavorCache()
+        versionCache = sqldb.VersionCache()
         depSetList = list(set(depSetList))
 
         cu = self.db.cursor()
@@ -1356,9 +1361,8 @@ class DependencyTables:
         for (depId, troveName, versionStr, timeStamps, flavorStr) in cu:
             depId = -depId
             # remember the first version for each troveName/flavorStr pair
-            ts = [ float(x) for x in timeStamps.split(":") ]
-            v = versions.VersionFromString(versionStr, timeStamps=ts)
-            f = deps.ThawFlavor(flavorStr)
+            v = versionCache.get(versionStr, timeStamps)
+            f = flavorCache.get(flavorStr)
             depSolutions[depId].append((troveName, v, f))
 
         result = {}
