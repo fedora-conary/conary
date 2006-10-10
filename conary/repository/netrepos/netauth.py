@@ -430,11 +430,12 @@ class NetworkAuthorization:
     def groupCanMirror(self, userGroup):
         cu = self.db.cursor()
         cu.execute("SELECT canMirror FROM UserGroups "
-                   "WHERE userGroup=? AND canMirror != 0",
+                   "WHERE userGroup=?",
                    userGroup)
         ret = cu.fetchall()
         if len(ret):
-            return True
+            canMirror = ret[0][0]
+            return canMirror
         raise errors.GroupNotFound
 
     def setMirror(self, userGroup, canMirror):
@@ -525,6 +526,15 @@ class NetworkAuthorization:
             return ret[0][0]
         raise errors.GroupNotFound
 
+    def _checkDuplicates(self, cu, userGroupName):
+        # check for case insensitive user conflicts -- avoids race with
+        # other adders on case-differentiated names
+        cu.execute("SELECT userGroupId FROM UserGroups "
+                   "WHERE LOWER(UserGroup)=LOWER(?)", userGroupName)
+        if len(cu.fetchall()) > 1:
+            # undo our insert
+            self.db.rollback()
+            raise errors.GroupAlreadyExists, 'usergroup: %s' % userGroupName
 
     def _addGroup(self, cu, userGroupName):
         try:
@@ -534,14 +544,7 @@ class NetworkAuthorization:
         except sqlerrors.ColumnNotUnique:
             self.db.rollback()
             raise errors.GroupAlreadyExists, "group: %s" % userGroupName
-        # check for case insensitive user conflicts -- avoids race with
-        # other adders on case-differentiated names
-        cu.execute("SELECT userGroupId FROM UserGroups "
-                   "WHERE LOWER(UserGroup)=LOWER(?)", userGroupName)
-        if len(cu.fetchall()) > 1:
-            # undo our insert
-            self.db.rollback()
-            raise errors.GroupAlreadyExists, 'usergroup: %s' % userGroupName
+        self._checkDuplicates(cu, userGroupName)
         return ugid
 
     def addGroup(self, userGroupName):
@@ -554,16 +557,14 @@ class NetworkAuthorization:
         cu = self.db.cursor()
         if currentGroupName == userGroupName:
             return True
-        # this will raise constraint violations if we have a case clash
         try:
-            cu.execute("UPDATE UserGroups SET userGroup=? "
-                       "WHERE LOWER(userGroup) = LOWER(?)",
+            cu.execute("UPDATE UserGroups SET userGroup=? WHERE userGroup=?",
                        (userGroupName, currentGroupName))
         except sqlerrors.ColumnNotUnique:
             self.db.rollback()
             raise errors.GroupAlreadyExists, "usergroup: %s" % userGroupName
-        else:
-            self.db.commit()
+        self._checkDuplicates(cu, userGroupName)
+        self.db.commit()
         return True
 
     def updateGroupMembers(self, userGroup, members):
@@ -716,7 +717,7 @@ class NetworkAuthorization:
         entGroupId = self.__checkEntitlementOwner(cu, authGroupIds, entGroup)
 
         # if the entitlement doesn't exist, return an error
-        cu.execute("SELECT * FROM Entitlements WHERE entGroupId = ? AND entitlement = ?"
+        cu.execute("SELECT * FROM Entitlements WHERE entGroupId = ? AND entitlement = ?",
                    (entGroupId, entitlement))
         if not len(cu.fetchall()):
             raise errors.InvalidEntitlement
@@ -788,7 +789,7 @@ class NetworkAuthorization:
         cu.execute("SELECT entGroupId FROM entitlementGroups "
                    "WHERE entGroup = ?", entGroup)
         ent = cu.fetchall()
-        if not len(ret):
+        if not len(ent):
             raise errors.UnknownEntitlementGroup
 
         cu.execute("SELECT userGroupId FROM userGroups "

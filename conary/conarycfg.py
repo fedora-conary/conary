@@ -355,9 +355,9 @@ class ConaryConfiguration(SectionedConfigFile):
         for key, value in context.iteritems():
             if not context.isDefault(key):
                 if isinstance(value, dict):
-                    self.__dict__[key].update(value)
+                    self[key].update(value)
                 else:
-                    self.__dict__[key] = value
+                    self[key] = value
         return True
 
     def getContext(self, name):
@@ -380,12 +380,14 @@ class ConaryConfiguration(SectionedConfigFile):
         return self.getDisplayOption('showContexts', False)
 
     def requireInstallLabelPath(self):
+        # NOTE - conary doesn't use this check anymore.  Kept for
+        # backwards compatibility.
         if not self.installLabelPath:
             print >> sys.stderr, "installLabelPath is not set"
             sys.exit(1)
 
     def _resetSigMap(self):
-        self.signatureKeyMap = []
+        self.resetToDefault('signatureKeyMap')
 
     def initializeFlavors(self):
         self.flavorConfig = flavorcfg.FlavorConfig(self.useDirs, 
