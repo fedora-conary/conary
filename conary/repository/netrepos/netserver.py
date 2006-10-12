@@ -693,14 +693,19 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
         # we establish the execution domain out into the Nodes table
         # keep in mind: "leaves" == Latest ; "all" == Instances
         if latestFilter != self._GET_TROVE_ALL_VERSIONS:
-            coreQdict["domain"] = """JOIN Latest AS Domain USING (itemId)
-            JOIN Nodes USING (itemId, branchId, versionId)"""
+            coreQdict["domain"] = """\
+            JOIN Latest AS Domain USING (itemId)
+            JOIN Nodes USING (itemId, branchId, versionId) """
         else:
+            # We're not using USING() here because of a MySQL bug
+            # http://bugs.mysql.com/bug.php?id=23223
             coreQdict["domain"] = """\
             JOIN Instances AS Domain ON
                 Items.itemId = Domain.itemId AND
                 Domain.isPresent = 1
-            JOIN Nodes USING (itemId, versionid)"""
+            JOIN Nodes ON
+                Domain.itemId = Nodes.itemId AND
+                Domain.versionId = Nodes.versionId """
 
         coreQdict["ugid"] = ", ".join("%d" % x for x in userGroupIds)
         coreQuery = """
@@ -711,7 +716,9 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
             UP.acl as acl
         FROM %(trove)s
         %(domain)s
-        JOIN LabelMap USING (itemid, branchId)
+        JOIN LabelMap ON
+            Nodes.itemId = LabelMap.itemId AND
+            Nodes.branchId = LabelMap.branchId
         JOIN ( SELECT
                    Permissions.labelId as labelId,
                    PerItems.item as acl,

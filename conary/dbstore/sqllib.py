@@ -13,6 +13,7 @@
 #
 
 # Various stuff used by the dbstore drivers
+import time
 
 # a case-insensitive key dict
 class CaselessDict(dict):
@@ -73,3 +74,23 @@ class CaselessDict(dict):
         return (v[0] for v in dict.itervalues(self))
     def itervalues(self):
         return (v[1] for v in dict.itervalues(self))
+
+# convert time.time() to timestamp with optional offset
+def toDatabaseTimestamp(secsSinceEpoch=None, offset=0):
+    """
+    Given the number of seconds since the epoch, return a datestamp
+    in the following format: YYYYMMDDhhmmss.
+
+    Default behavior is to return a timestamp based on the current time.
+
+    The optional offset parameter lets you retrive a timestamp whose time
+    is offset seconds in the past or in the future.
+
+    This function assumes UTC.
+    """
+
+    if secsSinceEpoch == None:
+        secsSinceEpoch = time.time()
+
+    timeToGet = time.gmtime(secsSinceEpoch + float(offset))
+    return long(time.strftime('%Y%m%d%H%M%S', timeToGet))
