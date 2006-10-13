@@ -1,6 +1,13 @@
 Changes in @NEW@:
   o PostgreSQL support has been finalized and some SQL queries have
     been updated in the repository code for PostgreSQL compatibility
+  
+  o Bug Fixes:
+    * A bug has been fixed that caused group cook with a replace or remove 
+      with a flavor and no matching trove to emit a traceback instead of a
+      warning. (CNY-977)
+    * cvc now allows files to be switched from autosource to normal
+      and from normal to autosourced (CNY-946)
 
 Changes in 1.1.8:
   o Bug Fixes:
