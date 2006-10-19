@@ -5,6 +5,7 @@ Changes in @NEW@:
     * Timeouts that occur when attempting to read the XML-RPC request
       from a client are now logged and return an exception (instead of
       causing a unhandled exception in the server).
+    * The repository browser is now viewable by Internet Explorer.
 
   o Client Changes:
     * When choosing how to match up troves with the same name, conary now
@@ -13,6 +14,8 @@ Changes in @NEW@:
       will choose the one that shares paths with the new trove. (CNY-819)
     * Conary will now allow "conary migrate --info" and "conary migrate
       --interactive" without displaying usage information. (CNY-985)
+    * The usage message displayed when running "conary" or "cvc" has
+      been simplified and improved. (CNY-560)
 
   o Build Changes:
     * cvc now allows files to be switched from autosource to normal
@@ -21,7 +24,14 @@ Changes in @NEW@:
       defined to be the first two decimal-seperated parts of the upstream
       version, combined with a decimal. For example, a version string of
       2.16.1.3 would have a major_version of 2.16. (CNY-629)
+    * A list of KDE mirrors has been added to the default mirror
+      configuration. (CNY-895)
 
+  o Code Cleanups
+    * The command line options common between cvc and conary are now
+      defined in one place.
+    * The code to add options to the command line parser for an option
+      has been refactored to remove duplication.
 
   o Bug Fixes:
     * A bug that caused an Internal Server Error when marking a group
