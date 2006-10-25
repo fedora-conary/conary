@@ -1,4 +1,7 @@
 Changes in @NEW@:
+  o Client Changes:
+    * "conary help update" now works.
+
   o Build Changes:
     * Files now have their refresh state reset after a commit
     * Committing trove on longer downloads autosourced files which haven't 
@@ -13,6 +16,14 @@ Changes in @NEW@:
       files
     * Removing files doesn't readd them any longer simply because they were in
       the previous version and are present in the lookaside anymore (CNY-601)
+    * Conary now warns in the presence of unknown use flags in the buildFlavor
+      instead of erroring.  (It will still error if the unknown use flag
+      is accessed in the recipe).
+
+Changes in 1.0.37:
+  o Bugfixes:
+    * A warning message produced when attempting to retrieve a OpenPGP
+      key has been fixed.  The warning was introduced in CNY-589.
 
 Changes in 1.0.36:
   o Client Changes:
@@ -26,6 +37,7 @@ Changes in 1.0.36:
       --interactive" without displaying usage information. (CNY-985)
     * Conary now only warns about being able to execute gpg if a
       signature trust threshold has been set. (CNY-589)
+    * Fixed cvcdesc after the refactoring of configuration options. (CNY-984)
 
   o Server Changes:
     * PostgreSQL support has been finalized and some SQL queries have
