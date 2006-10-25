@@ -1,4 +1,9 @@
 Changes in @NEW@:
+  o Client Changes:
+    * "conary help update" now works.
+    * Added getUpdateItemList() method to allow retrieval of top level troves 
+      on the local system. (CNY-1025)
+
   o Build Changes:
     * Files now have their refresh state reset after a commit
     * Committing trove on longer downloads autosourced files which haven't 
@@ -16,6 +21,11 @@ Changes in @NEW@:
     * Conary now warns in the presence of unknown use flags in the buildFlavor
       instead of erroring.  (It will still error if the unknown use flag
       is accessed in the recipe).
+
+Changes in 1.0.37:
+  o Bugfixes:
+    * A warning message produced when attempting to retrieve a OpenPGP
+      key has been fixed.  The warning was introduced in CNY-589.
 
 Changes in 1.0.36:
   o Client Changes:
