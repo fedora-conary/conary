@@ -60,6 +60,9 @@ Changes in @NEW@:
     * Specifying a bad protocol in a repositoryMap entry (a protocol
       other than http or https) no longer causes an unhandled
       exception. (CNY-932)
+    * Re-execing after critical update switches from migrate mode to regular
+      update mode. (CNY-980)
+
 
 Changes in 1.0.37:
   o Bugfixes:
