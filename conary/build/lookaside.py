@@ -29,6 +29,8 @@ import os
 import socket
 import time
 import urllib2
+import urlparse
+import cookielib
 
 # location is normally the package name
 networkPrefixes = ('http://', 'https://', 'ftp://', 'mirror://')
@@ -138,6 +140,20 @@ def _searchRepository(cfg, repCache, name, location):
     return None
 
 
+class PasswordManager:
+    # password manager class for urllib2 that handles exactly 1 password
+    def __init__(self):
+        self.user = ''
+        self.passwd = ''
+
+    def add_password(self, user, passwd):
+        self.user = user
+        self.passwd = passwd
+
+    def find_user_password(self, *args, **kw):
+        return self.user, self.passwd
+
+
 def fetchURL(cfg, name, location, httpHeaders={}, guessName=None, mirror=None):
 
     retries = 0
@@ -156,8 +172,36 @@ def fetchURL(cfg, name, location, httpHeaders={}, guessName=None, mirror=None):
     log.info('Trying %s...', name)
     while retries < 5:
         try:
+            # set up a urlopener that tracks cookies to handle
+            # sites like Colabnet that want to set a session cookie
+            cj = cookielib.LWPCookieJar()
+            pwm = PasswordManager()
+            # set up a urllib2 opener that can handle cookies and basic
+            # authentication.
+            # FIXME: should digest auth be handled too?
+            opener = urllib2.build_opener(urllib2.HTTPCookieProcessor(cj),
+                                          urllib2.HTTPBasicAuthHandler(pwm))
+            split = list(urlparse.urlsplit(name))
+            protocol = split[0]
+            if protocol != 'ftp':
+                server = split[1]
+                if '@' in server:
+                    # username, and possibly password, were given
+                    login, server = server.split('@')
+                    # get rid of the username/password part of the server
+                    split[1] = server
+                    if ':' in login:
+                        # password was given
+                        user, passwd = login.split(':')
+                    else:
+                        # we don't have the ability to prompt.  Assume
+                        # a blank password
+                        user = login
+                        passwd = ''
+                    pwm.add_password(user, passwd)
+            name = urlparse.urlunsplit(split)
             req = urllib2.Request(name, headers=httpHeaders)
-            url = urllib2.urlopen(req)
+            url = opener.open(req)
             if not name.startswith('ftp://'):
                 content_type = url.info()['content-type']
                 if (guessName or mirror) and 'text/html' in content_type:

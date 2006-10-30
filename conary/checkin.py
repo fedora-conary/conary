@@ -573,7 +573,8 @@ def commit(repos, cfg, message, callback=None, test=False):
 
             fileMap[pathId] = (fileObj, fullPath, path)
 
-        changeSet = changeset.CreateFromFilesystem([ (newState, fileMap) ])
+        changeSet = changeset.CreateFromFilesystem([ (None, newState,
+                                                      fileMap) ])
         troveCs = changeSet.iterNewTroveList().next()
 
     # this replaces the TroveChangeSet update.buildLocalChanges put in
@@ -1178,6 +1179,7 @@ def merge(repos, versionSpec=None, callback=None):
     errList = fsJob.getErrorList()
     if errList:
 	for err in errList: log.error(err)
+        return 1
     fsJob.apply()
 
     newPkgs = fsJob.iterNewTroveList()
@@ -1332,10 +1334,14 @@ def removeFile(filename, repos=None):
         log.error("file %s is not under management" % filename)
         return 1
 
-    # we don't remove the file here; we mark it as autosource instead. the
-    # commit will remove it if need be or commit it as autosource if that's
-    # what's needed
-    state.fileIsAutoSource(pathId, set = True)
+    if version == versions.NewVersion():
+        # newly added file is being removed; go ahead and remove it now
+        state.removeFile(pathId)
+    else:
+        # we don't remove the file here; we mark it as autosource instead. the
+        # commit will remove it if need be or commit it as autosource if that's
+        # what's needed
+        state.fileIsAutoSource(pathId, set = True)
 
     if util.exists(filename):
         sb = os.lstat(filename)
@@ -1786,7 +1792,6 @@ def stat_(repos):
 troveCs.getNewFileList() ]
     fileList += [ (x[0], x[1], False, x[2], x[3]) for x in
                             troveCs.getChangedFileList() ]
-
     # List of tuples (state, path)
     # state can be ?, A, M, R
     results = []
@@ -1808,7 +1813,17 @@ troveCs.getNewFileList() ]
 	path = oldTrove.getFile(pathId)[0]
         results.append(('R', path))
 
-    # All other files in the directory are unknown
+    trackedFiles = {}
+    # Add all the tracked files to a hash
+    for iterr in state.iterFileList():
+        trackedFiles[iterr[1]] = None
+
+    # Eliminate the files that have not changed (the ones we track but are
+    # still present in dirfilesHash)
+    for k in dirfilesHash.keys():
+        if k in trackedFiles:
+            del dirfilesHash[k]
+
     unknown = dirfilesHash.keys()
 
     unknown = [ ('?', path) for path in unknown ]
