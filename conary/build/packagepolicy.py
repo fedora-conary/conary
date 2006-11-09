@@ -370,8 +370,9 @@ class ComponentSpec(_filterSpec):
             depLoops = [x for x in dg.getStronglyConnectedComponents()
                         if len(x) > 1]
             if depLoops:
-                self.error('dependency loop(s) in %s component filters: %s',
-                           sorted(':'.join(x) for x in sorted(list(depLoops))))
+                self.error('dependency loop(s) in component filters: %s',
+                           ' '.join(sorted(':'.join(x)
+                                           for x in sorted(list(depLoops)))))
 
             # Create a stably-sorted list of config filters where
             # the filter is not empty.  (An empty filter with both
@@ -398,7 +399,7 @@ class ComponentSpec(_filterSpec):
 
         if not 'filters' in m.__dict__:
             self.warn('%s missing "filters"; not a valid component'
-                      ' specification file', fullname)
+                      ' specification file', fullpath)
             return
         filters = m.__dict__['filters']
         
