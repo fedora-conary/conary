@@ -479,7 +479,7 @@ class DiffCommand(CvcCommand):
         if argSet or not args or len(args) > 2: return self.usage()
 
         args[0] = repos
-        checkin.diff(*args)
+        return checkin.diff(*args)
 _register(DiffCommand)
 
 class LogCommand(CvcCommand):
@@ -733,7 +733,7 @@ class CvcMain(command.MainHandler):
         if profile:
             prof.stop()
         if log.errorOccurred():
-            sys.exit(1)
+            sys.exit(2)
         return rv
 
 
@@ -778,7 +778,7 @@ def main(argv=sys.argv):
             openpgpfile.PGPError), e:
         if str(e):
             log.error(str(e))
-            sys.exit(1)
+            sys.exit(2)
         else:
             raise
     except KeyboardInterrupt, e:
