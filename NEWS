@@ -14,7 +14,7 @@ Changes in @NEW@:
     * A list of X.org mirrors has been added to the default mirrors.
     * "cvc diff" now returns 2 on error, 1 if there are differences, and
       0 if there are no differences (CNY-938).
-    * added addResolveSource option will will change how dependeny resolution
+    * added addResolveSource method will will change how dependeny resolution
       is done when building a group - instead of searching the label path
       defined in the group for solutions, the resolve source will be searched
       instead. (CNY-1061)
@@ -26,6 +26,8 @@ Changes in @NEW@:
       executed. (CNY-1064)
     * The Conary client version is saved before the re-execution of conary
       that follows the application of a critical update. (CNY-1034)
+    * A condition that was causing sys.exit to not terminate the server
+      process when running in coverage mode has been fixed. (CNY-1038)
 
 Changes in 1.0.38:
   o Client Changes:
