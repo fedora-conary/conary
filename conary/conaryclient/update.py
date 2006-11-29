@@ -178,6 +178,7 @@ class ClientUpdate:
                 matches = self.repos.findTroves([], allTargets, self.cfg.flavor,
                                                 affinityDatabase = self.db)
                 if not matches:
+                    # this is a remove redirect
                     assert(not allTargets)
                     l = redirectHack.setdefault(None, redirectSourceList)
                     l.append(item)
@@ -199,9 +200,9 @@ class ClientUpdate:
                             if isPrimary:
                                 jobsToAdd.append(redirectJob)
 
-                    for info in trv.iterTroveList(strongRefs = True):
-                        toDoSet.add((False, 
-                                     (info[0], (None, None), info[1:], True)))
+                for info in trv.iterTroveList(strongRefs = True):
+                    toDoSet.add((False, 
+                                 (info[0], (None, None), info[1:], True)))
 
             # The targets of redirects need to be loaded - but only
             # if they're not already in the job.
@@ -1908,7 +1909,8 @@ conary erase '%s=%s[%s]'
                       or not deps.compatibleFlavors(x[1][1], x[2][1])
                       or x[1][0].branch() != x[2][0].branch()))
         items = [ (x[0], x[2][0], x[2][1]) for x in items
-                   if not x[2][0].isOnLocalHost() ]
+                   if not x[2][0].isOnLocalHost() and 
+                   not x[2][0].isInLocalNamespace() ]
         items = [ x[0] for x in itertools.izip(items,
                                                self.db.trovesArePinned(items))
                                                                   if not x[1] ]
