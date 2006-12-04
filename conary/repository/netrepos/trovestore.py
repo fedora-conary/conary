@@ -73,9 +73,8 @@ class TroveStore:
         self.metadataTable = metadata.MetadataTable(self.db, create = False)
         self.troveInfoTable = troveinfo.TroveInfoTable(self.db)
 
-	self.needsCleanup = False
+        self.needsCleanup = False
         self.log = log or tracelog.getLog(None)
-
         self.LATEST_TYPE_ANY = versionops.LATEST_TYPE_ANY
         self.LATEST_TYPE_NORMAL = versionops.LATEST_TYPE_NORMAL
         self.LATEST_TYPE_PRESENT = versionops.LATEST_TYPE_PRESENT
@@ -860,7 +859,6 @@ class TroveStore:
 
             if fileStream is None:
                 fileStream = fileObj.freeze()
-
             if fileObj is not None:
                 if fileObj.hasContents:
                     sha1 = fileObj.contents.sha1()
