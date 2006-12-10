@@ -3,7 +3,15 @@ Changes in @NEW@:
     * cvc will no longer fail if the EDITOR variable points to an invalid
       editor. (CNY-688)
     * Redirects now build erase redirects for package components which existed
-      in the past but have disappeared on head (CNY-453)
+      in the past but have disappeared on head. (CNY-453)
+    * The TagSpec policy now checks the transitive closure of build
+      requirements when determining whether the build requirements
+      are sufficient to ensure that a needed tag description will
+      be installed. (CNY-1109)
+    * Repositories can now be made read only to allow for maintenance.
+      (CNY-659)
+    * PIE executables, which appear to be shared libraries in binary
+      directories, will no longer export soname dependencies. (CNY-1128)
 
   o Bug Fixes:
     * Builds that resulted in changesets containg the same file
@@ -14,12 +22,23 @@ Changes in @NEW@:
       only by mtime. (CNY-1114)
     * The mirror script now correctly handles the cases where
       the PathIdConflict erros are raised by certain source repositories
-      during mirroring (CNY-426)
+      during mirroring. (CNY-426)
+    * Perl dependency strings containing double colons are now properly
+      accepted on the command line. (CNY-1132)
+    * cvc stat now correctly displays the usage information when extra
+      arguments are specified. (CNY-1126)
+    * conary update --apply-critical will now behave corractly if the update
+      job contains (besides the conary package which is the source of critical
+      updates) linked troves. Linked troves are troves with overlapping paths.
+      (CNY-1115)
 
-  o Internal changes: 
+  o Internal changes:
     * Conary now supports being built against an internal copy of the
       sqlite3 library for cases when the system sqlite3 is not the
       optimal version for Conary.
+    * The repository schema's string types are no longer restricted to
+      arbitrary sizes for backends that support indexing larger strings
+      than MySQL's InnoDB storage engine. (CNY-1054)
 
 Changes in 1.0.40:
   o Build Changes:
