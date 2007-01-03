@@ -318,6 +318,14 @@ class RemoveCommand(ConaryCommand):
         log.syslog.commandComplete()
 _register(RemoveCommand)
 
+class RevertCommand(ConaryCommand):
+    commands = ['revert']
+    commandGroup = 'System Modification'
+    help = 'Revert the journal from a failed operation.'
+    def runCommand(self, cfg, argSet, otherArgs):
+        if argSet or len(otherArgs) > 2: return self.usage()
+        updatecmd.revert(cfg)
+_register(RevertCommand)
 
 class ListRollbackCommand(ConaryCommand):
     commands = ['rblist']
@@ -695,6 +703,7 @@ class _UpdateCommand(ConaryCommand):
         d["from-file"] = MULT_PARAM
         d["just-db"] = NO_PARAM
         d["keep-existing"] = NO_PARAM
+        d["keep-journal"] = NO_PARAM            # don't document this
         d["keep-required"] = NO_PARAM
         d["info"] = '-i', NO_PARAM
         d["no-deps"] = NO_PARAM
@@ -741,6 +750,7 @@ class _UpdateCommand(ConaryCommand):
         kwargs['justDatabase'] = argSet.pop('just-db', False)
         kwargs['info'] = argSet.pop('info', False)
         kwargs['keepExisting'] = argSet.pop('keep-existing', False)
+        kwargs['keepJournal'] = argSet.pop('keep-journal', False)
         kwargs['keepRequired'] = argSet.pop('keep-required', False)
         kwargs['tagScript'] = argSet.pop('tag-script', None)
         kwargs['test'] = argSet.pop('test', False)
@@ -829,6 +839,7 @@ _register(MigrateCommand)
 class UpdateAllCommand(_UpdateCommand):
 
     commands = ['updateall']
+    paramHelp = ''
     docs = {'items': ('Display troves that conary updateall will update '
                       'to upgrade your system')}
     help = 'Update all the software on the system'

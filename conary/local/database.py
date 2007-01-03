@@ -26,7 +26,7 @@ from conary.callbacks import UpdateCallback
 from conary.conarycfg import RegularExpressionList, CfgLabelList
 from conary.deps import deps
 from conary.lib import log, util
-from conary.local import localrep, sqldb, schema, update
+from conary.local import localrep, sqldb, schema, update, journal
 from conary.local.errors import *
 from conary.repository import changeset, datastore, errors, filecontents
 from conary.repository import repository, trovesource
@@ -527,7 +527,8 @@ class Database(SqlDbRepository):
 			test = False, justDatabase = False, journal = None,
                         localRollbacks = False, callback = UpdateCallback(),
                         removeHints = {}, filePriorityPath = None,
-                        autoPinList = RegularExpressionList()):
+                        autoPinList = RegularExpressionList(),
+                        keepJournal = False):
 	assert(not cs.isAbsolute())
 
         if filePriorityPath is None:
@@ -756,7 +757,9 @@ class Database(SqlDbRepository):
             return
 
         if not justDatabase:
-            fsJob.apply(tagSet, tagScript, journal, callback)
+            fsJob.apply(tagSet, tagScript, journal, callback,
+                        keepJournal = keepJournal,
+                        opJournalPath = self.opJournalPath)
 
         if updateDatabase:
             for (name, version, flavor) in fsJob.getOldTroveList():
@@ -1113,13 +1116,31 @@ class Database(SqlDbRepository):
     def iterUpdateContainerInfo(self, troveNames=None):
         return self.db.iterUpdateContainerInfo(troveNames)
 
+    @staticmethod
+    def revertJournal(root, path):
+        top = util.joinPaths(root, path)
+        opJournalPath = top + '/journal'
+        try:
+            j = journal.JobJournal(opJournalPath, root)
+        except OSError, e:
+            raise OpenError(top, 'journal error: ' + e.strerror)
+
+        j.revert()
+        os.unlink(opJournalPath)
+
     def __init__(self, root, path):
 	self.root = root
 
         if path == ":memory:": # memory-only db
             SqlDbRepository.__init__(self, ':memory:')
         else:
+            self.opJournalPath = util.joinPaths(root, path) + '/journal'
             top = util.joinPaths(root, path)
+
+            if os.path.exists(self.opJournalPath):
+                raise ExistingJournalError(top, 
+                        'journal file exists. use revert command to '
+                        'undo the previous (failed) operation')
 
             self.rollbackCache = top + "/rollbacks"
             self.rollbackStatus = self.rollbackCache + "/status"
@@ -1235,6 +1256,10 @@ class OpenError(DatabaseError):
     def __init__(self, path, msg):
 	self.path = path
 	self.msg = msg
+
+class ExistingJournalError(OpenError):
+
+    pass
 
 class CommitError(DatabaseError, errors.InternalConaryError):
     pass
