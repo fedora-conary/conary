@@ -465,8 +465,9 @@ def cookRedirectObject(repos, db, cfg, recipeClass, sourceVersion, macros={},
 
     fullName = recipeClass.name
 
-    recipeObj = recipeClass(repos, cfg, sourceVersion.branch(), cfg.flavor, 
-                            macros)
+    # needed to take care of branched troves
+    binaryBranch = sourceVersion.getBinaryVersion().branch()
+    recipeObj = recipeClass(repos, cfg, binaryBranch, cfg.flavor, macros)
 
     use.track(True)
     _callSetup(cfg, recipeObj)
@@ -725,9 +726,6 @@ def cookDerivedPackageObject(repos, db, cfg, recipeClass, sourceVersion,
         trv = trove.Trove(trvCs)
         l = trovesByFlavor.setdefault(trv.getFlavor(), [])
         l.append(trv)
-
-    #import epdb
-    #epdb.st()
 
     targetVersion = nextVersion(repos, db, fullName, sourceVersion, 
                                 trovesByFlavor.keys(),
