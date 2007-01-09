@@ -1966,17 +1966,16 @@ class Provides(_dependency):
 
         fullpath = macros.destdir + path
         basepath = os.path.basename(path)
+        dirpath = os.path.dirname(path)
 
         if os.path.exists(fullpath):
             mode = os.lstat(fullpath)[stat.ST_MODE]
 
-        # Now add in the manual provisions
-        for (filter, provision) in self.fileFilters:
-            if filter.match(path):
-                self._markProvides(path, fullpath, provision, pkg, macros, m, f)
+        # First, add in the manual provisions
+        self.addExplicitProvides(path, fullpath, pkg, macros, m, f)
 
+        # Next, discover all automatically-discoverable provisions
         if os.path.exists(fullpath):
-            dirpath = os.path.dirname(path)
             if (self._isELF(m, 'abi')
                 and m.contents['Type'] != elf.ET_EXEC
                 and not [ x for x in self.noProvDirs if path.startswith(x) ]):
@@ -2005,17 +2004,27 @@ class Provides(_dependency):
             elif self._isPerlModule(path):
                 self._addPerlProvides(path, m, pkg)
 
-            if dirpath in self.binDirs:
-                # CNY-930: automatically export paths in bindirs
-                f.flags.isPathDependencyTarget(True)
+        self.addPathDeps(path, dirpath, pkg, f)
+        self.unionDeps(path, pkg, f)
 
+    def addExplicitProvides(self, path, fullpath, pkg, macros, m, f):
+        for (filter, provision) in self.fileFilters:
+            if filter.match(path):
+                self._markProvides(path, fullpath, provision, pkg, macros, m, f)
+
+    def addPathDeps(self, path, dirpath, pkg, f):
         # Because paths can change, individual files do not provide their
         # paths.  However, within a trove, a file does provide its name.
         # Furthermore, non-regular files can be path dependency targets
         # Therefore, we have to handle this case a bit differently.
+        if dirpath in self.binDirs:
+            # CNY-930: automatically export paths in bindirs
+            f.flags.isPathDependencyTarget(True)
+
         if f.flags.isPathDependencyTarget():
             pkg.provides.addDep(deps.FileDependencies, deps.Dependency(path))
 
+    def unionDeps(self, path, pkg, f):
         if path not in pkg.providesMap:
             return
         f.provides.set(pkg.providesMap[path])
@@ -2501,6 +2510,10 @@ class Requires(_addInfo, _dependency):
                 self._addRequirement(path, req, [], pkg,
                                      deps.PerlDependencies)
 
+        self.whiteOut(path, pkg)
+        self.unionDeps(path, pkg, f)
+
+    def whiteOut(self, path, pkg):
         # remove intentionally discarded dependencies
         if self.exceptDeps and path in pkg.requiresMap:
             depSet = deps.DependencySet()
@@ -2516,6 +2529,7 @@ class Requires(_addInfo, _dependency):
                     depSet.addDep(depClass, dep)
             pkg.requiresMap[path] = depSet
 
+    def unionDeps(self, path, pkg, f):
         # finally, package the dependencies up
         if path not in pkg.requiresMap:
             return
@@ -2959,6 +2973,8 @@ class Flavor(policy.Policy):
     requires = (
         ('PackageSpec', policy.REQUIRED_PRIOR),
         ('Requires', policy.REQUIRED_PRIOR),
+        # For example: :lib component contains only a single packaged empty
+        # directory, which must be artificially flavored for multilib
         ('ExcludeDirectories', policy.REQUIRED_PRIOR),
     )
     filetree = policy.PACKAGE
@@ -3002,7 +3018,7 @@ class Flavor(policy.Policy):
                 isnset = self.baseIsnset
             else:
                 # this file can't be marked by arch, but the troves
-                # and package must be.
+                # and package must be.  (e.g. symlinks and empty directories)
                 # we don't need to union in the base arch flavor more
                 # than once.
                 if self.troveMarked:
