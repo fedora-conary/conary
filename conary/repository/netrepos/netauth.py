@@ -31,6 +31,8 @@ GroupAlreadyExists = errors.GroupAlreadyExists
 
 MAX_ENTITLEMENT_LENGTH = 255
 
+nameCharacterSet = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-'
+
 class UserAuthorization:
     def __init__(self, db, pwCheckUrl = None, cacheTimeout = None):
         self.db = db
@@ -40,6 +42,9 @@ class UserAuthorization:
 
 
     def addUserByMD5(self, cu, user, salt, password, ugid):
+        for letter in user:
+            if letter not in nameCharacterSet:
+                raise errors.InvalidName(user)
         try:
             cu.execute("INSERT INTO Users (userName, salt, password) "
                        "VALUES (?, ?, ?)",
@@ -640,6 +645,9 @@ class NetworkAuthorization:
             raise errors.GroupAlreadyExists, 'usergroup: %s' % userGroupName
 
     def _addGroup(self, cu, userGroupName):
+        for letter in userGroupName:
+            if letter not in nameCharacterSet:
+                raise errors.InvalidName(userGroupName)
         try:
             cu.execute("INSERT INTO UserGroups (userGroup) VALUES (?)",
                        userGroupName)
