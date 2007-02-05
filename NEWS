@@ -1,5 +1,43 @@
 Changes in @NEW@:
   o Server Changes:
+    * Conary repositories no longer allow users or groups to be
+      created with names that include characters other than those
+      defined in the Portable Filename Character Set.
+    * Server side functions that work on large datasets (getTroveSigs
+      and setTroveSigs) are now using batched SQL operations for faster
+      throughput
+    * Reworked code which commit groups to the repository to significantly
+      reduce the number of SQL queries executed (CNY-1273)
+
+  o Build Changes:
+    * A list of autosource mirrors has been added.
+
+  o Internal Changes:
+    * A StringStream can now be set from a Unicode object.  The
+      StringStream stores the UTF-8 encoding of the Unicode
+      object. (CNY-366)
+    * ByteStream and LongLongStream have been implemented in C.
+      Modifications have been made to the NumericStream types
+      implemented in C so that they can be used as base classes in
+      Python.
+
+  o Bug Fixes:
+    * Conary now displays a useful error message when it is unable to
+      parse a "user" line in a configuration line.  Previously Conary
+      would raise an unhandled exception. (CNY-1267)
+    * Mirror configurations no longer use /etc/conary/entitlements as
+      the default location to read entitlements used to mirror.
+      Normally the entitlements used to mirror are different than the
+      entitlements required to update the system.  Therefore they
+      should not be used when attempting to access source or target
+      repositories when mirroring. (CNY-1239)
+    * "cvc emerge" now displays error messages when the underlying
+      cook process results in an exception.  Previously, an unhandled
+      exception message was generated. (CNY-995)
+    * Derived packages now support setuid and setgid files. (CNY-1281)
+
+Changes in 1.1.16:
+  o Server Changes:
     * The repository now returns recursive changesets with special
       "removed" trove changesets if a trove is missing or has been
       removed.  This allows the client to determine if it has the
@@ -8,6 +46,8 @@ Changes in @NEW@:
       with byDefault=False troves (such as :debuginfo) excluded.
     * A getTroveInfo() method has been added to the Conary repository
       server.
+    * Repository changeset cache database operations are now retried
+      before giving up (CNY-1143)
 
   o Client Changes:
     * A new "isMissing" trove flag has been added.  This flag is set
@@ -26,25 +66,22 @@ Changes in @NEW@:
       Conary repository client.
 
   o Build changes:
-    * cvc will now log a message when deleting old build trees to make way for
-      an upcomming build.
-    * The cvc refresh command will now print a warning instead of failing
-      with an error when an attempt to refresh a non-autosourced file is
-      made. (CNY-1160)
+    * The "cvc cook" command will now log a message when deleting old
+      build trees to make way for an upcoming build.
+    * The "cvc refresh" command will now print a warning instead of
+      failing with an error when an attempt to refresh a
+      non-autosourced file is made. (CNY-1160)
     * The BuildPackageRecipe class now requires file:runtime, which is
       needed to run many configure scripts. (CNY-1259)
-    * Config files are now automatically added to :config components
-      only if they do not have any executable bits set. (CNY-1260)
+    * Configuration files are now automatically added to :config
+      components only if they do not have any executable bits
+      set. (CNY-1260)
 
   o Bug Fixes:
     * Conary 1.1.14 and 1.1.15 failed to update when encountering the
       multitag protocol; this regression is resolved. (CNY-1257)
     * The logparse module now correctly parses python tracebacks in
       conary log files. (CNY-1258)
-
-  o Internal changes:
-    * If cache database is locked, retry several times before giving up.
-      (CNY-1143)
 
 Changes in 1.1.15:
   o Client Changes:
