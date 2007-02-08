@@ -353,6 +353,8 @@ class ServerCache:
         server = ServerProxy(url, serverName, transporter, self.__getPassword,
                              usedMap = usedMap)
 
+        import epdb
+        epdb.st('f')
         try:
             serverVersions = server.checkVersion()
         except Exception, e:
