@@ -49,7 +49,7 @@ PermissionAlreadyExists = errors.PermissionAlreadyExists
 
 shims = xmlshims.NetworkConvertors()
 
-CLIENT_VERSIONS = [ 36, 37, 38, 39, 40, 41 ]
+CLIENT_VERSIONS = [ 36, 37, 38, 39, 40, 41, 42 ]
 
 from conary.repository.trovesource import TROVE_QUERY_ALL, TROVE_QUERY_PRESENT, TROVE_QUERY_NORMAL
 
@@ -254,13 +254,18 @@ class ServerProxy(xmlrpclib.ServerProxy):
 
 class ServerCache:
     def __init__(self, repMap, userMap, pwPrompt=None,
-                 entitlementDir=None, entitlements={}, callback=None):
+                 entitlementDir=None, entitlements={}, callback=None,
+                 proxy=None):
 	self.cache = {}
 	self.map = repMap
 	self.userMap = userMap
 	self.pwPrompt = pwPrompt
         self.entitlementDir = entitlementDir
         self.entitlements = entitlements
+        if proxy:
+            self.proxies = { 'http' : proxy, 'https' : proxy }
+        else:
+            self.proxies = None
 
     def __getPassword(self, host, user=None):
         user, pw = self.pwPrompt(host, user)
@@ -341,7 +346,9 @@ class ServerCache:
 
         protocol, uri = urllib.splittype(url)
         transporter = transport.Transport(https = (protocol == 'https'),
-                                          entitlement = ent)
+                                          entitlement = ent,
+                                          proxies = self.proxies,
+                                          serverName = serverName)
         transporter.setCompress(True)
         server = ServerProxy(url, serverName, transporter, self.__getPassword,
                              usedMap = usedMap)
@@ -397,7 +404,8 @@ class NetworkRepositoryClient(xmlshims.NetworkConvertors,
     def __init__(self, repMap, userMap,
                  localRepository = None, pwPrompt = None,
                  entitlementDir = None, downloadRateLimit = 0,
-                 uploadRateLimit = 0, entitlements = {}):
+                 uploadRateLimit = 0, entitlements = {},
+                 proxy = None):
         # the local repository is used as a quick place to check for
         # troves _getChangeSet needs when it's building changesets which
         # span repositories. it has no effect on any other operation.
@@ -406,9 +414,10 @@ class NetworkRepositoryClient(xmlshims.NetworkConvertors,
 
         self.downloadRateLimit = downloadRateLimit
         self.uploadRateLimit = uploadRateLimit
+        self.proxy = proxy
 
 	self.c = ServerCache(repMap, userMap, pwPrompt, entitlementDir,
-                             entitlements)
+                             entitlements, proxy = self.proxy)
         self.localRep = localRepository
 
         trovesource.SearchableTroveSource.__init__(self, searchableByType=True)
@@ -1170,7 +1179,7 @@ class NetworkRepositoryClient(xmlshims.NetworkConvertors,
                 os.unlink(url)
 
             if totalSize == None:
-                sys.exit(0)
+                raise errors.RepositoryError("Unknown error downloading changeset")
             #assert(totalSize == sum(sizes))
             inF.close()
 
@@ -1759,7 +1768,8 @@ class NetworkRepositoryClient(xmlshims.NetworkConvertors,
 
         return contents
 
-    def getPackageBranchPathIds(self, sourceName, branch, filePrefixes=None):
+    def getPackageBranchPathIds(self, sourceName, branch, filePrefixes=None,
+                                fileIds=None):
         """
         Searches all of the troves generated from sourceName on the
         given branch, and returns the latest pathId for each path
@@ -1771,9 +1781,13 @@ class NetworkRepositoryClient(xmlshims.NetworkConvertors,
         @type branch: versions.Branch
         """
         if filePrefixes is None or self.c[branch]._protocolVersion < 39:
-            args = (sourceName, self.fromVersion(branch))
+            args = [sourceName, self.fromVersion(branch)]
         else:
-            args = (sourceName, self.fromVersion(branch), filePrefixes)
+            args = [sourceName, self.fromVersion(branch), filePrefixes]
+        if fileIds is not None and self.c[branch]._protocolVersion >= 42:
+            # Make sure we send a (possibly empty) filePrefixes
+            assert(filePrefixes is not None)
+            args.append(base64.b64encode("".join(fileIds)))
         ids = self.c[branch].getPackageBranchPathIds(*args)
         return dict((self.toPath(x[0]), (self.toPathId(x[1][0]),
                                          self.toVersion(x[1][1]),

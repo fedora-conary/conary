@@ -1,4 +1,11 @@
 Changes in @NEW@:
+  o Client Changes:
+    * Added 'proxy' configuration item to allow conaryrc to tell Conary
+      to use a Conary protocol proxy server. General http proxies should
+      still be configured using the http_proxy environment variable.
+    * Filesystem permissions on rollback data restrict access to owner
+      (normally root) (CNY-1289)
+
   o Server Changes:
     * Conary repositories no longer allow users or groups to be
       created with names that include characters other than those
@@ -8,6 +15,15 @@ Changes in @NEW@:
       throughput
     * Reworked code which commit groups to the repository to significantly
       reduce the number of SQL queries executed (CNY-1273)
+    * Implemented a proxy server which caches changesets. It is supported
+      in both the standalone server and the apache server.
+    * Including symbolic links in the path to the temporary directory returns
+      an error at startup (CNY-958)
+    * Errors opening a to-be-committed changeset now have the internal
+      exception logged and CommitError returned to the client (CNY-1182)
+    * Changesets cached are now versioned depending on the client's version.
+      This allows for the same changeset to be cached for different client
+      generations. (CNY-1203)
 
   o Client Changes:
     * The Conary client now sends data across an idle connection to a
@@ -17,6 +33,13 @@ Changes in @NEW@:
 
   o Build Changes:
     * A list of autosource mirrors has been added.
+    * cvc cook --show-buildreqs works properly now. Thanks to Pavel
+      Volkovitskiy for reporting the issue and providing the patch (CNY-1196).
+    * The flags for other packages that are specified in the build flavor
+      are now available when cooking as a part of the PackageFlags object.
+      For example, if you wish to check to see if kernel.pae is set, you can
+      add "if PackageFlags.kernel.pae:".  Note that such checks do not affect
+      the final flavor of your build, and should be used with care. (CNY-1201)
 
   o Internal Changes:
     * A StringStream can now be set from a Unicode object.  The
@@ -26,6 +49,9 @@ Changes in @NEW@:
       Modifications have been made to the NumericStream types
       implemented in C so that they can be used as base classes in
       Python.
+    * Path ID lookups is now done by file prefix and file ID. This allows for
+      identifying files in different package flavors or in versions older than
+      the latest one. (CNY-1203)
 
   o Bug Fixes:
     * Conary now displays a useful error message when it is unable to
@@ -41,6 +67,31 @@ Changes in @NEW@:
       cook process results in an exception.  Previously, an unhandled
       exception message was generated. (CNY-995)
     * Derived packages now support setuid and setgid files. (CNY-1281)
+    * You can no longer accidentally include a group in itself by using
+      addAll. (CNY-1123, CNY-1124)
+    * Alert the users when troves could not be found during migrate
+      in the same manner they are alerted during a regular update. (CNY-1171)
+    * Fix a bug where shared contents in a changeset between InitialContents
+      and a regular file could cause an update failure.  (CNY-1084)
+    * Make filesets support buildFlavor (CNY-1127)
+    * TroveSource tried to raise a DuplicateTrove exception, which doesn't
+      exist. Replaced with InternalConaryError (CNY-1197)
+    * Give a proper error message when we cannot create the directory
+      for the local database due to a permission failure (CNY-953)
+    * Group recipes could sometimes include a trove for dep resolution but
+      not move to include the package directly in the group that is doing dep
+      resolution.  Now the package + component are always included immediately
+      in the group that is resolving deps.  (CNY-1305)
+    * Updated recreatedb for API changes (CNY-1263)
+    * A "no new troves available" error message is now given when there are
+      no new versions to migrate to (CNY-1246)
+    * Attempting to clone without name or contact information set now gives
+      a proper error message (CNY-1315)
+    * The client code no longer exits with a sys.exit(0) if one of the
+      callbacks fails (CNY-1271).
+    * When multiple labels of a trove exist in a group and that group is 
+      being searched for that trove, conary will no longer arbitrarily pick
+      one of the labels to return.
 
 Changes in 1.1.16:
   o Server Changes:
