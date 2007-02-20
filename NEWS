@@ -5,6 +5,21 @@ Changes in @NEW@:
       still be configured using the http_proxy environment variable.
     * Filesystem permissions on rollback data restrict access to owner
       (normally root) (CNY-1289)
+    * The Conary client now sends data across an idle connection to a
+      Conary repository.  This will keep the connection alive when the
+      repository is behind a firewall or proxy that has short timeouts
+      for idle connections. (CNY-1045)
+    * The error message produced by Conary when a callback method
+      raises an unhandled exception has been improved.
+    * StreamSet objects can now preserve unknown elements of the stream
+      instead of silently skipping them. Those elements are retained for
+      freeze(), letting the older stream object exactly replicate the
+      frozen stream of the newer object. Unknown elements are preserved
+      through merges into old object as long as the old object has not
+      been locally modified.
+    * Client always specified the latest protocol version it knew about
+      when calling a server, even if the server couldn't understand that
+      version (CNY-1345)
 
   o Server Changes:
     * Conary repositories no longer allow users or groups to be
@@ -24,6 +39,7 @@ Changes in @NEW@:
     * Changesets cached are now versioned depending on the client's version.
       This allows for the same changeset to be cached for different client
       generations. (CNY-1203)
+    * Proxy caches file contents for getFileContents call
 
   o Build Changes:
     * A list of autosource mirrors has been added.
@@ -34,6 +50,13 @@ Changes in @NEW@:
       For example, if you wish to check to see if kernel.pae is set, you can
       add "if PackageFlags.kernel.pae:".  Note that such checks do not affect
       the final flavor of your build, and should be used with care. (CNY-1201)
+    * Component and package selection by manifest, as with the "package="
+      option, could fail when large numbers of files were found; this
+      bug has been resolved. (CNY-1339)
+    * You can now add a labelPath to an group add() line by specifying
+      labelPath=[<label1>, <label2>] to an add line.
+    * Repeated shadow merges now fail with an error suggesting a commit
+      (CNY-1278)
 
   o Internal Changes:
     * A StringStream can now be set from a Unicode object.  The
@@ -83,6 +106,13 @@ Changes in @NEW@:
       a proper error message (CNY-1315)
     * The client code no longer exits with a sys.exit(0) if one of the
       callbacks fails (CNY-1271).
+    * When multiple labels of a trove exist in a group and that group is 
+      being searched for that trove, conary will no longer arbitrarily pick
+      one of the labels to return.
+    * A bug in the default update callback class that causes a hang
+      when unhandled exceptions occur has been fixed.
+    * Cloning multiple times a trove that was already cloned no longer
+      increments the source count (CNY-1335).
 
 Changes in 1.1.16:
   o Server Changes:
