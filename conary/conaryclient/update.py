@@ -2336,8 +2336,8 @@ conary erase '%s=%s[%s]'
         # To go away eventually
         if callback:
             import warnings
-            warnings.warn("The callback argument to applyUpdate has been "
-                          "deprecated, use useUpdateCallback() instead")
+            warnings.warn("The callback argument to updateChangeSet has been "
+                          "deprecated, use setUpdateCallback() instead")
             self.setUpdateCallback(callback)
 
         if self.updateCallback is None:
@@ -2558,6 +2558,7 @@ conary erase '%s=%s[%s]'
             uJob.addJob(newJob)
         uJob.setCriticalJobs(finalCriticalJobs)
 
+        uJob.setTransactionCounter(self.db.getTransactionCounter())
         return (uJob, suggMap)
 
     def _validateJob(self, jobSet):
@@ -2585,11 +2586,17 @@ conary erase '%s=%s[%s]'
                     autoPinList = conarycfg.RegularExpressionList(),
                     keepJournal = False):
 
+        if uJob.getTransactionCounter() != self.db.getTransactionCounter():
+            # Normally, this should not happen, unless someone froze the
+            # update job and are trying to reapply it after the state of the
+            # database has changed
+            raise InternalConaryError("Stale update job")
+
         # To go away eventually
         if callback:
             import warnings
             warnings.warn("The callback argument to applyUpdate has been "
-                          "deprecated, use useUpdateCallback() instead")
+                          "deprecated, use setUpdateCallback() instead")
             self.setUpdateCallback(callback)
 
         def _createCs(repos, db, jobSet, uJob, standalone = False):
