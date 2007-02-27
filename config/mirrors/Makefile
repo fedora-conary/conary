@@ -13,7 +13,6 @@
 #
 
 mirror_files =	\
-                autosource \
                 cpan \
                 cran \
                 debian \
@@ -22,6 +21,7 @@ mirror_files =	\
                 gnome \
                 gnu \
                 kde \
+                rpath \
                 sourceforge \
                 xorg
 

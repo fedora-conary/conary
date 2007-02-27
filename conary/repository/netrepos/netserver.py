@@ -164,6 +164,8 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
                         'addPGPKeyList',
                         'getNewTroveList',
                         'getTroveInfo',
+                        'getTroveReferences',
+                        'getTroveDescendants',
                         'checkVersion' ])
 
 
@@ -2366,7 +2368,10 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
           AND Versions.version = ?
           AND Flavors.flavor = ?
         """, (name, version.asString(), flavor.freeze()))
-        instanceId = cu.fetchone()[0]
+        ret = cu.fetchone()
+        if not ret:
+            raise errors.TroveMissing(name, version)
+        instanceId = ret[0]
         # try to create a row lock for the signature record if needed
         cu.execute("UPDATE TroveInfo SET changed = changed "
                    "WHERE instanceId = ? AND infoType = ?",
@@ -2602,7 +2607,6 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
     @accessReadWrite
     def setTroveSigs(self, authToken, clientVersion, infoList):
         # return the number of signatures which have changed
-
         self.log(2, infoList)
         # this requires mirror access and write access for that trove
         if not self.auth.check(authToken, mirror=True):
@@ -2673,6 +2677,7 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
             elif sig != sigList[i]:
                 # it has changed
                 updates.append((i, instanceId, sigList[i]))
+        invList = []
         if len(inserts):
             cu.executemany("insert into TroveInfo (instanceId, infoType, data) "
                            "values (?,?,?) ",
@@ -2680,8 +2685,7 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
                             for i, instanceId, sig in inserts])
             for i, instanceId, sig in inserts:
                 (n,v,f),s = infoList[i]
-                self.cache.invalidateEntry(
-                    self.repos, n, self.toVersion(v), self.toFlavor(f))
+                invList.append((n,v,f))
         if len(updates):
             # SQL update does not executemany() very well
             for i, instanceId, sig in updates:
@@ -2690,8 +2694,11 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
                 WHERE infoType = ? AND instanceId = ?
                 """, (cu.binary(sig), trove._TROVEINFO_TAG_SIGS, instanceId))
                 (n,v,f),s = infoList[i]
-                self.cache.invalidateEntry(
-                    self.repos, n, self.toVersion(v), self.toFlavor(f))
+                invList.append((n,v,f))
+        self.log(3, "updated signatures for", len(inserts+updates), "troves")
+        if len(invList):
+            self.cache.invalidateEntries(self.repos, invList)
+        self.log(3, "invalidated cache for", len(invList), "troves")
         return len(inserts) + len(updates)
 
     @accessReadOnly
@@ -2820,7 +2827,7 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
         schema.resetTable(cu, "gtl")
         for n, v, f in troveList:
             cu.execute("insert into gtl(name,version,flavor) values (?,?,?)",
-                       (n, v, f))
+                       (n, v, f), start_transaction=False)
         # we'll need the min idx to account for differences in SQL backends
         cu.execute("SELECT MIN(idx) from gtl")
         minIdx = cu.fetchone()[0]
@@ -2850,6 +2857,128 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
                 ret[i] = (0, '')
                 continue
             ret[i] = (1, base64.encodestring(cu.frombinary(data)))
+        return ret
+
+    @accessReadOnly
+    def getTroveReferences(self, authToken, clientVersion, troveInfoList):
+        """
+        troveInfoList is a list of (name, version, flavor) tuples. For
+        each (name, version, flavor) specied, return a list of the troves
+        (groups and packages) which reference it (either strong or weak)
+        (the user must have permission to see the referencing trove, but
+        not the trove being referenced).
+        """
+        if not self.auth.check(authToken):
+            raise errors.InsufficientPermission
+        self.log(2, troveInfoList)
+        cu = self.db.cursor()
+        schema.resetTable(cu, "gtl")
+        schema.resetTable(cu, "gtlInst")
+        userGroupIds = self.auth.getAuthGroups(cu, authToken)
+        for (n,v,f) in troveInfoList:
+            cu.execute("insert into gtl(name,version,flavor) values (?,?,?)",
+                       (n, v, f), start_transaction=False)
+        # we'll need the min idx to account for differences in SQL backends
+        cu.execute("SELECT MIN(idx) from gtl")
+        minIdx = cu.fetchone()[0]
+        # get the instanceIds of the parents of what we can find
+        cu.execute("""
+        insert into gtlInst(idx, instanceId)
+        select gtl.idx, TroveTroves.instanceId
+        from gtl
+        join Items on gtl.name = Items.item
+        join Versions on gtl.version = Versions.version
+        join Flavors on gtl.flavor = Flavors.flavor
+        join Instances on
+            Items.itemId = Instances.itemId AND
+            Versions.versionId = Instances.versionId AND
+            Flavors.flavorId = Instances.flavorId
+        join TroveTroves on TroveTroves.includedId = Instances.instanceId
+        """, start_transaction=False)
+        # gtlInst now has instanceIds of the parents. retrieve the data we need
+        cu.execute("""
+        select
+            gtlInst.idx, Items.item, Versions.version, Flavors.flavor,
+            UP.permittedTrove as pattern
+        from gtlInst
+        join Instances on gtlInst.instanceId = Instances.instanceId
+        join Nodes USING (itemId, versionId)
+        join LabelMap USING (itemId, branchId)
+        join (select
+                  Permissions.labelId as labelId,
+                  PerItems.item as permittedTrove
+              from Permissions
+              join UserGroups ON Permissions.userGroupId = UserGroups.userGroupId
+              join Items as PerItems ON Permissions.itemId = PerItems.itemId
+              where Permissions.userGroupId in (%s)
+              ) as UP on ( UP.labelId = 0 or UP.labelId = LabelMap.labelId)
+        join Items on Instances.itemId = Items.itemId
+        join Versions on Instances.versionId = Versions.versionId
+        join Flavors on Instances.flavorId = Flavors.flavorId
+        where Instances.isPresent = 1
+        """ % (",".join("%d" % x for x in userGroupIds), ))
+        # get the results
+        ret = [ [] for x in range(len(troveInfoList)) ]
+        for i, n,v,f, pattern in cu:
+            l = ret[i-minIdx]
+            if self.auth.checkTrove(pattern, n):
+                l.append((n,v,f))
+        return ret
+
+    @accessReadOnly
+    def getTroveDescendants(self, authToken, clientVersion, troveList):
+        """
+        troveList is a list of (name, label, flavor) tuples. For
+        each item, return the full version and flavor of each trove
+        named name which exists on a branch which includes label and
+        is of the specified flavor. If the flavor is not specified,
+        all matches should be returned. Only troves the user has
+        permission to view should be returned.
+        """
+        if not self.auth.check(authToken):
+            raise errors.InsufficientPermission
+        self.log(2, troveList)
+        cu = self.db.cursor()
+        schema.resetTable(cu, "gtl")
+        schema.resetTable(cu, "gtlInst")
+        userGroupIds = self.auth.getAuthGroups(cu, authToken)
+        for (n, l, f) in troveList:
+            cu.execute("insert into gtl(name,version,flavor) values(?,?,?)",
+                       (n,l,f), start_transaction=False)
+        # we'll need the min idx to account for differences in SQL backends
+        cu.execute("SELECT MIN(idx) from gtl")
+        minIdx = cu.fetchone()[0]
+        cu.execute("""
+        select
+            gtl.idx, gtl.name, Versions.version, Flavors.flavor,
+            UP.permittedTrove
+        from gtl
+        join Items on gtl.name = Items.item
+        join Flavors on (gtl.flavor IS NULL or gtl.flavor = Flavors.flavor)
+        join Instances on
+            Instances.itemId = Items.itemId AND
+            Instances.flavorId = Flavors.flavorId
+        join Nodes using (itemId, versionId)
+        join LabelMap using (itemId, branchId)
+        join Labels on
+            LabelMap.labelId = Labels.labelId AND
+            Labels.label = gtl.version
+        join (select
+                  Permissions.labelId as labelId,
+                  PerItems.item as permittedTrove
+              from Permissions
+              join UserGroups ON Permissions.userGroupId = UserGroups.userGroupId
+              join Items as PerItems ON Permissions.itemId = PerItems.itemId
+              where Permissions.userGroupId in (%s)
+              ) as UP on ( UP.labelId = 0 or UP.labelId = LabelMap.labelId)
+        join Versions on Instances.versionId = Versions.versionId
+        """ % (",".join("%d" % x for x in userGroupIds),))
+        # parse results
+        ret = [ [] for x in range(len(troveList)) ]
+        for i, n,v,f, pattern in cu:
+            l = ret[i-minIdx]
+            if self.auth.checkTrove(pattern, n):
+                l.append((v,f))
         return ret
 
     @accessReadOnly

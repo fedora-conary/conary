@@ -892,6 +892,46 @@ class NetworkRepositoryClient(xmlshims.NetworkConvertors,
             raise errors.TroveMissing(troveName, branch)
 	return self.thawVersion(v)
 
+    # added at protocl version 43
+    def getTroveReferences(self, troveInfoList):
+        if not troveInfoList:
+            return []
+        byServer = {}
+        for i, (name, version, flavor) in enumerate(troveInfoList):
+            l = byServer.setdefault(version.branch().label().getHost(), [])
+            tup = (name, self.fromVersion(version), self.fromFlavor(flavor))
+            l.append( (i, tup) )
+        retlist = [ [] for x in range(len(troveInfoList)) ]
+        for server, l in byServer.iteritems():
+            # if the server can't talk to us, don't traceback
+            if self.c[server].getProtocolVersion() < 43:
+                continue
+            ret = self.c[server].getTroveReferences([x[1] for x in l])
+            for ri, rl in enumerate(ret):
+                retlist[ l[ri][0] ] = [ (x[0], self.toVersion(x[1]), self.toFlavor(x[2]))
+                                        for x in rl ]
+        return retlist
+
+    # added at protocol version 43
+    def getTroveDescendants(self, troveList):
+        if not troveList:
+            return []
+        byServer = {}
+        for i, (name, label, flavor) in enumerate(troveList):
+            l = byServer.setdefault(label.getHost(), [])
+            tup = (name, self.fromLabel(label), self.fromFlavor(flavor))
+            l.append( (i, tup) )
+        retlist = [ [] for x in range(len(troveList)) ]
+        for server, l in byServer.iteritems():
+            # if the server can't talk to us, don't traceback
+            if self.c[server].getProtocolVersion() < 43:
+                continue
+            ret = self.c[server].getTroveDescendants([x[1] for x in l])
+            for ri, rl in enumerate(ret):
+                retlist[ l[ri][0] ] = [ (self.toVersion(x[0]), self.toFlavor(x[1]))
+                                        for x in rl ]
+        return retlist
+
     def hasTrove(self, name, version, flavor):
         return self.hasTroves([(name, version, flavor)])[name, version, flavor]
 
