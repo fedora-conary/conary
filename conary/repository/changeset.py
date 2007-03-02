@@ -20,6 +20,8 @@ import gzip
 import itertools
 import os
 
+from StringIO import StringIO
+
 from conary import files, streams, trove, versions
 from conary.lib import enum, log, misc, patch, sha1helper, util
 from conary.repository import filecontainer, filecontents, errors
@@ -1380,17 +1382,13 @@ class DictAsCsf:
         (name, contType, contObj) = self.items[self.next]
         self.next += 1
 
-        # XXX there must be a better way, but I can't think of it
-        f = contObj.get()
-        (fd, path) = tempfile.mkstemp(suffix = '.cf-out')
-        os.unlink(path)
-        gzf = gzip.GzipFile('', "wb", fileobj = os.fdopen(os.dup(fd), "w"))
-        util.copyfileobj(f, gzf)
+        compressedFile = StringIO()
+        gzf = gzip.GzipFile('', "wb", fileobj = compressedFile)
+        util.copyfileobj(contObj.get(), gzf)
         gzf.close()
-        # don't close the result of contObj.get(); we may need it again
-        os.lseek(fd, 0, 0)
-        f = os.fdopen(fd, "r")
-        return (name, contType, f)
+        compressedFile.seek(0)
+
+        return (name, contType, compressedFile)
 
     def addConfigs(self, contents):
         # this is like __init__, but it knows things are config files so
@@ -1437,8 +1435,15 @@ def _convertChangeSetV2V1(inPath, outPath):
             # I'm not worried about this pointing to the wrong file; that
             # can only happen if there are multiple files with the same
             # PathId, which would cause the conflict we test for above
-            s = f.get().read()[0:16]
-            fc = filecontents.FromString(s)
+            oldCompressed = f.read()
+            old = gzip.GzipFile(None, "r", 
+                                fileobj = StringIO(oldCompressed)).read()
+            new = old[0:16]
+            newCompressedF = StringIO()
+            gzip.GzipFile(None, "w", fileobj = newCompressedF).write(new)
+            newCompressed = newCompressedF.getvalue()
+            fc = filecontents.FromString(newCompressed)
+            size -= len(oldCompressed) - len(newCompressed)
         else:
             fc = filecontents.FromFile(f)
 
