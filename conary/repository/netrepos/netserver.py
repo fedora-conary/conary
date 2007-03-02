@@ -43,7 +43,7 @@ from conary.errors import InvalidRegex
 # a list of the protocol versions we understand. Make sure the first
 # one in the list is the lowest protocol version we support and th
 # last one is the current server protocol version
-SERVER_VERSIONS = [ 36, 37, 38, 39, 40, 41, 42, 43 ]
+SERVER_VERSIONS = [ 36, 37, 38, 39, 40, 41, 42, 43, 44 ]
 
 # A list of changeset versions we support
 # These are just shortcuts
@@ -1705,7 +1705,8 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
 
 
     @accessReadOnly
-    def getDepSuggestions(self, authToken, clientVersion, label, requiresList):
+    def getDepSuggestions(self, authToken, clientVersion, label, requiresList,
+                          leavesOnly=False):
 	if not self.auth.check(authToken, write = False,
 			       label = self.toLabel(label)):
 	    raise errors.InsufficientPermission
@@ -1716,7 +1717,8 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
 
         label = self.toLabel(label)
 
-	sugDict = self.troveStore.resolveRequirements(label, requires.keys())
+	sugDict = self.troveStore.resolveRequirements(label, requires.keys(),
+                                                      leavesOnly=leavesOnly)
 
         result = {}
         for (key, val) in sugDict.iteritems():

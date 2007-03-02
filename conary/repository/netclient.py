@@ -49,7 +49,7 @@ PermissionAlreadyExists = errors.PermissionAlreadyExists
 
 shims = xmlshims.NetworkConvertors()
 
-CLIENT_VERSIONS = [ 36, 37, 38, 39, 40, 41, 42, 43 ]
+CLIENT_VERSIONS = [ 36, 37, 38, 39, 40, 41, 42, 43, 44 ]
 
 from conary.repository.trovesource import TROVE_QUERY_ALL, TROVE_QUERY_PRESENT, TROVE_QUERY_NORMAL
 
@@ -263,17 +263,14 @@ class ServerProxy(xmlrpclib.ServerProxy):
 class ServerCache:
     def __init__(self, repMap, userMap, pwPrompt=None,
                  entitlementDir=None, entitlements={}, callback=None,
-                 proxy=None):
+                 proxies=None):
 	self.cache = {}
 	self.map = repMap
 	self.userMap = userMap
 	self.pwPrompt = pwPrompt
         self.entitlementDir = entitlementDir
         self.entitlements = entitlements
-        if proxy:
-            self.proxies = { 'http' : proxy, 'https' : proxy }
-        else:
-            self.proxies = None
+        self.proxies = proxies
 
     def __getPassword(self, host, user=None):
         user, pw = self.pwPrompt(host, user)
@@ -421,10 +418,14 @@ class NetworkRepositoryClient(xmlshims.NetworkConvertors,
 
         self.downloadRateLimit = downloadRateLimit
         self.uploadRateLimit = uploadRateLimit
-        self.proxy = proxy
+
+        if proxy:
+            self.proxies = { 'http' : proxy, 'https' : proxy }
+        else:
+            self.proxies = {}
 
 	self.c = ServerCache(repMap, userMap, pwPrompt, entitlementDir,
-                             entitlements, proxy = self.proxy)
+                             entitlements, proxies = self.proxies)
         self.localRep = localRepository
 
         trovesource.SearchableTroveSource.__init__(self, searchableByType=True)
@@ -1548,9 +1549,14 @@ class NetworkRepositoryClient(xmlshims.NetworkConvertors,
 
 	return cs
 
-    def resolveDependencies(self, label, depList):
+    def resolveDependencies(self, label, depList, leavesOnly=False):
         l = [ self.fromDepSet(x) for x in depList ]
-        d = self.c[label].getDepSuggestions(self.fromLabel(label), l)
+        if self.c[label].getProtocolVersion() < 44:
+            args = ()
+        else:
+            args = (leavesOnly,)
+
+        d = self.c[label].getDepSuggestions(self.fromLabel(label), l, *args)
         r = {}
         for (key, val) in d.iteritems():
             l = []
@@ -2094,7 +2100,21 @@ class NetworkRepositoryClient(xmlshims.NetworkConvertors,
             autoUnlink = False
 
         try:
-            self._putFile(url, fName, callback = callback)
+            inFile = open(fName)
+            size = os.fstat(inFile.fileno()).st_size
+
+            status = httpPutFile(url, inFile, size, callback = callback,
+                                 rateLimit = self.uploadRateLimit,
+                                 proxies = self.proxies)
+
+            # give a slightly more helpful message for 403
+            if status == 403:
+                raise errors.CommitError('Permission denied. Check username, '
+                                         'password, and https settings.')
+            # and a generic message for a non-OK status
+            if status != 200:
+                raise errors.CommitError('Error uploading to repository: '
+                                         '%s (%s)' %(r.status, r.reason))
         finally:
             if autoUnlink:
                 os.unlink(fName)
@@ -2107,47 +2127,41 @@ class NetworkRepositoryClient(xmlshims.NetworkConvertors,
         else:
             server.commitChangeSet(url)
 
-    def _putFile(self, url, path, callback = None):
-        """
-        send a file to a url.  Takes a wrapper, which is an object
-        that has a callback() method which takes amount, total, rate
-        """
-        protocol, uri = urllib.splittype(url)
-        assert(protocol in ('http', 'https'))
-	(host, putPath) = url.split("/", 3)[2:4]
-        if protocol == 'http':
-            c = httplib.HTTPConnection(host)
-        else:
-            c = httplib.HTTPSConnection(host)
+def httpPutFile(url, inFile, size, callback = None, rateLimit = None, proxies = {}):
+    """
+    send a file to a url.  Takes a wrapper, which is an object
+    that has a callback() method which takes amount, total, rate
+    """
+    protocol, uri = urllib.splittype(url)
+    assert(protocol in ('http', 'https'))
 
-	f = open(path)
-        size = os.fstat(f.fileno()).st_size
-        BUFSIZE = 8192
+    proxy = proxies.get(protocol, url)
+    protocol, uri = urllib.splittype(proxy)
+    host = urllib.splithost(uri)[0]
 
-        callbackFn = None
-        if callback:
-            wrapper = callbacks.CallbackRateWrapper(callback,
-                                                    callback.sendingChangeset,
-                                                    size)
-            callbackFn = wrapper.callback
+    if protocol == 'http':
+        c = httplib.HTTPConnection(host)
+    else:
+        c = httplib.HTTPSConnection(host)
 
-	c.connect()
-        c.putrequest("PUT", url)
-        c.putheader('Content-length', str(size))
-        c.endheaders()
+    BUFSIZE = 8192
 
-        c.url = url
+    callbackFn = None
+    if callback:
+        wrapper = callbacks.CallbackRateWrapper(callback,
+                                                callback.sendingChangeset,
+                                                size)
+        callbackFn = wrapper.callback
 
-        util.copyfileobj(f, c, bufSize=BUFSIZE, callback=callbackFn,
-                         rateLimit = self.uploadRateLimit)
+    c.connect()
+    c.putrequest("PUT", url)
+    c.putheader('Content-length', str(size))
+    c.endheaders()
 
-	r = c.getresponse()
-        # give a slightly more helpful message for 403
-        if r.status == 403:
-            raise errors.CommitError('Permission denied. Check username, '
-                                     'password, and https settings.')
-        # and a generic message for a non-OK status
-        if r.status != 200:
-            raise errors.CommitError('Error uploading to repository: '
-                                     '%s (%s)' %(r.status, r.reason))
+    c.url = url
 
+    util.copyfileobj(inFile, c, bufSize=BUFSIZE, callback=callbackFn,
+                     rateLimit = rateLimit, sizeLimit = size)
+
+    r = c.getresponse()
+    return r.status
