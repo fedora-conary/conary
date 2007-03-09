@@ -180,14 +180,15 @@ class ComponentRequires(packagepolicy.ComponentRequires):
         # inherited some during PackageSpec
         components = self.recipe.autopkg.components
         packageMap = self.recipe.autopkg.packageMap
+        mainSet = set([main.name for main in packageMap])
         for comp in components.values():
             removeDeps = deps.DependencySet()
             for dep in comp.requires.iterDepsByClass(deps.TroveDependencies):
                 name = dep.getName()[0]
                 if ':' in name:
                     main = name.split(':', 1)[0]
-                    if (main in packageMap and
-                        name not in components or not components[name]):
+                    if (main in mainSet and
+                        (name not in components or not components[name])):
                         removeDeps.addDep(deps.TroveDependencies, dep)
 
             comp.requires -= removeDeps
