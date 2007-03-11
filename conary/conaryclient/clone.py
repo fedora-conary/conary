@@ -132,8 +132,6 @@ class ClientClone:
                             cloneOnlyByDefaultTroves=cloneOnlyByDefaultTroves,
                             updateBuildInfo=updateBuildInfo,
                             infoOnly=infoOnly)
-
-
         chooser = CloneChooser(labelMap, troveList, cloneOptions)
         return self._createCloneChangeSet(chooser, cloneOptions)
 
@@ -613,7 +611,6 @@ class ClientClone:
             cs.addFileContents(pathId, fileId, changeset.ChangedFileTypes.file,
                                fileCont, cfgFile = fileObj.flags.isConfig(), 
                                compressed = False)
-
 
 def _iterAllVersions(trv, rewriteTroveInfo=True):
     # return all versions which need rewriting except for file versions
