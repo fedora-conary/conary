@@ -41,6 +41,9 @@ class NullCacheSet:
     def invalidateEntry(self, repos, name, version, flavor):
         pass
 
+    def invalidateEntries(self, repos, troveList):
+        pass
+
 def retry(fn):
     """Decorator to retry database operations if the database is locked"""
     def wrap(*args, **kwargs):
@@ -214,19 +217,9 @@ class CacheSet:
 
         return (row, path)
 
-    @retry
-    def invalidateEntry(self, repos, name, version, flavor):
-        """
-        invalidates (and deletes) any cached changeset that matches
-        the given name, version, flavor.
-        """
-        invList = [ (name, version.asString(), flavor.freeze()) ]
-        if repos is not None:
-            invList.extend(repos.getParentTroves(name, version, flavor))
-
+    def __invalidateRows(self, invList):
         # start a transaction to retain a consistent state
         cu = self.db.transaction()
-
         # for speed reasons we use these local functions to avoid
         # repeated freeze/thaws. These functions also cache negative
         # responses to minimize database roundtrips
@@ -279,20 +272,35 @@ class CacheSet:
             # gafton suggested hard linking the files for consumption to
             # allow this remove
         self.db.commit()
+        return
 
-    def __cleanCache(self, cu = None):
-        if cu is None:
-            cu = self.db.cursor()
-        cu.execute("SELECT row from CacheContents")
-        for (row,) in cu:
-            fn = self.filePattern % (self.tmpDir, row)
-            util.removeIfExists(fn)
+    @retry
+    def invalidateEntry(self, repos, name, version, flavor):
+        """
+        invalidates (and deletes) any cached changeset that matches
+        the given name, version, flavor.
+        """
+        invList = [ (name, version.asString(), flavor.freeze()) ]
+        if repos is not None:
+            invList.extend(repos.getParentTroves(invList))
+        return self.__invalidateRows(invList)
+
+    @retry
+    def invalidateEntries(self, repos, troveList):
+        """
+        invalidates (and deletes) any cached changeset that match
+        the given list of (name, version, flavor) tuples
+        """
+        invSet = set(troveList)
+        if repos is not None:
+            ret = repos.getParentTroves(invSet)
+            invSet.update(set(ret))
+        return self.__invalidateRows(invSet)
 
     @retry
     def __cleanDatabase(self, cu = None):
         global CACHE_SCHEMA_VERSION
         if self.db.version != CACHE_SCHEMA_VERSION:
-            self.__cleanCache(cu)
             if cu is None:
                 cu = self.db.cursor()
             for t in self.db.tables:
