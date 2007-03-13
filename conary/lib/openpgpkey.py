@@ -15,6 +15,7 @@
 import os
 import sys
 import getpass
+import tempfile
 import subprocess
 from time import time
 
@@ -130,6 +131,9 @@ class OpenPGPKey:
             return self.trustLevel
         else:
             return -1
+
+class _KeyNotFound(KeyNotFound):
+    errorIsUncatchable = True
 
 class OpenPGPKeyCache:
     """
@@ -272,8 +276,9 @@ class OpenPGPKeyFileCache(OpenPGPKeyCache):
 #OpenPGPKeyFinder: download missing keys from conary servers.
 #-----#
 class KeyCacheCallback(callbacks.KeyCacheCallback):
+    gpgBin = 'gpg'
     def _getGPGCommonArgs(self, homeDir):
-        return ['gpg', '-q', '--no-tty',
+        return [self.gpgBin, '-q', '--no-tty',
                 '--homedir', homeDir,
                 '--no-greeting', '--no-secmem-warning',
                 '--no-verbose', '--no-mdc-warning',
@@ -281,12 +286,14 @@ class KeyCacheCallback(callbacks.KeyCacheCallback):
                 '--keyring', os.path.basename(self.pubRing),
                 '--batch', '--no-permission-warning',
                 ]
-    def _getGPGExtraArgs(self, source, keyId):
+    def _getGPGExtraArgs(self, source, keyId, warn=True):
+        """Returns extra arguments to pass to GPG, and an optional stream to
+        be used as standard input"""
         return [
                 '--keyserver', '%sgetOpenPGPKey?search=%s' %(source, keyId),
                 '--keyserver-options', 'timeout=3',
                 '--recv-key', keyId,
-        ]
+        ], None
 
     def _normalizeKeySource(self, source):
         """Munge the source before passing it to GPG"""
@@ -320,9 +327,11 @@ class KeyCacheCallback(callbacks.KeyCacheCallback):
         # regardless of the command line options admonishing it not to.
         devnull = open(os.devnull, "w")
         gpgArgs = self._getGPGCommonArgs(pubRingPath)
-        gpgArgs.extend(self._getGPGExtraArgs(source, keyId))
+        extraArgs, stdin = self._getGPGExtraArgs(source, keyId, warn=warn)
+        gpgArgs.extend(extraArgs)
         try:
-            p = subprocess.Popen(gpgArgs, stdout=devnull, stderr=devnull)
+            p = subprocess.Popen(gpgArgs,
+                                 stdin=stdin, stdout=devnull, stderr=devnull)
             p.communicate()
             # One should check p.returncode here
         except OSError, e:
@@ -361,7 +370,14 @@ class KeyCacheCallback(callbacks.KeyCacheCallback):
         keySource = self._formatSource(serverName)
         if keySource == None:
             return False
-        self.findOpenPGPKey(keySource, keyId, warn=warn)
+
+        # findOpenPGPKey can be smart enough to raise exceptions if the key
+        # cannot be found
+        try:
+            self.findOpenPGPKey(keySource, keyId, warn=warn)
+        except _KeyNotFound:
+            return False
+
         # decide if we found the key or not.
         try:
             keyRing = open(self.pubRing)
@@ -379,8 +395,8 @@ class KeyCacheCallback(callbacks.KeyCacheCallback):
         callbacks.KeyCacheCallback.__init__(self, *args, **kw)
         self.hasGPG = True
 
-"""Retrieve keys from a directory - keys are saved as <keyid>.asc"""
 class DiskKeyCacheCallback(KeyCacheCallback):
+    """Retrieve keys from a directory - keys are saved as <keyid>.asc"""
     def _formatSource(self, source):
         """For the disk case, this is a no-op"""
         return source
@@ -389,15 +405,74 @@ class DiskKeyCacheCallback(KeyCacheCallback):
         """For the disk case, this is a no-op"""
         return source
 
-    def _getGPGExtraArgs(self, source, keyId):
+    def _getGPGExtraArgs(self, source, keyId, warn=True):
         keyFile = os.path.join(self.dirSource, "%s.asc" % keyId.lower())
         if not os.access(keyFile, os.R_OK):
-            raise KeyNotFound(keyId)
-        return ["--import", keyFile]
+            raise _KeyNotFound(keyId)
+        return ["--import", keyFile], None
 
     def __init__(self, dirSource, pubRing=''):
         KeyCacheCallback.__init__(self, pubRing=pubRing)
         self.dirSource = dirSource
+
+class KeyringCacheCallback(KeyCacheCallback):
+    """Retrieve keys from a keyring"""
+    def _formatSource(self, source):
+        """For the keyring case, this is a no-op"""
+        return source
+
+    def _normalizeKeySource(self, source):
+        """For the keyring case, this is a no-op"""
+        return source
+
+    def _getGPGExtraArgs(self, source, keyId, warn=True):
+        # Use gpg to fetch the key from a keyring
+
+        if not os.access(self.srcKeyring, os.R_OK):
+            # Keyring doesn't exist
+            raise _KeyNotFound(keyId)
+
+        cmd = [self.gpgBin,
+               "--no-default-keyring",
+               "--keyring", self.srcKeyring,
+               "--armor",
+               "--export", keyId]
+        # Redirect stderr to /dev/null
+        devnull = open(os.devnull, "w")
+        try:
+            p = subprocess.Popen(cmd, stdout = subprocess.PIPE, 
+                                 stderr = devnull)
+        except OSError, e:
+            if e.errno == 2: # No such file or directory
+                if warn:
+                    log.warning('gpg does not appear to be installed.  gpg '
+                                'is required to import keys into the '
+                                'conary public keyring.  Use "conary '
+                                'update gnupg" to install gpg.')
+            raise _KeyNotFound(keyId)
+        except Exception, e:
+            if warn:
+                log.warning('Error while executing gpg: %s' % e)
+            raise _KeyNotFound(keyId)
+        stdout, stderr = p.communicate()
+        if p.returncode != 0:
+            raise _KeyNotFound(keyId)
+
+        if not stdout.startswith('-' * 5 + "BEGIN"):
+            raise _KeyNotFound(keyId)
+
+        # Redirect stdout to a temporary file
+        fd, tempf = tempfile.mkstemp()
+        os.unlink(tempf)
+        sio = os.fdopen(fd, "w")
+        sio.write(stdout)
+        sio.seek(0)
+
+        return [ "--import" ], sio
+
+    def __init__(self, keyring, pubRing=''):
+        KeyCacheCallback.__init__(self, pubRing=pubRing)
+        self.srcKeyring = keyring
 
 _keyCache = OpenPGPKeyFileCache()
 
