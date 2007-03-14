@@ -33,7 +33,7 @@ from conary.repository.netrepos.netauth import NetworkAuthorization
 from conary.trove import DigitalSignature
 from conary.repository.netclient import TROVE_QUERY_ALL, TROVE_QUERY_PRESENT, \
                                         TROVE_QUERY_NORMAL
-from conary.repository.netrepos import cacheset, calllog
+from conary.repository.netrepos import calllog
 from conary import dbstore
 from conary.dbstore import idtable, sqlerrors
 from conary.server import schema
@@ -45,19 +45,6 @@ from conary.errors import InvalidRegex
 # last one is the current server protocol version
 SERVER_VERSIONS = [ 36, 37, 38, 39, 40, 41, 42, 43 ]
 
-# A list of changeset versions we support
-# These are just shortcuts
-_CSVER0 = filecontainer.FILE_CONTAINER_VERSION_NO_REMOVES
-_CSVER1 = filecontainer.FILE_CONTAINER_VERSION_WITH_REMOVES
-_CSVER2 = filecontainer.FILE_CONTAINER_VERSION_FILEID_IDX
-# The first in the list is the one the current generation clients understand
-CHANGESET_VERSIONS = [ _CSVER2, _CSVER1, _CSVER0 ]
-# Precedence list of versions - the version specified as key can be generated
-# from the version specified as value
-CHANGESET_VERSIONS_PRECEDENCE = {
-    _CSVER0 : _CSVER1,
-    _CSVER1 : _CSVER2,
-}
 # We need to provide transitions from VALUE to KEY, we cache them as we go
 
 # Decorators for method access
@@ -136,6 +123,7 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
                         'getFileContents',
                         'getTroveLatestVersion',
                         'getChangeSet',
+                        'getChangeSetFingerprints',
                         'getDepSuggestions',
                         'getDepSuggestionsByTroves',
                         'prepareChangeSet',
@@ -190,12 +178,6 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
         self.entitlementCheckURL = cfg.entitlementCheckURL
         self.readOnlyRepository = cfg.readOnlyRepository
 
-        if cfg.cacheDB:
-            self.cache = cacheset.CacheSet(cfg.cacheDB, self.tmpPath,
-                                           self.deadlockRetry)
-        else:
-            self.cache = cacheset.NullCacheSet(self.tmpPath)
-
         self.__delDB = False
         self.log = tracelog.getLog(None)
         if cfg.traceLog:
@@ -218,7 +200,7 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
         # this is ugly, but for now it is the only way to break the
         # circular dep created by self.repos back to us
         self.repos.troveStore = self.repos.reposSet = None
-        self.cache = self.auth = None
+        self.auth = None
         try:
             if self.__delDB: self.db.close()
         except:
@@ -1353,7 +1335,9 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
                     try:
                         size = os.stat(filePath).st_size
                         sizeList.append(size)
-                        os.write(fd, "%s %d\n" % (filePath, size))
+                        # 0 means it's not a changeset
+                        # 1 means it is cached (don't erase it after sending)
+                        os.write(fd, "%s %d 0 1\n" % (filePath, size))
                     except OSError, e:
                         if e.errno != errno.ENOENT:
                             raise
@@ -1419,115 +1403,27 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
 
         return (cs, trovesNeeded, filesNeeded, removedTroves)
 
-    @staticmethod
-    def _getChangeSetVersion(clientVersion):
-        # Determine the changeset version based on the client version
-        # Add more params if necessary
-        if clientVersion < 38:
-            return filecontainer.FILE_CONTAINER_VERSION_NO_REMOVES
-        elif clientVersion < 43:
-            return filecontainer.FILE_CONTAINER_VERSION_WITH_REMOVES
-        # Add more changeset versions here as the currently newest client is
-        # replaced by a newer one
-        return filecontainer.FILE_CONTAINER_VERSION_FILEID_IDX
-
-    def _convertChangeSet(self, csPath, size, destCsVersion, **key):
-        # Changeset is in the file csPath
-        # Changeset was fetched from the cache using key
-        # Convert it to destCsVersion
-        csVersion = key['csVersion']
-        if (csVersion, destCsVersion) == (_CSVER1, _CSVER0):
-            return self._convertChangeSetV1V0(csPath, size, destCsVersion,
-                                              **key)
-        elif (csVersion, destCsVersion) == (_CSVER2, _CSVER1):
-            return self._convertChangeSetV2V1(csPath, size, destCsVersion,
-                                              **key)
-        assert False, "Unknown versions"
-
-    def _convertChangeSetV2V1(self, cspath, size, destCsVersion, **key):
-        (fd, newCsPath) = tempfile.mkstemp(dir = self.cache.tmpDir,
-                                        suffix = '.tmp')
-        os.close(fd)
-        delta = changeset._convertChangeSetV2V1(cspath, newCsPath)
-
-        return newCsPath, size + delta
-
-    def _convertChangeSetV1V0(self, cspath, size, destCsVersion, **key):
-        # check to make sure that this user has access to see all
-        # the troves included in a recursive changeset.
-        cs = changeset.ChangeSetFromFile(cspath)
-        newCs = changeset.ChangeSet()
-
-        for tcs in cs.iterNewTroveList():
-            if tcs.troveType() != trove.TROVE_TYPE_REMOVED:
-                continue
-
-            # Even though it's possible for (old) clients to request
-            # removed relative changesets recursively, the update
-            # code never does that. Raising an exception to make
-            # sure we know how the code behaves.
-            if not tcs.isAbsolute():
-                raise errors.InternalServerError(
-                    "Relative recursive changesets not supported "
-                    "for removed troves")
-            ti = trove.TroveInfo(tcs.troveInfoDiff.freeze())
-            trvName = tcs.getName()
-            trvNewVersion = tcs.getNewVersion()
-            trvNewFlavor = tcs.getNewFlavor()
-            if ti.flags.isMissing():
-                # this was a missing trove for which we
-                # synthesized a removed trove object. 
-                # The client would have a much easier time
-                # updating if we just made it a regular trove.
-                missingOldVersion = tcs.getOldVersion()
-                missingOldFlavor = tcs.getOldFlavor()
-                oldTrove = trove.Trove(trvName,
-                                       missingOldVersion,
-                                       missingOldFlavor)
-                newTrove = trove.Trove(trvName,
-                                       trvNewVersion,
-                                       trvNewFlavor)
-                diff = newTrove.diff(oldTrove)[0]
-                newCs.newTrove(diff)
-            else:
-                # this really was marked as a removed trove.
-                # raise a TroveMissing exception
-                raise errors.TroveMissing(trvName,
-                                          version=trvNewVersion)
-
-        # we need to re-write the munged changeset for an
-        # old client
-        cs.merge(newCs)
-        # create a new temporary file for the munged changeset
-        (fd, cspath) = tempfile.mkstemp(dir = self.cache.tmpDir,
-                                        suffix = '.tmp')
-        os.close(fd)
-        # now write out the munged changeset
-        size = cs.writeToFile(cspath,
-            versionOverride = filecontainer.FILE_CONTAINER_VERSION_NO_REMOVES)
-        return cspath, size
-
-    def _createChangeSet(self, jobEntry, **kwargs):
-        ret = self.repos.createChangeSet([ jobEntry ], **kwargs)
+    def _createChangeSet(self, path, jobList, **kwargs):
+        ret = self.repos.createChangeSet(jobList, **kwargs)
         (cs, trovesNeeded, filesNeeded, removedTroves) = ret
 
         # look up the version w/ timestamps
-        primary = (jobEntry[0], jobEntry[2][0], jobEntry[2][1])
-        try:
-            trvCs = cs.getNewTroveVersion(*primary)
-            primary = (jobEntry[0], trvCs.getNewVersion(), jobEntry[2][1])
-            cs.addPrimaryTrove(*primary)
-        except KeyError:
-            # primary troves could be in the externalTroveList, in
-            # which case they aren't primries
-            pass
+        for jobEntry in jobList:
+            if jobEntry[2][0] is None:
+                continue
 
-        (fd, tmpPath) = tempfile.mkstemp(dir = self.cache.tmpDir,
-                                         suffix = '.tmp')
-        os.close(fd)
+            newJob = (jobEntry[0], jobEntry[2][0], jobEntry[2][1])
+            try:
+                trvCs = cs.getNewTroveVersion(*newJob)
+                primary = (jobEntry[0], trvCs.getNewVersion(), jobEntry[2][1])
+                cs.addPrimaryTrove(*primary)
+            except KeyError:
+                # primary troves could be in the externalTroveList, in
+                # which case they aren't primries
+                pass
 
-        size = cs.writeToFile(tmpPath, withReferences = True)
-        return tmpPath, (trovesNeeded, filesNeeded, removedTroves), size
+        size = cs.writeToFile(path, withReferences = True)
+        return (trovesNeeded, filesNeeded, removedTroves), size
 
     @accessReadOnly
     def getChangeSet(self, authToken, clientVersion, chgSetList, recurse,
@@ -1588,121 +1484,201 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
         newChgSetList = []
         allFilesNeeded = []
         allRemovedTroves = []
-        (fd, retpath) = tempfile.mkstemp(dir = self.tmpPath, suffix = '.cf-out')
-        url = os.path.join(self.urlBase(),
-                           "changeset?%s" % os.path.basename(retpath[:-4]))
-        fout = os.fdopen(fd, 'w')
+        (fd, retpath) = tempfile.mkstemp(dir = self.tmpPath,
+                                         suffix = '.ccs-out')
+        #url = os.path.join(self.urlBase(),
+                           #"changeset?%s" % os.path.basename(retpath[:-4]))
+        # we use a local file for the parent class; this means this class
+        # won't work over the wire (but we never use it that way anyway)
+        url = 'file://localhost/' + retpath
+        os.close(fd)
 
         # try to log more information about these requests
         self.log(2, [x[0] for x in chgSetList],
                  list(set([x[2][0] for x in chgSetList])),
                  "recurse=%s withFiles=%s withFileContents=%s" % (
             recurse, withFiles, withFileContents))
-        # XXX all of these cache lookups should be a single operation through a
-        # temporary table
-        key = {
-            'recurse'   : recurse,
-            'withFiles' : withFiles,
-            'withFileContents' : withFileContents,
-            'excludeAutoSource' : excludeAutoSource,
-        }
+
+        authCheckFn = lambda n, v, f: \
+                self.auth.check(authToken, write = False,
+                                       trove = n, label = v.trailingLabel())
+
         # Big try-except to clean up files
         try:
-            for jobEntry in chgSetList:
-                l = self._cvtJobEntry(authToken, jobEntry)
+            chgSetList = [ self._cvtJobEntry(authToken, x) for x in chgSetList ]
 
-                # Get the desired changeset version for this client
-                csVersion = self._getChangeSetVersion(clientVersion)
-                iterV = csVersion
-                verPath = [iterV]
-                while 1:
-                    key['csVersion'] = iterV
-                    cacheEntry = self.cache.getEntry(l, **key)
-                    if cacheEntry is not None:
-                        # We found a cached version
-                        break
-                    if iterV not in CHANGESET_VERSIONS_PRECEDENCE:
-                        # No way to move forward
-                        break
-                    # Move one edge in the DAG, try again
-                    iterV = CHANGESET_VERSIONS_PRECEDENCE[iterV]
-                    verPath.append(iterV)
+            otherDetails, size = self._createChangeSet(retpath, chgSetList,
+                                    recurse = recurse,
+                                    withFiles = withFiles,
+                                    withFileContents = withFileContents,
+                                    excludeAutoSource = excludeAutoSource,
+                                    authCheck = authCheckFn)
 
-                # At the end of the loop, either cacheEntry is None, which
-                # means no version is cached, or cacheEntry is not None and
-                # iterV points to the version of the cached entry. Either way,
-                # iterV is the last entry in verPath
-                if cacheEntry is None:
-                    # No entry was found. Produce it
-                    iterV = CHANGESET_VERSIONS[0]
-                    cspath, otherDetails, size = self._createChangeSet(l,
-                                            recurse = recurse,
-                                            withFiles = withFiles,
-                                            withFileContents = withFileContents,
-                                            excludeAutoSource = excludeAutoSource)
-                else:
-                    cspath, otherDetails, size = cacheEntry
+            (trovesNeeded, filesNeeded, removedTroves) = otherDetails
 
-                (trovesNeeded, filesNeeded, removedTroves) = otherDetails
-
-                # Now walk the precedence list backwards
-                oldV = None
-                while verPath:
-                    iterV = verPath.pop()
-                    if oldV:
-                        # Convert the changeset - not the first time around
-                        key['csVersion'] = oldV
-                        cspath, size = self._convertChangeSet(cspath, size,
-                                                              iterV, **key)
-
-                    oldV = iterV
-
-                    if cacheEntry:
-                        # First entry already cached
-                        cacheEntry = None
-                        continue
-
-                    # Cache it
-                    (k, chpath) = self.cache.addEntry(l, recurse, withFiles,
-                                                      withFileContents,
-                                                      excludeAutoSource,
-                                                      (trovesNeeded,
-                                                       filesNeeded,
-                                                       removedTroves),
-                                                      size = size,
-                                                      csVersion = iterV)
-                    # Rename the changeset file to the cache file
-                    os.rename(cspath, chpath)
-                    # Next reference changeset file is the cached one
-                    cspath = chpath
-
-                if recurse:
-                    # check to make sure that this user has access to see all
-                    # the troves included in a recursive changeset.
-                    cs = changeset.ChangeSetFromFile(cspath)
-                    for tcs in cs.iterNewTroveList():
-                        if not self.auth.check(authToken, write = False,
-                                               trove = tcs.getName(),
-                                               label = tcs.getNewVersion().trailingLabel()):
-                            raise errors.InsufficientPermission
-
-                newChgSetList.extend(_cvtTroveList(trovesNeeded))
-                allFilesNeeded.extend(_cvtFileList(filesNeeded))
-                allRemovedTroves.extend(removedTroves)
-                sizes.append(size)
-                fout.write("%s %d\n" % (cspath, size))
+            newChgSetList.extend(_cvtTroveList(trovesNeeded))
+            allFilesNeeded.extend(_cvtFileList(filesNeeded))
+            allRemovedTroves.extend(removedTroves)
+            sizes.append(size)
         except:
-            fout.close()
             os.unlink(retpath)
             raise
-        fout.close()
 
-        if clientVersion < 38:
-            return url, sizes, newChgSetList, allFilesNeeded
-
+        # versions < 38 omit allRemoved troves, but the caching front end
+        # will omit that for us
         return url, sizes, newChgSetList, allFilesNeeded, \
                _cvtTroveList(allRemovedTroves)
 
+
+    @accessReadOnly
+    def getChangeSetFingerprints(self, authToken, clientVersion, chgSetList,
+                    recurse, withFiles, withFileContents, excludeAutoSource):
+
+        def _troveFp(troveInfo, sig):
+            if not sig:
+                return "otherrepo"
+
+            (present, sigBlock) = sig
+            if present >= 1:
+                return (base64.decodestring(sigBlock), )
+
+            return ("missing", ) + troveInfo
+
+        if recurse:
+            # We mark old groups (ones without weak references) as uncachable
+            # because they're expensive to flatten (and so old that it
+            # hardly matters).
+            cu = self.db.cursor()
+            schema.resetTable(cu, "gtl")
+
+            foundGroups = set()
+            foundWeak = set()
+            foundCollections = set()
+
+            newJobList = [ [] for x in range(len(chgSetList)) ]
+
+            for jobId, job in enumerate(chgSetList):
+                if job[0].startswith('group-'):
+                    foundGroups.add(jobId)
+
+                newJobList[jobId].append(job)
+
+                if job[1][0]:
+                    # Record the troves in the old trove this job is
+                    # relative to so if any of the old troves change
+                    # the fingerprints won't match.
+                    #
+                    # The weird math on jobId here avoids conflicts in that
+                    # row, which is a primary key. Seems easier than
+                    # declaring a new table.
+                    cu.execute("""
+                        INSERT INTO gtl(idx, name, version, flavor)
+                        VALUES (?, ?, ?, ?)
+                    """, -1 * (jobId + 1), job[0], job[1][0], job[1][1])
+
+                cu.execute("""
+                    INSERT INTO gtl(idx, name, version, flavor)
+                    VALUES (?, ?, ?, ?)
+                """, jobId, job[0], job[2][0], job[2][1])
+
+            cu.execute("""SELECT
+                    gtl.idx, I_Items.item, I_Versions.version,
+                    I_Flavors.flavor, TroveTroves.flags
+                FROM gtl JOIN Items ON gtl.name = Items.item
+                JOIN Versions ON (gtl.version = Versions.version)
+                JOIN Flavors ON (gtl.flavor = Flavors.flavor)
+                JOIN Instances ON
+                    Items.itemId = Instances.itemId AND
+                    Versions.versionId = Instances.versionId AND
+                    Flavors.flavorId = Instances.flavorId
+                JOIN TroveTroves USING (instanceId)
+                JOIN Instances AS I_Instances ON
+                    TroveTroves.includedId = I_Instances.instanceId
+                JOIN Items AS I_Items ON
+                    I_Instances.itemId = I_Items.itemId
+                JOIN Versions AS I_Versions ON
+                    I_Instances.versionId = I_Versions.versionId
+                JOIN Flavors AS I_Flavors ON
+                    I_Instances.flavorId = I_Flavors.flavorId
+                ORDER BY
+                    I_Items.item, I_Versions.version, I_Flavors.flavor
+            """)
+
+            for (idx, name, version, flavor, flags) in cu:
+                idx = abs(idx) - 1
+
+                newJobList[idx].append( (name, (None, None),
+                                               (version, flavor), True) )
+                if flags & schema.TROVE_TROVES_WEAKREF > 0:
+                    foundWeak.add(idx)
+                if not ':' in name and not name.startswith('fileset-'):
+                    foundCollections.add(idx)
+
+            for idx in ((foundGroups & foundCollections) - foundWeak):
+                # groups which contain collections but no weak refs
+                # are uncachable
+                newJobList[idx] = None
+
+            newJobList = newJobList
+        else:
+            newJobList = [ [ x ] for x in chgSetList ]
+
+        sigItems = []
+
+        for fullJob in newJobList:
+            for job in fullJob:
+                if job[1][0]:
+                    version = versions.VersionFromString(job[1][0])
+                    if version.trailingLabel().getHost() in self.serverNameList:
+                        sigItems.append((job[0], job[1][0], job[1][1]))
+                    else:
+                        sigItems.append(None)
+
+                version = versions.VersionFromString(job[2][0])
+                if version.trailingLabel().getHost() in self.serverNameList:
+                    sigItems.append((job[0], job[2][0], job[2][1]))
+                else:
+                    sigItems.append(None)
+
+        pureSigList = self.getTroveInfo(authToken, clientVersion,
+                                        trove._TROVEINFO_TAG_SIGS,
+                                        [ x for x in sigItems if x ])
+        sigList = []
+        sigCount = 0
+        for item in sigItems:
+            if not item:
+                sigList.append(None)
+            else:
+                sigList.append(pureSigList[sigCount])
+                sigCount += 1
+
+        # 0 is a version number for this signature block; changing this will
+        # invalidate all change set signatures downstream
+        header = "".join( ('0', "%d" % recurse, "%d" % withFiles,
+                    "%d" % withFileContents, "%d" % excludeAutoSource ) )
+        sigCount = 0
+        fingerprints = []
+        for origJob, fullJob in itertools.izip(chgSetList, newJobList):
+            if fullJob is None:
+                # uncachable job
+                fingerprints.append('')
+                continue
+
+            fpList = [ header ]
+            fpList += [ origJob[0], str(origJob[1][0]), str(origJob[1][1]),
+                        origJob[2][0], origJob[2][1], "%d" % origJob[3] ]
+            for job in fullJob:
+                if job[1][0]:
+                    fpList += _troveFp(sigItems[sigCount], sigList[sigCount])
+                    sigCount += 1
+
+                fpList += _troveFp(sigItems[sigCount], sigList[sigCount])
+                sigCount += 1
+
+            fp = sha1helper.sha1String("\0".join(fpList))
+            fingerprints.append(sha1helper.sha1ToString(fp))
+
+        return fingerprints
 
     @accessReadOnly
     def getDepSuggestions(self, authToken, clientVersion, label, requiresList,
@@ -1865,9 +1841,6 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
         self.log(2, authToken[0], 'mirror=%s' % (mirror,),
                  [ (x[1], x[0][0].asString(), x[0][1]) for x in items.iteritems() ])
 	self.repos.commitChangeSet(cs, mirror = mirror)
-
-        for info in removedList:
-            self.cache.invalidateEntry(self.repos, *info)
 
 	if not self.commitAction:
 	    return True
@@ -2413,8 +2386,6 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
             VALUES (?, ?, ?)
             """, (instanceId, trove._TROVEINFO_TAG_SIGS,
                   cu.binary(trv.troveInfo.sigs.freeze())))
-        self.cache.invalidateEntry(self.repos, trv.getName(), trv.getVersion(),
-                                   trv.getFlavor())
         return True
 
     @accessReadWrite
@@ -2698,8 +2669,6 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
                 (n,v,f),s = infoList[i]
                 invList.append((n,v,f))
         self.log(3, "updated signatures for", len(inserts+updates), "troves")
-        if len(invList):
-            self.cache.invalidateEntries(self.repos, invList)
         self.log(3, "invalidated cache for", len(invList), "troves")
         return len(inserts) + len(updates)
 
@@ -3007,9 +2976,6 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
                (clientVersion, ', '.join(str(x) for x in SERVER_VERSIONS)))
         return SERVER_VERSIONS
 
-    def cacheChangeSets(self):
-        return isinstance(self.cache, cacheset.CacheSet)
-
 class ClosedRepositoryServer(xmlshims.NetworkConvertors):
     def callWrapper(self, *args):
         return (False, True, ("RepositoryClosed", self.cfg.closed))
@@ -3031,7 +2997,7 @@ class ServerConfig(ConfigFile):
     bugsEmailName           = (CfgString, 'Conary Repository Bugs')
     bugsEmailSubject        = (CfgString,
                                'Conary Repository Error Message')
-    cacheDB                 = dbstore.CfgDriver
+    changesetCacheDir       = CfgPath
     closed                  = CfgString
     commitAction            = CfgString
     contentsDir             = CfgPath
@@ -3040,7 +3006,6 @@ class ServerConfig(ConfigFile):
     forceSSL                = CfgBool
     logFile                 = CfgPath
     proxyContentsDir        = CfgPath
-    proxyDB                 = dbstore.CfgDriver
     readOnlyRepository      = CfgBool
     repositoryDB            = dbstore.CfgDriver
     repositoryMap           = CfgRepoMap

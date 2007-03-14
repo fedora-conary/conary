@@ -4,6 +4,9 @@ Changes in @NEW@:
     * Added interface (but no command line option) for performing
       partial clones, where only some components out of a package
       are cloned based on byDefault settings. (CNY-1389)
+    * Allow merging and installing of changesets with compatible (non-diff)
+      sharing of (pathId,fileId) combinations (CNY-1253)
+
   o Bug Fixes:
     * Local flags are now cleared after each group cook, meaning that
       multipass group cooks will have the correct local flavor. (CNY-1400)
@@ -12,6 +15,25 @@ Changes in @NEW@:
     * Changesets for source troves with missing files (because the file is
       missing from the upstream server or the upstream server is unavailable)
       are properly written to changeset files. (CNY-1415)
+    * Derived packages (experimental) now correctly handle multiple
+      architectures built from the same source. (CNY-1423)
+    * loadInstalled now always works even if you have multiple versions of 
+      a package installed from multiple branches.
+
+  o Server Changes:
+    * The repository cache was completely reworked. This fixed problems with
+      authorization and the cache, and had the side benefits of unifying
+      the proxy code for the repository and the proxy. The cacheDB repository
+      configuration parameter is obsolete (and will cause an error on
+      startup). changesetCacheDir should now be used instead, and tmpwatch
+      now needs to be run on that directory as well as the tmpDir set in the
+      configuration (CNY-1387)
+    * Properly commits changesets where multiple troves reference the same
+      (pathId,fileId) key (CNY-1414)
+
+  o Build Changes:
+    * The vmware flavor has been defined, representing whether the
+      software is intended to be running as a vmware guest. (CNY-1421)
 
 Changes in 1.1.18:
   o Major Changes:
