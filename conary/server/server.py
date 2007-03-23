@@ -1,7 +1,7 @@
 #!/usr/bin/python2.4
 # -*- mode: python -*-
 #
-# Copyright (c) 2004-2006 rPath, Inc.
+# Copyright (c) 2004-2007 rPath, Inc.
 #
 # This program is distributed under the terms of the Common Public License,
 # version 1.0. A copy of this license should have been distributed with this
@@ -19,11 +19,12 @@ import errno
 import os
 import posixpath
 import select
+import socket
 import sys
 import xmlrpclib
 import urllib
 import zlib
-from BaseHTTPServer import HTTPServer
+import BaseHTTPServer
 from SimpleHTTPServer import SimpleHTTPRequestHandler
 
 thisFile = sys.modules[__name__].__file__
@@ -39,16 +40,16 @@ from conary.lib import coveragehook
 from conary import dbstore
 from conary.lib import options
 from conary.lib import util
-from conary.lib.cfg import CfgInt
+from conary.lib.cfg import CfgBool, CfgInt
 from conary.lib.tracelog import initLog, logMe
-from conary.repository import changeset
-from conary.repository import errors
+from conary.repository import changeset, errors, netclient
 from conary.repository.filecontainer import FileContainer
-from conary.repository.netrepos import netserver
+from conary.repository.netrepos import netserver, proxy
+from conary.repository.netrepos.proxy import ProxyRepositoryServer
 from conary.repository.netrepos.netserver import NetworkRepositoryServer
 from conary.server import schema
 
-#sys.excepthook = util.genExcepthook(debug=True)
+sys.excepthook = util.genExcepthook(debug=True)
 
 class HttpRequests(SimpleHTTPRequestHandler):
 
@@ -56,6 +57,9 @@ class HttpRequests(SimpleHTTPRequestHandler):
     inFiles = {}
 
     tmpDir = None
+
+    netRepos = None
+    netProxy = None
 
     def translate_path(self, path):
         """Translate a /-separated PATH to the local filename syntax.
@@ -103,19 +107,19 @@ class HttpRequests(SimpleHTTPRequestHandler):
         if base == 'changeset':
             if not queryString:
                 # handle CNY-1142
-                self.send_error(400, "Bad Request")
+                self.send_error(400)
                 return None
             urlPath = posixpath.normpath(urllib.unquote(self.path))
             localName = self.tmpDir + "/" + queryString + "-out"
             if os.path.realpath(localName) != localName:
-                self.send_error(404, "File not found")
+                self.send_error(404)
                 return None
 
             if localName.endswith(".cf-out"):
                 try:
                     f = open(localName, "r")
                 except IOError:
-                    self.send_error(404, "File not found")
+                    self.send_error(404)
                     return None
 
                 os.unlink(localName)
@@ -123,19 +127,21 @@ class HttpRequests(SimpleHTTPRequestHandler):
                 items = []
                 totalSize = 0
                 for l in f.readlines():
-                    (path, size) = l.split()
+                    (path, size, isChangeset, preserveFile) = l.split()
                     size = int(size)
+                    isChangeset = int(isChangeset)
+                    preserveFile = int(preserveFile)
                     totalSize += size
-                    items.append((path, size))
+                    items.append((path, size, isChangeset, preserveFile))
                 f.close()
                 del f
             else:
                 try:
                     size = os.stat(localName).st_size;
                 except OSError:
-                    self.send_error(404, "File not found")
+                    self.send_error(404)
                     return None
-                items = [ (localName, size) ]
+                items = [ (localName, size, 0, 0) ]
                 totalSize = size
 
             self.send_response(200)
@@ -143,8 +149,8 @@ class HttpRequests(SimpleHTTPRequestHandler):
             self.send_header("Content-Length", str(totalSize))
             self.end_headers()
 
-            for path, size in items:
-                if path.endswith('.ccs-out'):
+            for path, size, isChangeset, preserveFile in items:
+                if isChangeset:
                     cs = FileContainer(open(path))
                     cs.dump(self.wfile.write,
                             lambda name, tag, size, f, sizeCb:
@@ -152,13 +158,14 @@ class HttpRequests(SimpleHTTPRequestHandler):
                                                  sizeCb))
 
                     del cs
-                    if path.startswith(self.tmpDir):
-                        os.unlink(path)
                 else:
                     f = open(path)
                     util.copyfileobj(f, self.wfile)
+
+                if not preserveFile:
+                    os.unlink(path)
         else:
-            self.send_error(501, "Not Implemented")
+            self.send_error(501)
 
     def do_POST(self):
         if self.headers.get('Content-Type', '') == 'text/xml':
@@ -168,7 +175,7 @@ class HttpRequests(SimpleHTTPRequestHandler):
 
             return self.handleXml(authToken)
         else:
-            self.send_error(501, "Not Implemented")
+            self.send_error(501)
 
     def getAuth(self):
         info = self.headers.get('Authorization', None)
@@ -223,6 +230,8 @@ class HttpRequests(SimpleHTTPRequestHandler):
 	contentLength = int(self.headers['Content-Length'])
         data = self.rfile.read(contentLength)
 
+        targetServerName = self.headers.get('X-Conary-Servername', None)
+
         encoding = self.headers.get('Content-Encoding', None)
         if encoding == 'deflate':
             data = zlib.decompress(data)
@@ -230,13 +239,24 @@ class HttpRequests(SimpleHTTPRequestHandler):
         (params, method) = xmlrpclib.loads(data)
         logMe(3, "decoded xml-rpc call %s from %d bytes request" %(method, contentLength))
 
-	try:
-	    result = netRepos.callWrapper(None, None, method, authToken, params,
-                              remoteIp = self.connection.getpeername()[0])
-	except errors.InsufficientPermission:
-	    self.send_error(403)
-	    return None
-        logMe(3, "returned from", method)
+        if not targetServerName or targetServerName in self.cfg.serverName:
+            repos = self.netRepos
+        elif self.netProxy:
+            repos = self.netProxy
+        else:
+            result = (False, True, [ 'RepositoryMismatch',
+                                   self.cfg.serverName, targetServerName ] )
+            repos = None
+
+        if repos is not None:
+            try:
+                result = repos.callWrapper('http', None, method, authToken,
+                            params, remoteIp = self.connection.getpeername()[0],
+                            rawUrl = self.path)
+            except errors.InsufficientPermission:
+                self.send_error(403)
+                return None
+            logMe(3, "returned from", method)
 
         usedAnonymous = result[0]
         result = result[1:]
@@ -260,27 +280,34 @@ class HttpRequests(SimpleHTTPRequestHandler):
 	return resp
 
     def do_PUT(self):
+        contentLength = int(self.headers['Content-Length'])
+        authToken = self.getAuth()
+
+        if self.cfg.proxyContentsDir:
+            status, reason = netclient.httpPutFile(self.path, self.rfile, contentLength)
+            self.send_response(status)
+            return
+
 	path = self.path.split("?")[-1]
 
         if '/' in path:
-	    self.send_error(403, "Forbidden")
+	    self.send_error(403)
 
 	path = self.tmpDir + '/' + path + "-in"
 
 	size = os.stat(path).st_size
 	if size != 0:
-	    self.send_error(410, "Gone")
+	    self.send_error(410)
 	    return
 
 	out = open(path, "w")
 
-	contentLength = int(self.headers['Content-Length'])
 	while contentLength:
 	    s = self.rfile.read(contentLength)
 	    contentLength -= len(s)
 	    out.write(s)
 
-	self.send_response(200, 'OK')
+	self.send_response(200)
 
 class ResetableNetworkRepositoryServer(NetworkRepositoryServer):
     publicCalls = set(tuple(NetworkRepositoryServer.publicCalls) + ('reset',))
@@ -315,19 +342,26 @@ class ResetableNetworkRepositoryServer(NetworkRepositoryServer):
                         remove = True)
         self.createUser('anonymous', 'anonymous', admin = False, write = False)
 
+class HTTPServer(BaseHTTPServer.HTTPServer):
+    def close_request(self, request):
+        while select.select([request], [], [], 0)[0]:
+            # drain any remaining data on this request
+            # This avoids the problem seen with the keepalive code sending
+            # extra bytes after all the request has been sent.
+            if not request.recv(8096):
+                break
+        BaseHTTPServer.HTTPServer.close_request(self, request)
+
 class ServerConfig(netserver.ServerConfig):
 
     port		= (CfgInt,  8000)
+    proxy               = (CfgBool, False)
 
     def __init__(self, path="serverrc"):
 	netserver.ServerConfig.__init__(self)
 	self.read(path, exception=False)
 
     def check(self):
-        if self.cacheDB:
-            print >> sys.stderr, ("warning: cacheDB config option is ignored "
-                                  "by the standalone server")
-
         if self.closed:
             print >> sys.stderr, ("warning: closed config option is ignored "
                                   "by the standalone server")
@@ -370,7 +404,7 @@ def addUser(netRepos, userName, admin = False, mirror = False):
     netRepos.auth.addAcl(userName, None, None, write, False, admin)
     netRepos.auth.setMirror(userName, mirror)
 
-if __name__ == '__main__':
+def getServer():
     argDef = {}
     cfgMap = {
         'contents-dir'  : 'contentsDir',
@@ -415,6 +449,7 @@ if __name__ == '__main__':
         print cfg.tmpDir + " needs to allow full read/write access"
         sys.exit(1)
     HttpRequests.tmpDir = cfg.tmpDir
+    HttpRequests.cfg = cfg
 
     profile = 0
     if profile:
@@ -425,56 +460,69 @@ if __name__ == '__main__':
     baseUrl="http://%s:%s/" % (os.uname()[1], cfg.port)
 
     # start the logging
+    if 'migrate' in argSet:
+        # make sure the migration progress is visible
+        cfg.traceLog = (3, "stderr")
     if 'add-user' not in argSet and 'analyze' not in argSet:
         (l, f) = (3, "stderr")
         if cfg.traceLog:
             (l, f) = cfg.traceLog
         initLog(filename = f, level = l, trace=1)
 
-    if not cfg.repositoryDB:
-        cfg.repositoryDB = ("sqlite",  "%s/sqldb" % otherArgs[1])
-        del otherArgs[1]
+    if os.path.realpath(cfg.tmpDir) != cfg.tmpDir:
+        print "tmpDir cannot include symbolic links"
+        sys.exit(1)
 
-    if len(otherArgs) > 1:
-	usage()
-
-    if not cfg.contentsDir:
-        assert(cfg.repositoryDB[0] == "sqlite")
-        cfg.contentsDir = os.path.dirname(cfg.repositoryDB[1]) + '/contents'
-
-    if cfg.repositoryDB[0] == 'sqlite':
-        util.mkdirChain(os.path.dirname(cfg.repositoryDB[1]))
-
-    (driver, database) = cfg.repositoryDB
-    db = dbstore.connect(database, driver)
-    logMe(1, "checking schema version")
-    # if there is no schema or we're asked to migrate, loadSchema
-    if db.getVersion() == 0 or 'migrate' in argSet:
-        schema.loadSchema(db)
-    if 'migrate' in argSet:
-        sys.exit(0)
-
-    netRepos = NetworkRepositoryServer(cfg, baseUrl)
-    #netRepos = ResetableNetworkRepositoryServer(cfg, baseUrl)
-
-    if 'add-user' in argSet:
-        admin = argSet.pop('admin', False)
-        mirror = argSet.pop('mirror', False)
-        userName = argSet.pop('add-user')
-        if argSet:
+    if cfg.proxyContentsDir:
+        if len(otherArgs) > 1:
             usage()
-        sys.exit(addUser(netRepos, userName, admin = admin, mirror = mirror))
-    elif argSet.pop('analyze', False):
-        if argSet:
+
+        HttpRequests.netProxy = ProxyRepositoryServer(cfg, baseUrl)
+    elif cfg.repositoryDB:
+        if len(otherArgs) > 1:
             usage()
-        netRepos.db.analyze()
-        sys.exit(0)
+
+        if not cfg.contentsDir:
+            assert(cfg.repositoryDB[0] == "sqlite")
+            cfg.contentsDir = os.path.dirname(cfg.repositoryDB[1]) + '/contents'
+
+        if cfg.repositoryDB[0] == 'sqlite':
+            util.mkdirChain(os.path.dirname(cfg.repositoryDB[1]))
+
+        (driver, database) = cfg.repositoryDB
+        db = dbstore.connect(database, driver)
+        logMe(1, "checking schema version")
+        # if there is no schema or we're asked to migrate, loadSchema
+        if db.getVersion() == 0 or 'migrate' in argSet:
+            schema.loadSchema(db)
+        if 'migrate' in argSet:
+            sys.exit(0)
+
+        #netRepos = NetworkRepositoryServer(cfg, baseUrl)
+        netRepos = ResetableNetworkRepositoryServer(cfg, baseUrl)
+        HttpRequests.netRepos = proxy.SimpleRepositoryFilter(cfg, baseUrl, netRepos)
+
+        if 'add-user' in argSet:
+            admin = argSet.pop('admin', False)
+            mirror = argSet.pop('mirror', False)
+            userName = argSet.pop('add-user')
+            if argSet:
+                usage()
+            sys.exit(addUser(netRepos, userName, admin = admin,
+                             mirror = mirror))
+        elif argSet.pop('analyze', False):
+            if argSet:
+                usage()
+            netRepos.db.analyze()
+            sys.exit(0)
 
     if argSet:
         usage()
 
     httpServer = HTTPServer(("", cfg.port), HttpRequests)
+    return httpServer, profile
 
+def serve(httpServer, profile=False):
     fds = {}
     fds[httpServer.fileno()] = httpServer
 
@@ -498,3 +546,11 @@ if __name__ == '__main__':
                 sys.exit(1)
             else:
                 raise
+
+def main():
+    server, profile = getServer()
+    serve(server)
+
+if __name__ == '__main__':
+    main()
+

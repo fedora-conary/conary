@@ -16,12 +16,14 @@ import os
 import pickle
 
 #conary imports
-from conary import conarycfg, metadata
+from conary import conarycfg, metadata, trove
 from conary.conaryclient import clone, resolve, update
 from conary.lib import log, util
 from conary.local import database
 from conary.repository.netclient import NetworkRepositoryClient
 from conary.repository import trovesource
+from conary.repository import searchsource
+from conary.repository import resolvemethod
 
 # mixins for ConaryClient
 from conary.conaryclient.branch import ClientBranch
@@ -109,10 +111,14 @@ class ConaryClient(ClientClone, ClientBranch, ClientUpdate):
                                           cfg.downloadRateLimit,
                                        uploadRateLimit =
                                           cfg.uploadRateLimit,
-                                       entitlements = entitlements)
+                                       entitlements = entitlements,
+                                       proxy = cfg.proxy)
 
     def getRepos(self):
         return self.repos
+
+    def setRepos(self, repos):
+        self.repos = repos
 
     def getMetadata(self, troveList, label, cacheFile = None,
                     cacheOnly = False, saveOnly = False):
@@ -175,85 +181,29 @@ class ConaryClient(ClientClone, ClientBranch, ClientUpdate):
                              excludeList = conarycfg.RegularExpressionList(),
                              callback = None):
         primaryList = []
+        headerList = []
         for (name, (oldVersion, oldFlavor),
                    (newVersion, newFlavor), abstract) in csList:
             if newVersion:
                 primaryList.append((name, newVersion, newFlavor))
+                if oldVersion:
+                    headerList.append( (name, (None, None),
+                                              (oldVersion, oldFlavor), True) )
+
+                headerList.append( (name, (None, None),
+                                          (newVersion, newFlavor), True) )
             else:
                 primaryList.append((name, oldVersion, oldFlavor))
 
-        cs = self.repos.createChangeSet(csList, recurse = recurse, 
+        cs = self.repos.createChangeSet(headerList, recurse = recurse, 
                                         withFiles = False, callback = callback)
 
-        deleted = set()
-        # filter out non-defaults
-        if skipNotByDefault:
-            # Find out if troves were included w/ byDefault set (one
-            # byDefault beats any number of not byDefault)
-            inclusions = {}
-            for troveCs in cs.iterNewTroveList():
-                for (name, changeList) in troveCs.iterChangedTroves():
-                    for (changeType, version, flavor, byDef) in changeList:
-                        if changeType == '+':
-                            inclusions.setdefault((name, version, flavor), 0)
-                            if byDef:
-                                inclusions[(name, version, flavor)] +=1
-
-            # use a list comprehension here because we're modifying the
-            # underlying dict in the cs instance
-            for troveCs in [ x for x in cs.iterNewTroveList() ]:
-                if not troveCs.getNewVersion():
-                    # erases get to stay since they don't have a byDefault flag
-                    continue
-
-                item = (troveCs.getName(), troveCs.getNewVersion(),
-                        troveCs.getNewFlavor())
-                if item in primaryList: 
-                    # the item was explicitly asked for
-                    continue
-                elif inclusions[item] or item in deleted:
-                    # the item was included w/ byDefault set (or we might
-                    # have already erased it from the changeset)
-                    continue
-
-                # troveCs was not included byDefault True anywhere.
-                # It may include subcomponents with byDefault True, however.
-                # 
-                # Say troveCs represents an install of foo, byDefault False.
-
-                # If foo:runtime is only included by foo, 
-                # then we don't want foo:runtime either, even if foo:runtime
-                # is included in foo byDefault True.
-                # However, if foo:runtime is included in a higher-level group
-                # byDefault True, then foo:runtime should be included. 
-                # We track not-by-default references to foo:runtime in 
-                # inclusions, and delete foo:runtime only when its last
-                # byDefault referencer was deleted.
-
-                toDelete = [troveCs]
-                while toDelete:
-                    troveCs = toDelete.pop()
-                    item = (troveCs.getName(), troveCs.getNewVersion(),
-                            troveCs.getNewFlavor())
-
-                    deleted.add(item)
-                    cs.delNewTrove(*item)
-
-                    for (name, changeList) in troveCs.iterChangedTroves():
-                        for (changeType, version, flavor, byDef) in changeList:
-                            if changeType == '+' and byDef:
-                                item = (name, version, flavor)
-                                inclusions[item] -= 1
-                                if not inclusions[item]:
-                                    childCs = cs.getNewTroveVersion(*item)
-                                    toDelete.append(childCs)
-
-        # now filter excludeList
-        fullCsList = []
-        for troveCs in cs.iterNewTroveList():
-            name = troveCs.getName()
-            newVersion = troveCs.getNewVersion()
-            newFlavor = troveCs.getNewFlavor()
+        finalList = set()
+        jobList = csList[:]
+        while jobList:
+            job = jobList.pop(-1)
+            (name, (oldVersion, oldFlavor),
+                   (newVersion, newFlavor), abstract) = job
 
             skip = False
 
@@ -262,29 +212,47 @@ class ConaryClient(ClientClone, ClientBranch, ClientUpdate):
                 if excludeList.match(name):
                     skip = True
 
-            if not skip:
-                fullCsList.append((name, 
-                           (troveCs.getOldVersion(), troveCs.getOldFlavor()),
-                           (newVersion,              newFlavor),
-                       not troveCs.getOldVersion()))
+            if skip:
+                continue
 
-        # exclude packages that are being erased as well
-        for (name, oldVersion, oldFlavor) in cs.getOldTroveList():
-            skip = False
-            if (name, oldVersion, oldFlavor) not in primaryList:
-                for reStr, regExp in self.cfg.excludeTroves:
-                    if regExp.match(name):
-                        skip = True
-            if not skip:
-                fullCsList.append((name, (oldVersion, oldFlavor),
-                                   (None, None), False))
+            finalList.add(job)
+
+            if not recurse or not trove.troveIsCollection(name):
+                continue
+
+            if job[2][1] is None:
+                continue
+            elif job[1][0] is None:
+                oldTrove = None
+            else:
+                oldTrove = trove.Trove(cs.getNewTroveVersion(name, oldVersion,
+                                                             oldFlavor))
+
+            newTrove = trove.Trove(cs.getNewTroveVersion(name, newVersion,
+                                                         newFlavor))
+
+            trvCs, filesNeeded, trovesNeeded = newTrove.diff(
+                                            oldTrove, (oldTrove == None))
+
+            for subJob in trovesNeeded:
+                if not subJob[2][0]:
+                    jobList.append(subJob)
+                    continue
+
+                if skipNotByDefault and not newTrove.includeTroveByDefault(
+                                    subJob[0], subJob[2][0], subJob[2][1]):
+                    continue
+
+                jobList.append(subJob)
+
+        finalList = list(finalList)
 
         # recreate primaryList without erase-only troves for the primary trove 
         # list
-        primaryList = [ (x[0], x[2][0], x[2][1]) for x in csList 
+        primaryList = [ (x[0], x[2][0], x[2][1]) for x in csList
                         if x[2][0] is not None ]
 
-        return (fullCsList, primaryList)
+        return (finalList, primaryList)
 
     def createChangeSet(self, csList, recurse = True, 
                         skipNotByDefault = True, 
@@ -364,6 +332,12 @@ class ConaryClient(ClientClone, ClientBranch, ClientUpdate):
     def getRepos(self):
         return self.repos
 
+    def iterRollbacksList(self):
+        """
+        Iterate over rollback list.
+        Yield (rollbackName, rollback)
+        """
+        return self.db.iterRollbacksList()
 
     def _checkChangeSetForLabelConflicts(self, cs):
         source = trovesource.ChangesetFilesTroveSource(None)
@@ -403,3 +377,10 @@ class ConaryClient(ClientClone, ClientBranch, ClientUpdate):
             if not foundPrevious and troveConflict:
                 conflicts.append(troveConflict)
         return conflicts
+
+    def getSearchSource(self):
+        searchMethod = resolvemethod.RESOLVE_LEAVES_FIRST
+        return searchsource.NetworkSearchSource(self.getRepos(),
+                        self.cfg.installLabelPath,
+                        self.cfg.flavor, self.db,
+                        resolveSearchMethod=searchMethod)

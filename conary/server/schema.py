@@ -750,10 +750,11 @@ def setupTempTables(db):
     if "gtlInst" not in db.tempTables:
         cu.execute("""
         CREATE TEMPORARY TABLE gtlInst(
-            idx         %(PRIMARYKEY)s,
+            idx         INTEGER,
             instanceId  INTEGER
         ) %(TABLEOPTS)s""" % db.keywords)
         db.tempTables["gtlInst"] = True
+        db.createIndex("gtlInst", "gtlInstIdx", "idx", check = False)
         db.createIndex("gtlInst", "gtlInstInstanceIdx", "instanceId, idx",
                        check = False)
     if "getFilesTbl" not in db.tempTables:
@@ -843,6 +844,26 @@ def setupTempTables(db):
             flags           INTEGER NOT NULL DEFAULT 0
         ) %(TABLEOPTS)s""" % db.keywords)
         db.tempTables["newTroveTroves"] = True
+
+    if "tmpFileIds" not in db.tempTables:
+        cu.execute("""
+        CREATE TEMPORARY TABLE
+        tmpFileIds(
+            fileId          %(BINARY20)s NOT NULL
+        ) %(TABLEOPTS)s""" % db.keywords)
+        db.tempTables["tmpFileIds"] = True
+        db.createIndex("tmpFileIds", "tmpFileIdsFileIdIdx", "fileId",
+                       check = False)
+
+    if "tmpFilePrefixes" not in db.tempTables:
+        cu.execute("""
+        CREATE TEMPORARY TABLE
+        tmpFilePrefixes(
+            prefix          %(STRING)s NOT NULL
+        ) %(TABLEOPTS)s""" % db.keywords)
+        db.tempTables["tmpFilePrefixes"] = True
+        db.createIndex("tmpFilePrefixes", "tmpFilePrefixesPrefixIdx", "prefix",
+                       check = False)
 
     db.commit()
 

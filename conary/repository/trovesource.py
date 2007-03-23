@@ -14,6 +14,7 @@
 
 import itertools
 
+from conary import errors as conaryerrors
 from conary import files
 from conary import trove
 from conary.local import deptable
@@ -66,7 +67,7 @@ class AbstractTroveSource:
     def getTroves(self, troveList, withFiles = True):
         raise NotImplementedError
 
-    def resolveDependencies(self, label, depList):
+    def resolveDependencies(self, label, depList, leavesOnly=False):
         results = {}
         for depSet in depList:
             results[depSet] = [ [] for x in depSet.iterDeps() ]
@@ -117,11 +118,12 @@ class AbstractTroveSource:
     def findTrove(self, labelPath, (name, versionStr, flavor), 
                   defaultFlavor=None, acrossSources = True, 
                   acrossFlavors = True, affinityDatabase = None,
-                  bestFlavor = None, getLeaves = None):
+                  bestFlavor = None, getLeaves = None, 
+                  troveTypes=TROVE_QUERY_PRESENT):
         res = self.findTroves(labelPath, ((name, versionStr, flavor),),
                               defaultFlavor, acrossSources, acrossFlavors,
                               affinityDatabase, bestFlavor=bestFlavor,
-                              getLeaves=getLeaves)
+                              getLeaves=getLeaves, troveTypes=troveTypes)
         return res[(name, versionStr, flavor)]
 
     def iterFilesInTrove(self, n, v, f, sortByPath=False, withFiles=False):
@@ -179,7 +181,7 @@ class AbstractTroveSource:
                 lst = [ [] for x in trovesByDepList ]
                 allSuggs[depSet] = lst
             else:
-                lst = r[depSet]
+                lst = allSuggs[depSet]
 
             for i, troveList in enumerate(trovesByDepList):
                 lst[i].extend(troveList)
@@ -233,6 +235,10 @@ class SearchableTroveSource(AbstractTroveSource):
         # return changeset, and unhandled jobs
         cs = changeset.ReadOnlyChangeSet()
         return cs, jobList
+
+    def searchWithFlavor(self):
+        self._bestFlavor = True
+        self._flavorCheck = _CHECK_TROVE_REG_FLAVOR
 
     def searchAsRepository(self):
         self._allowNoLabel = False
@@ -458,9 +464,8 @@ class SimpleTroveSource(SearchableTroveSource):
 
 
 class TroveListTroveSource(SimpleTroveSource):
-    def __init__(self, source, troveTups, withDeps=False):
+    def __init__(self, source, troveTups):
         SimpleTroveSource.__init__(self, troveTups)
-        self.deps = {}
         self.source = source
         self.sourceTups = troveTups[:]
 
@@ -484,6 +489,10 @@ class TroveListTroveSource(SimpleTroveSource):
 
     def hasTroves(self, troveTups):
         return self.source.hasTroves(troveTups)
+
+    def resolveDependenciesByGroups(self, troveList, deps):
+        return self.source.resolveDependenciesByGroups(troveList, deps)
+        
 
 
 class GroupRecipeSource(SearchableTroveSource):
@@ -558,8 +567,16 @@ class ChangesetFilesTroveSource(SearchableTroveSource):
         self.idMap = {}
         self.storeDeps = storeDeps
 
+        # Parallel list to csList: file names for the changesets
+        # Format is (filename, includesFileContents)
+        self.csFileNameList = []
+
         if storeDeps:
             self.depDb = deptable.DependencyDatabase()
+
+    def addChangeSets(self, csList, includesFileContents = False):
+        for cs in csList:
+            self.addChangeSet(cs, includesFileContents=includesFileContents)
 
     def addChangeSet(self, cs, includesFileContents = False):
         relative = []
@@ -581,8 +598,7 @@ class ChangesetFilesTroveSource(SearchableTroveSource):
 
             if trvCs.getOldVersion() is None:
                 if info in self.troveCsMap:
-                    # FIXME: there is no such exception in this context
-                    raise DuplicateTrove
+                    raise conaryerrors.InternalConaryError
                 self.troveCsMap[info] = cs
                 self.jobMap[(info[0], (None, None), info[1:], 
                              trvCs.isAbsolute())] = cs, includesFileContents
@@ -601,7 +617,7 @@ class ChangesetFilesTroveSource(SearchableTroveSource):
             for (trvCs, info) in relative:
                 if info in self.troveCsMap:
                     # FIXME: there is no such exception in this context
-                    raise DuplicateTrove
+                    raise conaryerrors.InternalConaryError
                 if not self.db.hasTrove(*trvCs.getOldNameVersionFlavor()):
                     # we don't has the old version of this trove, don't 
                     # use this changeset when updating this trove.
@@ -613,6 +629,11 @@ class ChangesetFilesTroveSource(SearchableTroveSource):
                                                 (cs, includesFileContents)
 
         self.csList.append(cs)
+        # Save file name too
+        fileName = None
+        if hasattr(cs, 'fileName'):
+            fileName = cs.fileName
+        self.csFileNameList.append((fileName, includesFileContents))
 
     def reset(self):
         for cs in self.csList:
@@ -766,9 +787,9 @@ class ChangesetFilesTroveSource(SearchableTroveSource):
     def iterChangeSets(self):
         return iter(self.csList)
 
-    def resolveDependencies(self, label, depList):
+    def resolveDependencies(self, label, depList, leavesOnly=False):
         assert(self.storeDeps)
-        suggMap = self.depDb.resolve(label, depList)
+        suggMap = self.depDb.resolve(label, depList, leavesOnly=leavesOnly)
         for depSet, solListList in suggMap.iteritems():
             newSolListList = []
             for solList in solListList:
@@ -948,24 +969,18 @@ class ChangesetFilesTroveSource(SearchableTroveSource):
         self.storeDeps = self.storeDeps or source.storeDeps
 
 
-class TroveSourceStack(SearchableTroveSource):
+class SourceStack(object):
 
     def __init__(self, *sources):
         self.sources = []
         for source in sources:
             self.addSource(source)
 
-    def requiresLabelPath(self):
-        for source in self.iterSources():
-            if source.requiresLabelPath():
-                return True
-        return False
-
     def addSource(self, source):
         if source is None:
             return
 
-        if isinstance(source, TroveSourceStack):
+        if isinstance(source, self.__class__):
             for subSource in source.iterSources():
                 self.addSource(subSource)
             return
@@ -973,9 +988,9 @@ class TroveSourceStack(SearchableTroveSource):
         if source not in self:
             self.sources.append(source)
 
-    def insertSource(self, source, idx=0):
-        if source is not None and source not in self:
-            self.sources.insert(idx, source)
+    def __repr__(self):
+        return '%s(%s)' % (self.__class__.__name__,
+                           ', '.join(repr(x) for x in self.sources))
 
     def hasSource(self, source):
         return source in self
@@ -1004,10 +1019,7 @@ class TroveSourceStack(SearchableTroveSource):
             yield source
 
     def copy(self):
-        return TroveSourceStack(*self.sources)
-
-    def __repr__(self):
-        return 'TroveSourceStack(%s)' % (', '.join(repr(x) for x in self.sources))
+        return self.__class__(*self.sources)
 
     def __contains__(self, newSource):
         # don't use == because some sources may define ==
@@ -1016,16 +1028,13 @@ class TroveSourceStack(SearchableTroveSource):
                 return True
         return False
 
-    def trovesByName(self, name):
-        return list(itertools.chain(*(x.trovesByName(name) for x in self.sources)))
-
     def getTrove(self, name, version, flavor, withFiles = True):
         trv = self.getTroves([(name, version, flavor)], withFiles=withFiles)[0]
         if trv is None:
             raise errors.TroveMissing(name, version)
         return trv
 
-    def getTroves(self, troveList, withFiles = True):
+    def getTroves(self, troveList, withFiles = True, allowMissing=True):
         troveList = list(enumerate(troveList)) # make a copy and add indexes
         numTroves = len(troveList)
         results = [None] * numTroves
@@ -1044,109 +1053,11 @@ class TroveSourceStack(SearchableTroveSource):
                 else:
                     results[index] = trove
             troveList = newTroveList
+        if troveList and not allowMissing:
+            raise errors.TroveMissingError(troveList[0][1][0],
+                                           troveList[0][1][1])
         return results
 
-    def isSearchAsDatabase(self):
-        for source in self.sources:
-            if not source._allowNoLabel:
-                return False
-        return True
-
-    def findTroves(self, labelPath, troveSpecs, defaultFlavor=None, 
-                   acrossLabels=True, acrossFlavors=True, 
-                   affinityDatabase=None, allowMissing=False,
-                   troveTypes=TROVE_QUERY_PRESENT):
-        troveSpecs = list(troveSpecs)
-
-        results = {}
-
-        someRequireLabel = not self.isSearchAsDatabase()
-        if someRequireLabel:
-            assert(labelPath)
-
-        for source in self.sources[:-1]:
-            # FIXME: it should be possible to reuse the trove finder
-            # but the bestFlavr and getLeaves data changes per source
-            # and is passed into several TroveFinder sub objects.  
-            # TroveFinder should be cleaned up
-            if someRequireLabel and source._allowNoLabel:
-                sourceLabelPath = None
-                sourceDefaultFlavor = None
-            else:
-                sourceLabelPath = labelPath
-                sourceDefaultFlavor = defaultFlavor
-
-            if source.searchableByType():
-                sourceTroveTypes = troveTypes
-            else:
-                sourceTroveTypes = TROVE_QUERY_PRESENT
-
-            troveFinder = findtrove.TroveFinder(source, sourceLabelPath, 
-                                            sourceDefaultFlavor, acrossLabels,
-                                            acrossFlavors, affinityDatabase,
-                                            allowNoLabel=source._allowNoLabel,
-                                            bestFlavor=source._bestFlavor,
-                                            getLeaves=source._getLeavesOnly,
-                                            troveTypes=sourceTroveTypes)
-
-            foundTroves = troveFinder.findTroves(troveSpecs, allowMissing=True)
-
-            newTroveSpecs = []
-            for troveSpec in troveSpecs:
-                if troveSpec in foundTroves:
-                    results[troveSpec] = foundTroves[troveSpec]
-                else:
-                    newTroveSpecs.append(troveSpec)
-
-            troveSpecs = newTroveSpecs
-
-        source = self.sources[-1]
-
-        if someRequireLabel and source._allowNoLabel:
-            sourceLabelPath = None
-        else:
-            sourceLabelPath = labelPath
-         
-        troveFinder = findtrove.TroveFinder(source, labelPath, 
-                                        defaultFlavor, acrossLabels,
-                                        acrossFlavors, affinityDatabase,
-                                        allowNoLabel=source._allowNoLabel,
-                                        bestFlavor=source._bestFlavor,
-                                        getLeaves=source._getLeavesOnly)
-
-        results.update(troveFinder.findTroves(troveSpecs, 
-                                              allowMissing=allowMissing))
-        return results
-
-    def resolveDependencies(self, label, depList):
-        results = {}
-        depList = set(depList)
-        for depSet in depList:
-            results[depSet] = [ [] for x in depSet.iterDeps() ]
-
-        for source in self.sources:
-            if not depList:
-                break
-
-            sugg = source.resolveDependencies(label, depList)
-            for depSet, troves in sugg.iteritems():
-                if [ x for x in troves if x ]:
-                    # only consider this depSet 'solved' if at least
-                    # on of the deps had a trove suggested for it.
-                    # FIXME: We _could_ manipulate the depSet and send 
-                    # it back to get more responses from other trove sources.
-                    depList.remove(depSet)
-                    results[depSet] = troves
-        return results
-    
-    def resolveDependenciesByGroups(self, troveList, depList):
-        allSugg = {}
-        for source in self.sources:
-            sugg = source.resolveDependenciesByGroups(troveList, depList)
-            # there's no ordering of suggestions when you're doing 
-            # resolveDependencies by groups
-            self.mergeDepSuggestions(allSugg, sugg)
-        return allSugg
 
     def createChangeSet(self, jobList, withFiles = True, recurse = False,
                         withFileContents = False, callback = None):
@@ -1158,17 +1069,17 @@ class TroveSourceStack(SearchableTroveSource):
                 break
 
             try:
-                res = source.createChangeSet(jobList, 
+                res = source.createChangeSet(jobList,
                                            withFiles = withFiles,
                                            withFileContents = withFileContents,
                                            recurse = recurse, 
                                            callback = callback)
+                if isinstance(res, (list, tuple)):
+                    newCs, jobList = res
+                else: 
+                    newCs, jobList = res, None
             except errors.OpenError:
-                res = changeset.ReadOnlyChangeSet(), jobList
-            if isinstance(res, (list, tuple)):
-                newCs, jobList = res
-            else: 
-                newCs, jobList = res, None
+                newCs = changeset.ReadOnlyChangeSet()
             cs.merge(newCs)
 
         return cs, jobList
@@ -1193,6 +1104,146 @@ class TroveSourceStack(SearchableTroveSource):
             except errors.TroveMissing:
                 pass
         raise errors.TroveMissing(n,v)
+
+
+class TroveSourceStack(SourceStack, SearchableTroveSource):
+    def __init__(self, *args, **kw):
+        SourceStack.__init__(self, *args, **kw)
+        SearchableTroveSource.__init__(self)
+
+    def requiresLabelPath(self):
+        for source in self.iterSources():
+            if source.requiresLabelPath():
+                return True
+        return False
+
+    def insertSource(self, source, idx=0):
+        if source is not None and source not in self:
+            self.sources.insert(idx, source)
+
+    def trovesByName(self, name):
+        return list(itertools.chain(*(x.trovesByName(name) for x in self.sources)))
+
+    def isSearchAsDatabase(self):
+        for source in self.sources:
+            if not source._allowNoLabel:
+                return False
+        return True
+
+    def findTroves(self, labelPath, troveSpecs, defaultFlavor=None, 
+                   acrossLabels=True, acrossFlavors=True, 
+                   affinityDatabase=None, allowMissing=False,
+                   bestFlavor=None, getLeaves=None,
+                   troveTypes=TROVE_QUERY_PRESENT):
+
+        sourceBestFlavor = bestFlavor
+        sourceGetLeaves = getLeaves
+        troveSpecs = list(troveSpecs)
+
+        results = {}
+
+        for source in self.sources[:-1]:
+            # FIXME: it should be possible to reuse the trove finder
+            # but the bestFlavr and getLeaves data changes per source
+            # and is passed into several TroveFinder sub objects.  
+            # TroveFinder should be cleaned up
+            if source._allowNoLabel:
+                sourceLabelPath = None
+                sourceDefaultFlavor = None
+            else:
+                sourceLabelPath = labelPath
+                sourceDefaultFlavor = defaultFlavor
+
+            if source.searchableByType():
+                sourceTroveTypes = troveTypes
+            else:
+                sourceTroveTypes = TROVE_QUERY_PRESENT
+
+            if bestFlavor is None:
+                sourceBestFlavor = source._bestFlavor
+            if getLeaves is None:
+                sourceGetLeaves = source._getLeavesOnly
+
+            troveFinder = findtrove.TroveFinder(source, sourceLabelPath, 
+                                            sourceDefaultFlavor, acrossLabels,
+                                            acrossFlavors, affinityDatabase,
+                                            allowNoLabel=source._allowNoLabel,
+                                            bestFlavor=sourceBestFlavor,
+                                            getLeaves=sourceGetLeaves,
+                                            troveTypes=sourceTroveTypes)
+
+            foundTroves = troveFinder.findTroves(troveSpecs, allowMissing=True)
+
+            newTroveSpecs = []
+            for troveSpec in troveSpecs:
+                if troveSpec in foundTroves:
+                    results[troveSpec] = foundTroves[troveSpec]
+                else:
+                    newTroveSpecs.append(troveSpec)
+
+            troveSpecs = newTroveSpecs
+
+        source = self.sources[-1]
+
+        if source._allowNoLabel:
+            sourceLabelPath = None
+            sourceDefaultFlavor = None
+        else:
+            sourceLabelPath = labelPath
+            sourceDefaultFlavor = defaultFlavor
+        if source.searchableByType():
+            sourceTroveTypes = troveTypes
+        else:
+            sourceTroveTypes = TROVE_QUERY_PRESENT
+        if bestFlavor is None:
+            sourceBestFlavor = source._bestFlavor
+        if getLeaves is None:
+            sourceGetLeaves = source._getLeavesOnly
+
+
+        troveFinder = findtrove.TroveFinder(source, sourceLabelPath,
+                                        sourceDefaultFlavor, acrossLabels,
+                                        acrossFlavors, affinityDatabase,
+                                        allowNoLabel=source._allowNoLabel,
+                                        bestFlavor=sourceBestFlavor,
+                                        getLeaves=sourceGetLeaves,
+                                        troveTypes=sourceTroveTypes)
+
+        results.update(troveFinder.findTroves(troveSpecs,
+                                              allowMissing=allowMissing))
+        return results
+
+    def resolveDependencies(self, label, depList, leavesOnly=False):
+        results = {}
+        depList = set(depList)
+        for depSet in depList:
+            results[depSet] = [ [] for x in depSet.iterDeps() ]
+
+        for source in self.sources:
+            if not depList:
+                break
+
+            sugg = source.resolveDependencies(label, depList,
+                                              leavesOnly=leavesOnly)
+            for depSet, troves in sugg.iteritems():
+                if [ x for x in troves if x ]:
+                    # only consider this depSet 'solved' if at least
+                    # on of the deps had a trove suggested for it.
+                    # FIXME: We _could_ manipulate the depSet and send 
+                    # it back to get more responses from other trove sources.
+                    depList.remove(depSet)
+                    results[depSet] = troves
+        return results
+    
+    def resolveDependenciesByGroups(self, troveList, depList):
+        allSugg = {}
+        for source in self.sources:
+            sugg = source.resolveDependenciesByGroups(troveList, depList)
+            # there's no ordering of suggestions when you're doing 
+            # resolveDependencies by groups
+            self.mergeDepSuggestions(allSugg, sugg)
+        return allSugg
+
 
 def stack(*sources):
     """ create a trove source that will search first source1, then source2 """
@@ -1295,7 +1346,7 @@ class JobSource(AbstractJobSource):
             self.jobsByNew[name, job[2][0], job[2][1]] = job
 
     def findTroves(self, *args, **kw):
-        return self.allTroves.findTroves(*args, **kw)
+        return self.allTroveList.findTroves(*args, **kw)
 
     def findJobs(self, jobList):
         """ Finds a job given a changeSpec
@@ -1512,3 +1563,5 @@ class ChangeSetJobSource(JobSource):
                            oldVersion, oldFileObj, modType)
                 else:
                     yield pathId, path, fileId, version, fileObj, modType
+
+

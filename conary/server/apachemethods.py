@@ -21,8 +21,8 @@ import xmlrpclib
 import zlib
 
 from conary.lib import log
-from conary.repository import changeset
-from conary.repository import errors
+from conary.repository import changeset, errors, netclient
+from conary.repository.netrepos import proxy
 from conary.repository.filecontainer import FileContainer
 from conary.web.webauth import getAuth
 
@@ -71,7 +71,8 @@ def post(port, isSecure, repos, req):
             try:
                 result = repos.callWrapper(protocol, port, method, authToken,
                                            params,
-                                           remoteIp = req.connection.remote_ip)
+                                           remoteIp = req.connection.remote_ip,
+                                           rawUrl = req.unparsed_uri)
             except errors.InsufficientPermission:
                 return apache.HTTP_FORBIDDEN
 
@@ -152,10 +153,12 @@ def get(port, isSecure, repos, req):
             items = []
             totalSize = 0
             for l in f.readlines():
-                (path, size) = l.split()
+                (path, size, isChangeset, preserveFile) = l.split()
                 size = int(size)
+                isChangeset = int(isChangeset)
+                preserveFile = int(preserveFile)
                 totalSize += size
-                items.append((path, size))
+                items.append((path, size, isChangeset, preserveFile))
             f.close()
             del f
         else:
@@ -163,12 +166,12 @@ def get(port, isSecure, repos, req):
                 size = os.stat(localName).st_size;
             except OSError:
                 return apache.HTTP_NOT_FOUND
-            items = [ (localName, size) ]
+            items = [ (localName, size, 0, 0) ]
             totalSize = size
 
         req.content_type = "application/x-conary-change-set"
-        for (path, size) in items:
-            if path.endswith('.ccs-out'):
+        for (path, size, isChangeset, preserveFile) in items:
+            if isChangeset:
                 cs = FileContainer(open(path))
                 try:
                     cs.dump(req.write,
@@ -182,8 +185,7 @@ def get(port, isSecure, repos, req):
             else:
                 req.sendfile(path)
 
-            if path.startswith(repos.tmpPath) and \
-                    not(os.path.basename(path)[0:6].startswith('cache-')):
+            if not preserveFile:
                 os.unlink(path)
 
         return apache.OK
@@ -199,6 +201,11 @@ def get(port, isSecure, repos, req):
         return httpHandler._methodHandler()
 
 def putFile(port, isSecure, repos, req):
+    if isinstance(repos, proxy.ProxyRepositoryServer):
+        contentLength = int(req.headers_in['Content-length'])
+        status, reason = netclient.httpPutFile(req.unparsed_uri, req, contentLength)
+        return status
+
     if not isSecure and repos.forceSecure or '/' in req.args:
         return apache.HTTP_FORBIDDEN
 

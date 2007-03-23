@@ -13,7 +13,6 @@
 #
 
 python_files = __init__.py	\
-		cacheset.py	\
 		calllog.py	\
 		cltable.py	\
 		flavors.py	\
@@ -24,6 +23,7 @@ python_files = __init__.py	\
 		keytable.py	\
                 netauth.py      \
 		netserver.py	\
+		proxy.py \
 		troveinfo.py	\
 		trovestore.py	\
 		versionops.py

@@ -133,6 +133,11 @@ See \-\-replace-files description from \fBconary update\fP
 .TP
 .B \-\-tag-script \fIpath\fR
 See \-\-tag-script description from \fBconary update\fP
+.TP
+.B \-\-just-db
+See \-\-just-db description from \fBconary update\fP.
+Note that this operation \fBwill\fP roll back the rollback
+stack, as the rollback stack is part of the database.
 .RE
 
 .TP
@@ -733,6 +738,10 @@ The transient lookaside cache used only during building, normally
 The name used in changelog entries when committing changes to source
 components.
 .TP
+.B pinTroves
+The regular expression of a trove name to pin when installing.
+Multiple regular expressions can be specified with mutiple pinTroves
+lines.
 .B pubRing
 The filename of the OpenPGP Keyring to refer to for signature keys.
 .TP
@@ -849,11 +858,14 @@ Original file contents of configuration files Conary tracks.
 .I /var/lib/conarydb/rollbacks
 Changeset files representing rollbacks (listed via \fBconary
 rblist\fP).
+.TP
 .I /etc/conary/arch
 Directory containing architecture definition files.
 .\" FIXME: need a man page describing architecture definition files
+.TP
 .I /etc/conary/recipeTemplates
 Directory containing recipe templates.
+.TP
 .I /etc/conary/use
 Directory containing use flag definition files.
 .\" FIXME: need a man page describing use flag definition files
