@@ -280,9 +280,13 @@ class DigitalSignature(streams.StreamSet):
         index = 1
         mpiList = []
         for i in range(0,numMPIs):
-            lengthMPI = ((ord(data[index]) * 256) +
-                         (ord(data[index + 1]) + 7)) / 8 + 2
-            mpiList.append(self._mpiToLong(data[index:index + lengthMPI]))
+            try:
+                lengthMPI = ((ord(data[index]) * 256) +
+                             (ord(data[index + 1]) + 7)) / 8 + 2
+                mpiList.append(self._mpiToLong(data[index:index + lengthMPI]))
+            except IndexError:
+                # handle truncated signature data by setting this MPI to 0
+                mpiList.append(0L)
             index += lengthMPI
         return (self.fingerprint(), self.timestamp(), tuple(mpiList))
 
@@ -348,6 +352,18 @@ class VersionedSignaturesSet(streams.StreamCollection):
                 return
 
         raise KeyError(version)
+
+    def getSignatures(self, version = 0):
+        for vds in self.getStreams(1):
+            if version == vds.version():
+                return vds
+        return None
+
+    def getDigest(self, version = 0):
+        sigs = self.getSignatures(version)
+        if sigs:
+            return sigs.digest()
+        return None
 
     def addDigest(self, digest, version = 0):
         vds = VersionedDigitalSignatures()
@@ -519,6 +535,8 @@ _METADATA_ITEM_TAG_BIBLIOGRAPHY = 7
 _METADATA_ITEM_TAG_SIGNATURES = 8
 _METADATA_ITEM_TAG_NOTES = 9
 
+_METADATA_ITEM_SIG_VER_ALL = [ 0 ]
+
 class MetadataItem(streams.StreamSet):
     streamDict = {
         _METADATA_ITEM_TAG_ID:
@@ -562,9 +580,15 @@ class MetadataItem(streams.StreamSet):
         digest.compute(frz)
         self.id.set(digest())
 
-    def addDigitalSignature(self, keyId):
-        self.signatures.addDigest(self._digest(0), 0)
-        self.signatures.sign(keyId, 0)
+    def _updateDigests(self):
+        self._updateId()
+        for version in _METADATA_ITEM_SIG_VER_ALL:
+            if not self.signatures.getDigest(version):
+                self.signatures.addDigest(self._digest(version), version)
+
+    def addDigitalSignature(self, keyId, version=0):
+        self._updateDigests()
+        self.signatures.sign(keyId, version)
 
     def verifyDigitalSignatures(self, serverName=None):
         keyCache = openpgpkey.getKeyCache()
@@ -591,7 +615,7 @@ class MetadataItem(streams.StreamSet):
         return missingKeys, badFingerprints
 
     def freeze(self, *args, **kw):
-        self._updateId()
+        self._updateDigests()
         return streams.StreamSet.freeze(self, *args, **kw)
 
 class Metadata(streams.StreamCollection):
