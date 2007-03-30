@@ -2495,6 +2495,7 @@ def runTroveScript(job, script, tagScript, tmpDir, root, callback,
         stdoutPipe = os.pipe()
         stderrPipe = os.pipe()
 
+        callback.troveScriptStarted(scriptId)
         pid = os.fork()
 
         if pid == 0:
@@ -2544,16 +2545,20 @@ def runTroveScript(job, script, tagScript, tmpDir, root, callback,
                     count -= 1
                 else:
                     for line in lines:
-                        callback.scriptOutput(scriptId, line)
+                        callback.troveScriptOutput(scriptId, line)
 
         (id, status) = os.waitpid(pid, 0)
         os.unlink(scriptName)
 
         if not os.WIFEXITED(status) or os.WEXITSTATUS(status):
-            rc = os.WEXITSTATUS(status)
-            callback.scriptFailure(scriptId, rc)
+            if not os.WIFEXITED(status):
+                rc = -1
+            else:
+                rc = os.WEXITSTATUS(status)
+            callback.troveScriptFailure(scriptId, rc)
         else:
             rc = 0
+            callback.troveScriptFinished(scriptId)
 
     return rc
 
