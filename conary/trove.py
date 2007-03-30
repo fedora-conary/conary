@@ -649,14 +649,16 @@ class TroveScript(streams.StreamSet):
         _TROVESCRIPT_ROLLBACKFENCE  : (SMALL, streams.ByteStream,   'rollbackFence' ),
     }
 
-_TROVESCRIPTS_PREINSTALL  = 0
+_TROVESCRIPTS_PREUPDATE   = 0
 _TROVESCRIPTS_POSTINSTALL = 1
+_TROVESCRIPTS_POSTUPDATE  = 2
 
 class TroveScripts(streams.StreamSet):
     ignoreUnknown = streams.PRESERVE_UNKNOWN
     streamDict = {
-        _TROVESCRIPTS_PREINSTALL    : (DYNAMIC, TroveScript, 'preInstall'  ),
+        _TROVESCRIPTS_PREUPDATE     : (DYNAMIC, TroveScript, 'preUpdate'  ),
         _TROVESCRIPTS_POSTINSTALL   : (DYNAMIC, TroveScript, 'postInstall' ),
+        _TROVESCRIPTS_POSTUPDATE    : (DYNAMIC, TroveScript, 'postUpdate' ),
     }
 
 class TroveInfo(streams.StreamSet):
@@ -2571,6 +2573,42 @@ class AbstractTroveChangeSet(streams.StreamSet):
 
     def getFrozenTroveInfo(self):
         return self.absoluteTroveInfo()
+
+    def _getScript(self, kind):
+        scriptStream = TroveInfo.find(_TROVEINFO_TAG_SCRIPTS,
+                                       self.absoluteTroveInfo())
+        if scriptStream is None:
+            return None, False
+
+        # this is horrid, but it's just looking up the script stream we're
+        # looking for
+        script = scriptStream.__getattribute__(scriptStream.streamDict[kind][2])
+        return script.script(), script.rollbackFence()
+
+    def _getRollbackFence(self, kind):
+        scriptStream = TroveInfo.find(_TROVEINFO_TAG_SCRIPTS,
+                                       self.absoluteTroveInfo())
+        if scriptStream is None:
+            return None
+
+        # this is horrid as well
+        return scriptStream.__getattribute__(scriptStream.streamDict[kind][2]).rollbackFence()
+
+    def getPostInstallScript(self):
+        return self._getScript(_TROVESCRIPTS_POSTINSTALL)
+
+    def getPostUpdateScript(self):
+        return self._getScript(_TROVESCRIPTS_POSTUPDATE)
+
+    def getPreUpdateScript(self):
+        return self._getScript(_TROVESCRIPTS_PREUPDATE)
+
+    def isRollbackFence(self, update = False):
+        if update:
+            return (self._getRollbackFence(_TROVESCRIPTS_POSTUPDATE) or
+                    self._getRollbackFence(_TROVESCRIPTS_PREUPDATE))
+        else:
+            return self._getRollbackFence(_TROVESCRIPTS_POSTINSTALL)
 
     def setTroveInfo(self, ti):
         self.absoluteTroveInfo.set((ti.freeze()))

@@ -696,6 +696,19 @@ class FilesystemJob:
             self.callback.runningPostTagHandlers()
 	    tagCommands.run(tagScript, self.root)
 
+    def runPostScripts(self, tagScript):
+        for (troveCs, script) in self.postScripts:
+            if troveCs.getOldVersion():
+                scriptId = "%s postupdate" % troveCs.getName()
+            else:
+                scriptId = "%s postinstall" % troveCs.getName()
+            runTroveScript(troveCs, script, tagScript, '/tmp', self.root,
+                            self.callback, isPre = False,
+                            scriptId = scriptId)
+
+    def getInvalidateRollbacks(self):
+        return self.invalidateRollbacks
+
     def getErrorList(self):
 	return self.errors
 
@@ -890,6 +903,16 @@ class FilesystemJob:
         removalList = removalHints.get(newTroveInfo, [])
         if removalList is None:
             removalList = []
+
+        # queue up postinstall scripts
+        if troveCs.getOldVersion():
+            s, rbInv = troveCs.getPostUpdateScript()
+        else:
+            s, rbInv = troveCs.getPostInstallScript()
+
+        if s:
+            self.invalidateRollbacks = self.invalidateRollbacks or rbInv
+            self.postScripts.append((troveCs, s))
 
         # Create new files. If the files we are about to create already
         # exist, it's an error.
@@ -1528,6 +1551,8 @@ class FilesystemJob:
 	self.tagUpdates = {}
 	self.tagRemoves = {}
         self.linkGroups = {}
+        self.postScripts = []
+        self.invalidateRollbacks = False
 	self.db = db
         self.pathRemovedCache = (None, None, None)
         if callback is None:
@@ -2429,3 +2454,101 @@ def silentlyReplace(newF, oldF):
         return True
 
     return False
+
+def runTroveScript(troveCs, script, tagScript, tmpDir, root, callback,
+                   isPre = False, scriptId = "unknown script"):
+    environ = { 'PATH' : '/usr/bin:/usr/sbin:/bin:/sbin' }
+
+    environ['CONARY_NEW_NAME'] = troveCs.getName()
+    environ['CONARY_NEW_VERSION'] = str(troveCs.getNewVersion())
+    environ['CONARY_NEW_FLAVOR'] = str(troveCs.getNewFlavor())
+    if troveCs.getOldVersion():
+        environ['CONARY_OLD_VERSION'] = str(troveCs.getOldVersion())
+        environ['CONARY_OLD_FLAVOR'] = str(troveCs.getOldFlavor())
+
+    scriptFd, scriptName = tempfile.mkstemp(suffix = '.trvscript',
+                                            dir = root + tmpDir)
+    os.chmod(scriptName, 0700)
+    os.write(scriptFd, script)
+    os.close(scriptFd)
+
+    if tagScript is not None:
+        f = open(tagScript, "a", 0600)
+        if isPre:
+            f.write('# ')
+        for env, value in environ.iteritems():
+            f.write("%s='%s' " % (env, value))
+        f.write(scriptName)
+        f.write("\n")
+        if isPre:
+            f.write('# ')
+        f.write("rm %s\n" % scriptName)
+        f.close()
+
+        rc = 0
+    elif root != '/' and os.getuid():
+        callback.warning("Not running script for %s due to insufficient "
+                         "permissions for chroot()", troveCs.getName())
+        return 0
+    else:
+        stdoutPipe = os.pipe()
+        stderrPipe = os.pipe()
+
+        pid = os.fork()
+
+        if pid == 0:
+            os.close(0)
+            os.close(stdoutPipe[0])
+            os.close(stderrPipe[0])
+            os.dup2(stdoutPipe[1], 1)
+            os.dup2(stderrPipe[1], 2)
+            os.close(stdoutPipe[1])
+            os.close(stderrPipe[1])
+
+            if root != '/':
+                scriptName = scriptName[len(root):]
+                assert(root[0] == '/')
+                try:
+                    os.chroot(root)
+                except:
+                    os._exit(1)
+
+            os.execve(scriptName, [ scriptName ], environ)
+            os._exit(1)
+
+        os.close(stdoutPipe[1])
+        os.close(stderrPipe[1])
+
+        stdoutReader = util.LineReader(stdoutPipe[0])
+        stderrReader = util.LineReader(stderrPipe[0])
+        poller = select.poll()
+        poller.register(stdoutPipe[0], select.POLLIN)
+        poller.register(stderrPipe[0], select.POLLIN)
+
+        count = 2
+        while count:
+            fds = [ x[0] for x in poller.poll() ]
+            for (fd, reader, isError) in (
+                        (stdoutPipe[0], stdoutReader, False),
+                        (stderrPipe[0], stderrReader, True) ):
+                if fd not in fds: continue
+                lines = reader.readlines()
+
+                if lines == None:
+                    poller.unregister(fd)
+                    count -= 1
+                else:
+                    for line in lines:
+                        callback.scriptOutput(scriptId, line)
+
+        (id, status) = os.waitpid(pid, 0)
+        os.unlink(scriptName)
+
+        if not os.WIFEXITED(status) or os.WEXITSTATUS(status):
+            rc = os.WEXITSTATUS(status)
+            callback.scriptFailure(scriptId, rc)
+        else:
+            rc = 0
+
+    return rc
+
