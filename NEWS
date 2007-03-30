@@ -1,3 +1,18 @@
+Changes in @NEW@:
+  o Build Changes:
+    * When Conary calls an external program (python, perl, monodis)
+      to determine file dependencies and that program is not a part
+      of the package being built, it will warn if that external
+      program is not provided by the build requirements. (CNY-1492)
+    * addPatch()'s optional argument "extraArgs" will now do the right thing
+      if passed a single string instead of a tuple or list. 
+
+  o Internal Changes:
+    * The conary.lib.elf module can now be built against libelf
+      version 0.8.0 or later as well as the libelf implementation
+      provided by elfutils.  libelf can be downloaded from
+      http://www.mr511.de/software/ (CNY-1501)
+
 Changes in 1.1.19:
   o Client Changes:
     * A new "cvc promote" command has been added. "cvc promote" is a
@@ -23,7 +38,7 @@ Changes in 1.1.19:
       for example, will only use the http_proxy environment variable.
     * Due to limitations in Apache 2.0, the Conary client will now use
       HTTP/1.1 "chunked" Transfer-encoding when committing changesets
-      larger than 2 GiB.
+      larger than 2 GiB. (CNY-1478)
     * An "applyRollback()" method has been added to the ConaryClient
       class. (CNY-1455)
 
@@ -38,6 +53,20 @@ Changes in 1.1.19:
       directories. (CNY-1387)
     * The repository now properly commits changesets where multiple
       troves reference the same (pathId,fileId) key. (CNY-1414)
+    * The standalone server can now decode "Transfer-encoding:
+      chunked" PUT requests from clients.
+    * Apache based repository servers now send changeset file contents
+      using the "req.write()" method instead of the "req.sendfile()"
+      method when file contents are larger than 2 GiB.  This works
+      around limitations in Apache 2.0.
+    * The list of sizes returned by the getChangeSet() and
+      getFileContents() repository methods are now returned as a list
+      of strings instead of a list of integers.  XML-RPC integers can
+      only hold values less than 2147483648 (a signed integer).
+    * A Conary repository will now raise an exception if a client
+      requests a changeset that is larger than 2 GiB in total size or
+      file contents larger than 2 GiB in size and does not support the
+      new version 44 protocol required to work around this limitation.
 
   o Build Changes:
     * A "vmware" flavor has been added to the default set of flavors.
