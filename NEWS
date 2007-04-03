@@ -19,6 +19,9 @@ Changes in the Metadata tree:
       have been treated as a class variable
 
 Changes in @NEW@:
+  o Client Changes:
+    * Added a --file-flavors option to conary q, rq, and scs (CNY-1507).
+
   o Build Changes:
     * When Conary calls an external program (python, perl, monodis)
       to determine file dependencies and that program is not a part
@@ -40,6 +43,10 @@ Changes in @NEW@:
       error message. (CNY-1453)
     * Badly-formatted parentVersion strings in derived packages
       (experimental) no longer cause a stacktrace.
+    * When installing into a subdirectory, not running tag scripts,
+      and not using the normal job ordering, Conary previously could
+      fail to look up user names in packages installed before the
+      glibc package. (CNY-1515)
 
 Changes in 1.1.19:
   o Client Changes:
