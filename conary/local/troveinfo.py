@@ -20,6 +20,9 @@ class TroveInfoTable:
     def addInfo(self, cu, trove, idNum):
         # c = True if the trove is a component
         n = trove.getName()
+        # complete fixup is internal to a single client run; it should never be stored
+        # anywhere
+        assert(trove.troveInfo.completeFixup() is None)
         c = ':' in n and not n.endswith(':source')
         for (tag, (size, streamType, name)) in trove.troveInfo.streamDict.iteritems():
             frz = trove.troveInfo.__getattribute__(name).freeze()
@@ -33,9 +36,18 @@ class TroveInfoTable:
                 cu.execute("INSERT INTO TroveInfo (instanceId, infoType, data) "
                            "VALUES (?, ?, ?)", (idNum, tag, cu.binary(frz)))
 
+        frz = trove.troveInfo.freeze(freezeKnown = False, freezeUnknown = True)
+        if frz is not None:
+            cu.execute("INSERT INTO TroveInfo (instanceId, infoType, data) "
+                       "VALUES (?, ?, ?)", (idNum, -1, cu.binary(frz)))
+
+
     def getInfo(self, cu, trove, idNum):
         cu.execute("SELECT infoType, data FROM TroveInfo WHERE instanceId=?",
                    idNum)
         for (tag, frz) in cu:
-            name = trove.troveInfo.streamDict[tag][2]
-            trove.troveInfo.__getattribute__(name).thaw(cu.frombinary(frz))
+            if tag == -1:
+                trove.troveInfo.thaw(cu.frombinary(frz))
+            else:
+                name = trove.troveInfo.streamDict[tag][2]
+                trove.troveInfo.__getattribute__(name).thaw(cu.frombinary(frz))

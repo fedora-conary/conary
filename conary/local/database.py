@@ -190,6 +190,8 @@ class UpdateJob:
         drep['jobsCsList'] = self.jobsCsList
         drep['itemList'] = self._freezeItemList()
         drep['keywordArguments'] = self.getKeywordArguments()
+        drep['invalidateRollbackStack'] = int(self._invalidateRollbackStack)
+        drep['jobPreScripts'] = list(self._freezeJobPreScripts())
 
         # Save the Conary version
         drep['conaryVersion'] = constants.version
@@ -221,6 +223,10 @@ class UpdateJob:
 
         self.setCriticalJobs(drep['critical'])
         self.transactionCounter = drep['transactionCounter']
+        self._invalidateRollbackStack = bool(
+                                        drep.get('invalidateRollbackStack'))
+        self._jobPreScripts = self._thawJobPreScripts(
+            list(drep.get('jobPreScripts', [])))
 
     def _freezeJobs(self, jobs):
         for jobList in jobs:
@@ -265,6 +271,16 @@ class UpdateJob:
             return None
         return deps.ThawFlavor(flavor)
 
+    def _freezeJobPreScripts(self):
+        # Freeze the job and the string together
+        return itertools.izip(self._freezeJobList(x[0]
+                                    for x in self._jobPreScripts),
+                              (x[1] for x in self._jobPreScripts))
+
+    def _thawJobPreScripts(self, frzrepr):
+        return itertools.izip(self._thawJobList(x[0] for x in frzrepr),
+                              (x[1] for x in frzrepr))
+
     def _freezeChangesetFilesTroveSource(self, troveSource, frzdir,
                                         withChangesetReferences=True):
         assert isinstance(troveSource, trovesource.ChangesetFilesTroveSource)
@@ -306,6 +322,10 @@ class UpdateJob:
         ver = tup[0]
         if ver is None:
             ver = ''
+        elif not isinstance(ver, str):
+            # Make it a list (tuple would be better but XMLRPC will convert it
+            # to a list anyway)
+            ver = [ver.__class__.__name__, ver.asString()]
         flv = tup[1]
         if flv is None:
             flv = '\0'
@@ -317,6 +337,12 @@ class UpdateJob:
         ver = tup[0]
         if ver == '':
             ver = None
+        elif isinstance(ver, type([])):
+            if ver[0] == 'Version':
+                ver = versions.VersionFromString(ver[1])
+            else:
+                # This is not really something we know how to thaw.
+                ver = ver[1]
         flv = tup[1]
         if flv == '\0':
             flv = None
@@ -331,6 +357,41 @@ class UpdateJob:
     def _thawItemList(self, frzrep):
         return [ (t[0],self. __thawVF(t[1]), self.__thawVF(t[2]), bool(t[3]))
                  for t in frzrep ]
+
+    def setInvalidateRollbacksFlag(self, flag):
+        self._invalidateRollbackStack = bool(flag)
+
+    def updateInvalidatesRollbacks(self):
+        return self._invalidateRollbackStack
+
+    def addJobPreScript(self, job, script):
+        self._jobPreScripts.append((job, script))
+
+    def iterJobPreScripts(self):
+            for i in self._jobPreScripts:
+                yield i
+
+    def splitCriticalJobs(self):
+        criticalJobs = self.getCriticalJobs()
+        if not criticalJobs:
+            return [], self.getJobs()
+        jobs = self.getJobs()
+        firstCritical = criticalJobs[0]
+        criticalJobs = jobs[:firstCritical + 1]
+        remainingJobs = jobs[firstCritical + 1:]
+        return criticalJobs, remainingJobs
+
+    def loadCriticalJobsOnly(self):
+        """Loads the critical jobs and returns the remaining jobs to be
+        performed"""
+        criticalJobs, remainingJobs = self.splitCriticalJobs()
+        if not criticalJobs:
+            # No critical jobs, so nothing remaining
+            return []
+        self.setJobs(criticalJobs)
+        # This update job no longer has critical update jobs
+        self.setCriticalJobs([])
+        return remainingJobs
 
     def __init__(self, db, searchSource = None):
         self.jobs = []
@@ -349,6 +410,10 @@ class UpdateJob:
         # The options that created this update job
         self._itemList = []
         self._kwargs = {}
+        # Applying this update job invalidates the rollback stack
+        self._invalidateRollbackStack = False
+        # List of pre scripts to run for a particular job. This is ordered.
+        self._jobPreScripts = []
 
 class SqlDbRepository(trovesource.SearchableTroveSource,
                       datastore.DataStoreRepository,
@@ -596,7 +661,10 @@ class SqlDbRepository(trovesource.SearchableTroveSource,
 
     def _getDb(self):
         if not self._db:
-            self._initDb()
+            try:
+                self._initDb()
+            except sqldb.sqlerrors.DatabaseError, e:
+                raise errors.ConaryError("Database error: %s" % (e, ))
         return self._db
 
     db = property(_getDb)
@@ -617,6 +685,8 @@ class Database(SqlDbRepository):
     # XXX some of these interfaces are horribly inefficient as we have
     # to instantiate a full trove object to do anything... 
     # FilesystemRepository has the same problem
+
+    ROLLBACK_PHASE_LOCAL = update.ROLLBACK_PHASE_LOCAL
 
     def iterFilesInTrove(self, troveName, version, flavor,
                          sortByPath = False, withFiles = False):
@@ -744,13 +814,14 @@ class Database(SqlDbRepository):
     # doesn't exist we need to compute that and save a rollback for this
     # transaction
     def commitChangeSet(self, cs, uJob,
-                        isRollback = False, updateDatabase = True,
+                        rollbackPhase = None, updateDatabase = True,
                         replaceFiles = False, tagScript = None,
 			test = False, justDatabase = False, journal = None,
                         localRollbacks = False, callback = UpdateCallback(),
                         removeHints = {}, filePriorityPath = None,
                         autoPinList = RegularExpressionList(),
-                        keepJournal = False):
+                        keepJournal = False, deferPostScripts = False,
+                        deferredScripts = None):
 	assert(not cs.isAbsolute())
 
         if filePriorityPath is None:
@@ -759,13 +830,13 @@ class Database(SqlDbRepository):
         flags = 0
         if replaceFiles:
             flags |= update.REPLACEFILES
-        if isRollback:
+        if rollbackPhase:
             flags |= update.MISSINGFILESOKAY | update.IGNOREINITIALCONTENTS
 
         self.db.begin()
 
-	for trove in cs.iterNewTroveList():
-	    if trove.getName().endswith(":source"):
+	for trv in cs.iterNewTroveList():
+	    if trv.getName().endswith(":source"):
                 raise SourceComponentInstall
 
 	tagSet = tags.loadTagDict(self.root + "/etc/conary/tags")
@@ -780,19 +851,19 @@ class Database(SqlDbRepository):
 	    flavor = newTrove.getOldFlavor()
 	    if self.hasTroveByName(name) and old:
 		ver = old.createShadow(versions.LocalLabel())
-		trove = dbCache.getTrove(name, old, flavor, pristine = False)
+		trv = dbCache.getTrove(name, old, flavor, pristine = False)
 		origTrove = dbCache.getTrove(name, old, flavor, pristine = True)
-		assert(trove)
-		troveList.append((trove, origTrove, ver, 
+		assert(trv)
+		troveList.append((trv, origTrove, ver, 
                                   flags & update.MISSINGFILESOKAY))
 
         for (name, version, flavor) in cs.getOldTroveList():
             rollbackVersion = version.createShadow(versions.RollbackLabel())
-            trove = dbCache.getTrove(name, version, flavor, pristine = False)
+            trv = dbCache.getTrove(name, version, flavor, pristine = False)
             origTrove = dbCache.getTrove(name, version, flavor, 
                                          pristine = True)
-            assert(trove)
-            troveList.append((trove, origTrove, rollbackVersion, 
+            assert(trv)
+            troveList.append((trv, origTrove, rollbackVersion, 
                               update.MISSINGFILESOKAY))
 
         callback.creatingRollback()
@@ -809,7 +880,7 @@ class Database(SqlDbRepository):
 	for (changed, fsTrove) in retList:
 	    fsTroveDict[(fsTrove.getName(), fsTrove.getVersion())] = fsTrove
 
-	if not isRollback:
+	if rollbackPhase is None:
             reposRollback = cs.makeRollback(dbCache, configFiles = True,
                                redirectionRollbacks = (not localRollbacks))
             flags |= update.MERGE
@@ -817,9 +888,11 @@ class Database(SqlDbRepository):
         fsJob = update.FilesystemJob(dbCache, cs, fsTroveDict, self.root,
                                      filePriorityPath, flags = flags,
                                      callback = callback,
-                                     removeHints = removeHints)
+                                     removeHints = removeHints,
+                                     rollbackPhase = rollbackPhase,
+                                     deferredScripts = deferredScripts)
 
-        if not isRollback:
+        if rollbackPhase is None:
             removeRollback = fsJob.createRemoveRollback()
 
             # We now have two rollbacks we need to merge together, localRollback
@@ -896,7 +969,7 @@ class Database(SqlDbRepository):
 	# XXX we have to do this before files get removed from the database,
 	# which is a bit unfortunate since this rollback isn't actually
 	# valid until a bit later
-	if not isRollback and not test:
+	if (rollbackPhase is None) and not test:
             rollback = uJob.getRollback()
             if rollback is None:
                 rollback = self.createRollback()
@@ -933,7 +1006,7 @@ class Database(SqlDbRepository):
                 localrep.LocalRepositoryChangeSetJob(
                     dbCache, cs, callback, autoPinList, 
                     filePriorityPath,
-                    allowIncomplete = isRollback, 
+                    allowIncomplete = (rollbackPhase is not None),
                     pathRemovedCheck = fsJob.pathRemoved,
                     replaceFiles = replaceFiles)
             except DatabasePathConflicts, e:
@@ -1039,6 +1112,30 @@ class Database(SqlDbRepository):
         callback.committingTransaction()
         self._updateTransactionCounter = True
 	self.commit()
+
+        if fsJob.getInvalidateRollbacks():
+            self.invalidateRollbacks()
+
+        if rollbackPhase is not None:
+            return fsJob
+
+        fsJob.runPostScripts(tagScript, rollbackPhase)
+
+    def runPreScripts(self, uJob, callback, tagScript = None, 
+                      isRollback = False, tmpDir = '/tmp'):
+        if isRollback:
+           return
+
+        for job, script in uJob.iterJobPreScripts():
+            scriptId = "%s preupdate" % job[0]
+            rc = update.runTroveScript(job, script, tagScript, tmpDir,
+                                       self.root, callback, isPre = True,
+                                       scriptId = scriptId)
+            if rc:
+                return False
+
+        return True
+
 
     def removeFiles(self, pathList):
 
@@ -1167,6 +1264,13 @@ class Database(SqlDbRepository):
             rb = self.getRollback(rollbackName)
             yield (rollbackName, rb)
 
+    def invalidateRollbacks(self):
+        """Invalidate the rollback stack."""
+        # Works nicely for the very beginning
+        # (when firstRollback, lastRollback) = (0, -1)
+        self.firstRollback = self.lastRollback + 1
+        self.writeRollbackStatus()
+
     def readRollbackStatus(self):
         try:
             f = open(self.rollbackStatus)
@@ -1272,12 +1376,15 @@ class Database(SqlDbRepository):
                     l.extend(trvCs.getOldFileList())
 
                 try:
+                    fsJob = None
                     if not reposCs.isEmpty():
                         itemCount += 1
                         callback.setUpdateHunk(itemCount, totalCount)
                         callback.setUpdateJob(reposCs.getJobSet())
-                        self.commitChangeSet(reposCs, UpdateJob(None),
-                                             isRollback = True,
+                        fsJob = self.commitChangeSet(
+                                             reposCs, UpdateJob(None),
+                                             rollbackPhase =
+                                                update.ROLLBACK_PHASE_REPOS,
                                              replaceFiles = replaceFiles,
                                              removeHints = removalHints,
                                              callback = callback,
@@ -1289,12 +1396,19 @@ class Database(SqlDbRepository):
                         callback.setUpdateHunk(itemCount, totalCount)
                         callback.setUpdateJob(localCs.getJobSet())
                         self.commitChangeSet(localCs, UpdateJob(None),
-                                             isRollback = True,
-                                             updateDatabase = False,
-                                             replaceFiles = replaceFiles,
-                                             callback = callback,
-                                             tagScript = tagScript,
-                                             justDatabase = justDatabase)
+                                     rollbackPhase =
+                                            update.ROLLBACK_PHASE_LOCAL,
+                                     updateDatabase = False,
+                                     replaceFiles = replaceFiles,
+                                     callback = callback,
+                                     tagScript = tagScript,
+                                     justDatabase = justDatabase)
+
+                    if fsJob:
+                        # Because of the two phase update for rollbacks, we
+                        # run postscripts by hand instead of commitChangeSet
+                        # doing it automatically
+                        fsJob.runPostScripts(tagScript, True)
 
                     rb.removeLast()
                 except CommitError, err:

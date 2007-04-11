@@ -1,36 +1,141 @@
 Changes in @NEW@:
   o Client Changes:
-    * Added a --file-flavors option to conary q, rq, and scs (CNY-1507).
-    * Added the ability to promote using branches, and to promote to siblings
-      of parents.  For example, you can now promote from /A//B to /C without
-      first cloning uphill to A. (CNY-1513)
+    * To take advantage of Conary's ability to apply the critical
+      update set and restart before applying the rest of the updates,
+      two new API calls have been added: createUpdateJob and
+      applyUpdateJob. (CNY-1454)
+    * A new argument, --no-restart, has been added to conary. This
+      has to be used in conjunction with --root and allows one to skip
+      the restarts after applying critical updates when installing in
+      a chroot. (CNY-1458)
   o Build Changes:
-    * When Conary calls an external program (python, perl, monodis)
-      to determine file dependencies and that program is not a part
-      of the package being built, it will warn if that external
-      program is not provided by the build requirements. (CNY-1492)
-    * addPatch()'s optional argument "extraArgs" will now do the right thing
-      if passed a single string instead of a tuple or list. 
+    * Conary has tools in place through a new cross flag and a new "target"
+      flavor to support better defining of cross compiling builds.  (CNY-1003)
+  o Bug Fixes:
+    * Fixed a bug in proxy code that would cause conary to use https through
+      the proxy when http was desired (CNY-1530)
+    * Fixed a bug in clone/promote relating to cloning when there are flavors
+      on the clone label that are superset of the current flavor, but the 
+      current flavor doesn't exist. (RMK-415)
+    * Fixed a race condition related to the multithreaded Conary client,
+      where one thread could modify an unprotected variable assumed
+      immutable by a different thread.  (CNY-1450)
+    * If the database is locked, Conary will no longer display a stack
+      trace, but an error message. (CNY-1292)
+    * The Conary library uses a built-in difflib if the system's difflib
+      is not patched for recursion. (CNY-1377)
+
+Changes in 1.1.21:
+  o Repository Changes:
+    * A "hidden" keyword argument has been added to the
+      commitChangeSet() and hasTroves() method.  This allows mirror
+      users to commit troves which will never be displayed to users.
+      The presentHiddenTroves() call makes all hidden troves
+      visible.  The XML-RPC protocol version is now 46.
+
+  o Internal Changes:
+    * StreamSet operations in C now use a common StreamSet_GetSSD()
+      function which creates the _streamDict object if it does not yet
+      exist.  This fixes crashes in rare cases where a
+      StreamSet.find() class method is used before any instances of
+      that StreamSet have been created. (CNY-1524)
+    * Numeric StreamSet types can now have values set to None (which
+      indicates that there is no value set at all).  Additionally, if
+      passed an empty string to the thaw() method, the value is set to
+      None. (CNY-1366)
+
+  o Bug Fixes:
+    * A bug in commitChangeSet() which returned a "file not found"
+      error when the user had insufficient permission for the commit
+      operation has been fixed.
+    * A bug that caused Conary to raise an unhandled exception when
+      updating a trove that has missing TroveInfo data in the local
+      database.  When new types are added to TroveInfo, older versions
+      of Conary omit the new data from the database.  Once a version
+      of Conary is used that understands the new data types, the
+      missing data is restored to the previously incomplete trove.
+    * Handling user permissions when committing under certain 
+      circumstances against a Conary 1.1.20 was fixed. (CNY-1488)
+
+Changes in 1.1.20:
+  o Major Changes:
+    * Groups can now include scripts which are automatically run
+      before an install, after an install, after an update, and after
+      a rollback.  Documentation on how to add these scripts to groups
+      will be posted to wiki.rpath.com shortly.  Unlike tag handlers,
+      these scripts are not inherently reversible; therefore if a post
+      update script is executed, the rollback stack will be reset.  The
+      rollback information is still stored in the rollback directory,
+      but the "conary rollback" and "conary rblist" commands will no
+      longer be able to access the previous rollbacks.
+
+      Only Conary repositories running version 1.1.20 or later can
+      store these scripts.  If the repository is not running the
+      minimum required version, a "changeset being committed needs a
+      newer repository server" error will be produced.
+
+      If an older version of Conary downloads a group that has a
+      script associated with it, the scripts will be silently ignored.
+      Future versions of Conary may add a "Requires: trove:
+      conary(group-scripts)" dependency to groups that have scripts
+      associated with them. (CNY-1461)
+
+    * Support for versioned trove signatures has been added. (CNY-1477)
+    * Version 1 signatures have been added which use a SHA256 digest
+      that includes the frozen form of unknown troveInfo
+      segments. (CNY-1186)
+    * Unknown troveInfo segments are stored in both the repository and
+      local database and restored properly. (CNY-1186)
+
+  o Client Changes:
+    * Hashes of the directories in which a trove places files are now
+      computed and stored in troveInfo. (CNY-857)
+    * A --file-flavors option has been added to "conary query/q",
+      "conary repquery/rq", and "conary showcs/scs". (CNY-1507)
+    * The ability to promote using branches and to promote to siblings
+      of parents has been added.  For example, you can now promote
+      from /A//B to /C without first cloning uphill to A. (CNY-1513)
+
+  o Build Changes:
+    * When Conary calls an external program (python, perl, monodis) to
+      determine file dependencies and that program is not a part of
+      the package being built, it will warn if that external program
+      is not provided by a component in build requirements. (CNY-1492)
 
   o Internal Changes:
     * The conary.lib.elf module can now be built against libelf
       version 0.8.0 or later as well as the libelf implementation
       provided by elfutils.  libelf can be downloaded from
       http://www.mr511.de/software/ (CNY-1501)
+    * The Conary client API has a new method disconnectRepos() that
+      allows one to cut access to the networked repositories.  A
+      RepositoryError exception is raised if network access is
+      attempted. (CNY-1474)
 
   o Bug Fixes:
-    * Shadows that point back to a label that is already uphill are now
-      issuing a proper error message. (CNY-847)
-    * Running the rblist command of conary as non-root produces a proper
-      error message. (CNY-1453)
+    * StreamSet objects didn't work with inheritance because the C
+      implementation treated an internal variable as inheritable when
+      it should have been treated as a class variable.
+    * Attempting to create a shadowed Version object that reference a
+      label that is already uphill are now issues a proper error
+      message. (CNY-847)
+    * Running the "conary rblist" command as non-root now produces a
+      proper error message. (CNY-1453)
     * Badly-formatted parentVersion strings in derived packages
       (experimental) no longer cause a stacktrace.
-    * When installing into a subdirectory, not running tag scripts,
-      and not using the normal job ordering, Conary previously could
-      fail to look up user names in packages installed before the
-      glibc package. (CNY-1515)
-    * Don't depend on the lookaside repos cache being defined for
-      derived package recipe object initialization. (CNY-1509)
+    * Previous versions of Conary would fail to find the UID or GID of
+      a newly created user if "--root" was specified on the command
+      line and C library components had not yet been installed.
+      Conary would erroneously fall back to using UID 0 or GID 0
+      (root) instead.  (CNY-1515)
+    * A traceback that occurred when a lookaside repository cache has
+      not been defined when initializing a derived package recipe
+      object has been fixed. (CNY-1509)
+    * The Conary network repository client no longer attempts to use a
+      proxy if the repository is residing on the local machine.
+    * A bug in the freezing of update jobs has been fixed. (CNY-1521)
+    * r.addPatch()'s optional argument "extraArgs" will now do the right
+      thing if passed a single string instead of a tuple or list.
 
 Changes in 1.1.19:
   o Client Changes:
@@ -57,7 +162,7 @@ Changes in 1.1.19:
       for example, will only use the http_proxy environment variable.
     * Due to limitations in Apache 2.0, the Conary client will now use
       HTTP/1.1 "chunked" Transfer-encoding when committing changesets
-      larger than 2 GiB. (CNY-1478)
+      larger than 2 GiB.
     * An "applyRollback()" method has been added to the ConaryClient
       class. (CNY-1455)
 

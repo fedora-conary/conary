@@ -205,6 +205,12 @@ Unless \-\-resolve has been made the default by setting the
 autoResolve flag in conaryrc, \-\-no-resolve
 is the default behavior.
 .TP
+.B \-\-no-restart
+Do not restart Conary after applying a critical update.
+This option is only useful in the context of installing troves in
+a chroot, therefore it requires the \fB\-\-root \fI<root>\fR option
+to be used.
+.TP
 .B \-\-replace-files
 When a normal file (not a configuration file or a transient file) has
 changed on the system between updates to that file, or if a file
@@ -518,7 +524,7 @@ installed version of the group being migrated (often group-os or group-dist).
 .B sync [+/-]\fItrovename\fP[=\fRversion][\fI<flavor>\fP]\fP+
 Update the children of \fItrovename\fP so that the versions of the child
 troves match the version specified by the parent trove.
-By default, the the specified trove itself is updated first, and
+By default, the specified trove itself is updated first, and
 then children are synced to the new trove.
 
 Arguments include
@@ -532,7 +538,7 @@ themselves are not touched.
 .TP
 .B \-\-full
 Erase packages and components that are children of the specified troves and 
-would not be installed if the the specified troves were being installed for the first time.  For example, :debuginfo components are not installed by default.
+would not be installed if the specified troves were being installed for the first time.  For example, :debuginfo components are not installed by default.
 If you used this option when syncing a package and you had its :debuginfo 
 component installed, that component would get erased.
 .TP 4
