@@ -65,11 +65,17 @@ class VerboseChangesetCallback(clientCallbacks.ChangesetCallback):
         self.clearPrefix()
         self._message('\r')
 
+class ChangesetCallback(callbacks.ChangesetCallback):
+    def setPrefix(self, *args):
+        pass
+    def clearPrefix(self):
+        pass
+
 class MirrorConfigurationSection(cfg.ConfigSection):
     repositoryMap         =  conarycfg.CfgRepoMap
     user                  =  conarycfg.CfgUserInfo
 
-class MirrorConfiguration(cfg.SectionedConfigFile):
+class MirrorFileConfiguration(cfg.SectionedConfigFile):
     host                  =  cfg.CfgString
     entitlementDirectory  =  cfg.CfgPath
     labels                =  conarycfg.CfgInstallLabelPath
@@ -79,12 +85,14 @@ class MirrorConfiguration(cfg.SectionedConfigFile):
     downloadRateLimit     =  (conarycfg.CfgInt, 0)
     lockFile              =  cfg.CfgString
 
-    _allowNewSections = True
+    _allowNewSections   = True
     _defaultSectionType = MirrorConfigurationSection
-    
-    def __init__(self):
-        cfg.SectionedConfigFile.__init__(self)
 
+# for compatibility with older code base that requires a source and a
+# target to de defined
+class MirrorConfiguration(MirrorFileConfiguration):
+    source = MirrorConfigurationSection
+    target = MirrorConfigurationSection
 
 def Main(argv=sys.argv[1:]):
     try:
@@ -94,9 +102,9 @@ def Main(argv=sys.argv[1:]):
         sys.stderr.write("\n")
         return e.errcode
 
-    cfg = MirrorConfiguration()
+    cfg = MirrorFileConfiguration()
     cfg.read(options.configFile, exception = True)
-    callback = callbacks.ChangesetCallback()
+    callback = ChangesetCallback()
 
     if options.verbose:
         log.setVerbosity(log.DEBUG)
