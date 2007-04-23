@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2004-2006 rPath, Inc.
+# Copyright (c) 2004-2007 rPath, Inc.
 #
 # This program is distributed under the terms of the Common Public License,
 # version 1.0. A copy of this license should have been distributed with this
@@ -32,9 +32,10 @@ class LocalRepVersionTable(versiontable.VersionTable):
         cu = self.db.cursor()
         cu.execute("""
         SELECT Versions.version, Nodes.timeStamps
-        FROM Nodes JOIN Versions USING (versionId)
-        WHERE Nodes.versionId=? AND Nodes.itemId=?""",
-		   theId, itemId)
+        FROM Nodes
+        JOIN Versions USING (versionId)
+        WHERE Nodes.versionId=? AND Nodes.itemId=?
+        """, theId, itemId)
 	try:
 	    (s, t) = cu.next()
 	    v = self._makeVersion(s, t)
@@ -45,7 +46,8 @@ class LocalRepVersionTable(versiontable.VersionTable):
     def getTimeStamps(self, version, itemId):
         cu = self.db.cursor()
         cu.execute("""
-        SELECT timeStamps FROM Nodes
+        SELECT timeStamps
+        FROM Nodes
         WHERE versionId = (SELECT versionId from Versions WHERE version=?)
           AND itemId=?""", version.asString(), itemId)
 	try:
@@ -128,9 +130,10 @@ class TroveStore:
 	"""
 	cu = self.db.cursor()
 	cu.execute("""
-	    SELECT timeStamps FROM Nodes WHERE
-		itemId=(SELECT itemId FROM Items WHERE item=?) AND
-		versionId=(SELECT versionId FROM Versions WHERE version=?)
+        SELECT timeStamps
+        FROM Nodes
+        WHERE itemId=(SELECT itemId FROM Items WHERE item=?)
+          AND versionId=(SELECT versionId FROM Versions WHERE version=?)
 	""", item, version.asString())
 
 	timeStamps = cu.fetchone()[0]
@@ -146,22 +149,17 @@ class TroveStore:
 	"""
 	cu = self.db.cursor()
 	cu.execute("""
-	    SELECT version, timeStamps FROM
-		(SELECT itemId AS AitemId, branchId as AbranchId FROM labelMap
-		    WHERE itemId=(SELECT itemId from Items
-				WHERE item=?)
-		    AND branchId=(SELECT branchId FROM Branches
-				WHERE branch=?)
-		) INNER JOIN Latest ON
-		    AitemId=Latest.itemId AND AbranchId=Latest.branchId
-		INNER JOIN Nodes ON
-		    AitemId=Nodes.itemId AND Latest.versionId=Nodes.versionId
-		INNER JOIN Versions ON
-		    Nodes.versionId = versions.versionId
-                ORDER BY
-                    Nodes.finalTimeStamp
-                LIMIT 1
-	""", troveName, branch.asString())
+        SELECT Versions.version, Nodes.timeStamps
+        FROM LabelMap
+        JOIN Latest using (itemId, branchId)
+        JOIN Nodes using (itemId, versionId)
+        JOIN Versions using (versionId)
+        JOIN Items on LabelMap.itemId = Items.itemId
+        JOIN Branches on LabelMap.branchId = Branches.branchId
+        WHERE Items.item = ?
+          AND Branches.branch = ?
+        ORDER BY Nodes.finalTimeStamp
+        LIMIT 1""", (troveName, branch.asString()))
         try:
 	    (verStr, timeStamps) = cu.next()
             return versions.VersionFromString(verStr,
@@ -177,7 +175,6 @@ class TroveStore:
 	# then using all of the and's in this join
 
         schema.resetTable(cu, 'itf')
-
         for troveName in troveDict.keys():
             outD[troveName] = {}
             for version in troveDict[troveName]:
@@ -187,21 +184,17 @@ class TroveStore:
                 cu.execute("INSERT INTO itf VALUES (?, ?, ?)",
                            (troveName, versionStr, versionStr),
                            start_transaction = False)
-
+        self.db.analyze("itf")
         cu.execute("""
-            SELECT aItem, fullVersion, Flavors.flavor FROM
-                (SELECT Items.itemId AS aItemId,
-                        versions.versionId AS aVersionId,
-                        Items.item AS aItem,
-                        fullVersion FROM
-                    itf INNER JOIN Items ON itf.item = Items.item
-                        INNER JOIN versions ON itf.version = versions.version) as ItemVersions
-                INNER JOIN instances ON
-                    aItemId = instances.itemId AND
-                    aVersionId = instances.versionId
-                INNER JOIN flavors ON
-                    instances.flavorId = flavors.flavorId
-                ORDER BY aItem, fullVersion
+        SELECT Items.item, fullVersion, Flavors.flavor
+        FROM itf
+        JOIN Items on itf.item = Items.item
+        JOIN Versions on itf.version = Versions.version
+        JOIN Instances on
+            Items.itemId = Instances.itemId AND
+            Versions.versionId = Instances.versionId
+        JOIN Flavors using (flavorId)
+        ORDER BY Items.item, fullVersion
         """)
 
         for (item, verString, flavor) in cu:
@@ -212,11 +205,13 @@ class TroveStore:
 
     def iterTroveNames(self):
         cu = self.db.cursor()
-        cu.execute("SELECT DISTINCT Items.item as item "
-                   " FROM Instances JOIN Items USING(itemId) "
-                   " WHERE Instances.isPresent = ? ORDER BY item",
-                   INSTANCES_PRESENT_NORMAL);
-
+        cu.execute("""
+        SELECT DISTINCT Items.item as item
+        FROM Instances
+        JOIN Items USING(itemId)
+        WHERE Instances.isPresent = ?
+        ORDER BY item
+        """, instances.INSTANCE_PRESENT_NORMAL)
         for (item,) in cu:
             yield item
 
@@ -224,10 +219,10 @@ class TroveStore:
         cu = self.db.cursor()
 
         cu.execute("""
-            SELECT Instances.instanceId, Instances.itemId,
-                   Nodes.branchId, Instances.flavorId
-                FROM Instances JOIN Nodes USING (itemId, versionId)
-                WHERE isPresent = ?
+        SELECT Instances.instanceId, Instances.itemId, Nodes.branchId, Instances.flavorId
+        FROM Instances
+        JOIN Nodes USING (itemId, versionId)
+        WHERE isPresent = ?
         """, instances.INSTANCE_PRESENT_HIDDEN)
 
         for (instanceId, itemId, branchId, flavorId) in cu.fetchall():
@@ -237,11 +232,7 @@ class TroveStore:
 
     def addTrove(self, trv, hidden = False):
 	cu = self.db.cursor()
-
         schema.resetTable(cu, 'NewFiles')
-        schema.resetTable(cu, 'NeededFlavors')
-        schema.resetTable(cu, 'newTroveTroves')
-
 	return (cu, trv, hidden)
 
     def addTroveDone(self, troveInfo):
@@ -291,20 +282,21 @@ class TroveStore:
                 flavorsNeeded[flavor] = True
 
 	flavorIndex = {}
+        schema.resetTable(cu, 'NeededFlavors')
 	for flavor in flavorsNeeded.iterkeys():
 	    flavorIndex[flavor.freeze()] = flavor
 	    cu.execute("INSERT INTO NeededFlavors VALUES(?)", flavor.freeze())
-
 	del flavorsNeeded
+        self.db.analyze("NeededFlavors")
 
 	# it seems like there must be a better way to do this, but I can't
 	# figure it out. I *think* inserting into a view would help, but I
 	# can't with sqlite.
-
-	cu.execute("""SELECT NeededFlavors.flavor FROM
-			NeededFlavors LEFT OUTER JOIN Flavors ON
-			    NeededFlavors.flavor = Flavors.Flavor
-			WHERE Flavors.flavorId is NULL""")
+	cu.execute("""
+        SELECT NeededFlavors.flavor
+        FROM NeededFlavors
+        LEFT JOIN Flavors ON NeededFlavors.flavor = Flavors.Flavor
+        WHERE Flavors.flavorId is NULL""")
         # make a list of the flavors we're going to create.  Add them
         # after we have retrieved all of the rows from this select
         l = []
@@ -314,9 +306,10 @@ class TroveStore:
 	    self.flavors.createFlavor(flavor)
 
 	flavors = {}
-	cu.execute("""SELECT Flavors.flavor, Flavors.flavorId FROM
-			NeededFlavors INNER JOIN Flavors ON
-			NeededFlavors.flavor = Flavors.flavor""")
+	cu.execute("""
+        SELECT Flavors.flavor, Flavors.flavorId
+        FROM NeededFlavors
+        JOIN Flavors ON NeededFlavors.flavor = Flavors.flavor""")
 	for (flavorStr, flavorId) in cu:
 	    flavors[flavorIndex[flavorStr]] = flavorId
 
@@ -365,7 +358,7 @@ class TroveStore:
 
         # Note: writing the next two steps in a single query causes
         # very slow full table scans on FileStreams. Don't get fancy.
-
+        self.db.analyze("NewFiles")
         # get the common entries we're gonna update. In the extreme
         # case of binary shadowing this might require a bit of of
         # memory for large troves, but it is preferable to constant
@@ -390,7 +383,7 @@ class TroveStore:
         INSERT INTO FileStreams (fileId, stream, sha1)
         SELECT DISTINCT NF.fileId, NF.stream, NF.sha1
         FROM NewFiles AS NF
-        LEFT OUTER JOIN FileStreams AS FS USING(fileId)
+        LEFT JOIN FileStreams AS FS USING(fileId)
         WHERE FS.fileId IS NULL
           AND NF.stream IS NOT NULL
         """)
@@ -400,7 +393,7 @@ class TroveStore:
         INSERT INTO FileStreams (fileId, stream, sha1)
         SELECT DISTINCT NF.fileId, NF.stream, NF.sha1
         FROM NewFiles AS NF
-        LEFT OUTER JOIN FileStreams AS FS USING(fileId)
+        LEFT JOIN FileStreams AS FS USING(fileId)
         WHERE FS.fileId IS NULL
         """)
 
@@ -415,6 +408,7 @@ class TroveStore:
 
         # iterate over both strong and weak troves, and set weakFlag to
         # indicate which kind we're looking at when
+        schema.resetTable(cu, 'newTroveTroves')
         for ((name, version, flavor), weakFlag) in itertools.chain(
                 itertools.izip(trv.iterTroveList(strongRefs = True,
                                                    weakRefs   = False),
@@ -433,34 +427,33 @@ class TroveStore:
                             (not isPackage or version == trv.getVersion()))
             assert(trv.isRedirect() or
                             (not isPackage or flavor == trv.getFlavor()))
-
-            cu.execute("INSERT INTO newTroveTroves "
-                       "(item, version, frozenVersion, flavor, flags) "
-                       "VALUES (?, ?, ?, ?, ?)",
-                       name, str(version), version.freeze(), flavor.freeze(),
-                       flags)
-
+            cu.execute("""
+            INSERT INTO newTroveTroves (item, version, frozenVersion, flavor, flags)
+            VALUES (?, ?, ?, ?, ?)
+            """, (name, str(version), version.freeze(), flavor.freeze(), flags))
+        self.db.analyze("newTroveTroves")
+        
         cu.execute("""
         INSERT INTO Items (item)
-        SELECT DISTINCT newTroveTroves.item FROM
-        newTroveTroves LEFT OUTER JOIN
-        Items USING (item) WHERE Items.itemId is NULL
+        SELECT DISTINCT newTroveTroves.item
+        FROM newTroveTroves
+        LEFT JOIN Items USING (item)
+        WHERE Items.itemId is NULL
         """)
 
         # look for included troves with no instances yet; we make those
         # entries manually here
         cu.execute("""
-        SELECT Items.itemId, newTroveTroves.frozenVersion, Flavors.flavorId FROM
-        newTroveTroves
+        SELECT Items.itemId, newTroveTroves.frozenVersion, Flavors.flavorId
+        FROM newTroveTroves
         JOIN Items USING (item)
         JOIN Flavors ON Flavors.flavor = newTroveTroves.flavor
-        LEFT OUTER JOIN Versions ON Versions.version = newTroveTroves.version
-        LEFT OUTER JOIN Instances ON
+        LEFT JOIN Versions ON Versions.version = newTroveTroves.version
+        LEFT JOIN Instances ON
             Items.itemId = Instances.itemId AND
             Versions.versionId = Instances.versionId AND
             Flavors.flavorId = Instances.flavorId
-        WHERE
-            Instances.instanceId is NULL
+        WHERE Instances.instanceId is NULL
         """)
 
         for (itemId, version, flavorId) in cu.fetchall():
@@ -485,7 +478,7 @@ class TroveStore:
                                                 updateLatest = False)
 
             instanceId = self.getInstanceId(itemId, versionId, flavorId,
-                                clonedFromId, trv.isRedirect(),
+                                clonedFromId, trv.getType(),
                                 isPresent = instances.INSTANCE_PRESENT_MISSING)
 
         cu.execute("""
@@ -514,37 +507,37 @@ class TroveStore:
                        "VALUES (?, ?, ?)", name, str(branch), frz)
 
         cu.execute("""
-                INSERT INTO Items (item)
-                    SELECT NewRedirects.item FROM
-                        NewRedirects LEFT OUTER JOIN Items USING (item)
-                        WHERE Items.itemId is NULL
-                   """)
+        INSERT INTO Items (item)
+        SELECT NewRedirects.item
+        FROM NewRedirects
+        LEFT JOIN Items USING (item)
+        WHERE Items.itemId is NULL
+        """)
+        cu.execute("""
+        INSERT INTO Branches (branch)
+        SELECT NewRedirects.branch
+        FROM NewRedirects
+        LEFT JOIN Branches USING (branch)
+        WHERE Branches.branchId is NULL
+        """)
 
         cu.execute("""
-                INSERT INTO Branches (branch)
-                    SELECT NewRedirects.branch FROM
-                        NewRedirects LEFT OUTER JOIN Branches USING (branch)
-                        WHERE Branches.branchId is NULL
-                   """)
+        INSERT INTO Flavors (flavor)
+        SELECT NewRedirects.flavor
+        FROM NewRedirects
+        LEFT JOIN Flavors USING (flavor)
+        WHERE 
+            Flavors.flavor is not NULL 
+            AND Flavors.flavorId is NULL
+        """)
 
         cu.execute("""
-                INSERT INTO Flavors (flavor)
-                    SELECT NewRedirects.flavor FROM
-                        NewRedirects LEFT OUTER JOIN Flavors USING (flavor)
-                        WHERE 
-                            Flavors.flavor is not NULL 
-                            AND Flavors.flavorId is NULL
-                   """)
-
-        cu.execute("""
-                INSERT INTO TroveRedirects 
-                    (instanceId, itemId, branchId, flavorId)
-                    SELECT %d, itemId, branchId, flavorId FROM
-                        NewRedirects JOIN Items USING (item)
-                        JOIN Branches ON
-                            NewRedirects.branch = Branches.branch
-                        LEFT OUTER JOIN Flavors ON
-                            NewRedirects.flavor = Flavors.flavor
+        INSERT INTO TroveRedirects (instanceId, itemId, branchId, flavorId)
+        SELECT %d, Items.itemId, Branches.branchId, Flavors.flavorId
+        FROM NewRedirects
+        JOIN Items USING (item)
+        JOIN Branches ON NewRedirects.branch = Branches.branch
+        LEFT JOIN Flavors ON NewRedirects.flavor = Flavors.flavor
         """ % troveInstanceId)
 
     def updateMetadata(self, troveName, branch, shortDesc, longDesc,
@@ -638,9 +631,10 @@ class TroveStore:
 	return self.instances.isPresent((troveItemId, troveVersionId,
 					 troveFlavorId))
 
-    def getTrove(self, troveName, troveVersion, troveFlavor, withFiles = True):
+    def getTrove(self, troveName, troveVersion, troveFlavor, withFiles = True,
+                 hidden = False):
 	iter = self.iterTroves(( (troveName, troveVersion, troveFlavor), ),
-                               withFiles = withFiles)
+                               withFiles = withFiles, hidden = hidden)
         trv = [ x for x in iter ][0]
 
         if trv is None:
@@ -648,7 +642,8 @@ class TroveStore:
 
         return trv
 
-    def iterTroves(self, troveInfoList, withFiles = True, withFileStreams = False):
+    def iterTroves(self, troveInfoList, withFiles = True, withFileStreams = False,
+                   hidden = False):
 	cu = self.db.cursor()
 
         schema.resetTable(cu, 'gtl')
@@ -659,101 +654,93 @@ class TroveStore:
             cu.execute("INSERT INTO gtl VALUES (?, ?, ?, %s)" %(flavorStr,),
                        idx, info[0], info[1].asString(),
                        start_transaction = False)
-
-        cu.execute("""SELECT %(STRAIGHTJOIN)s gtl.idx, I.instanceId, 
-                             I.troveType, Nodes.timeStamps, Changelogs.name,
-                             ChangeLogs.contact, ChangeLogs.message
-                            FROM
-                                gtl, Items, Versions, Flavors, Instances as I,
-                                Nodes
-                            LEFT OUTER JOIN ChangeLogs ON
-                                Nodes.nodeId = ChangeLogs.nodeId
-                            WHERE
-                                Items.item = gtl.name AND
-                                Versions.version = gtl.version AND
-                                Flavors.flavor = gtl.flavor AND
-                                I.itemId = Items.itemId AND
-                                I.versionId = Versions.versionId AND
-                                I.flavorId = flavors.flavorId AND
-                                I.itemId = Nodes.itemId AND
-                                I.versionId = Nodes.versionId AND
-                                I.isPresent = ?
-                            ORDER BY
-                                gtl.idx""" % self.db.keywords,
-                        instances.INSTANCE_PRESENT_NORMAL)
-
+        self.db.analyze("gtl")
+        args = [instances.INSTANCE_PRESENT_NORMAL]
+        d = dict(presence = "Instances.isPresent = ?")
+        if hidden:
+            args.append(instances.INSTANCE_PRESENT_HIDDEN)
+            d = dict(presence = "Instances.isPresent in (?,?)")
+        d.update(self.db.keywords)
+        cu.execute("""
+        SELECT %(STRAIGHTJOIN)s gtl.idx, Instances.instanceId, Instances.troveType,
+               Nodes.timeStamps,
+               Changelogs.name, ChangeLogs.contact, ChangeLogs.message
+        FROM gtl
+        JOIN Items on gtl.name = Items.item
+        JOIN Versions on gtl.version = Versions.version
+        JOIN Flavors on gtl.flavor = Flavors.flavor
+        JOIN Instances on
+            Items.itemId = Instances.itemId AND
+            Versions.versionId = Instances.versionId AND
+            Flavors.flavorId = Instances.flavorId
+        JOIN Nodes on
+            Instances.itemId = Nodes.itemId AND
+            Instances.versionId = Nodes.versionId
+        LEFT JOIN ChangeLogs using(nodeId)
+        WHERE %(presence)s
+        ORDER BY gtl.idx
+        """ % d, args)
         troveIdList = [ x for x in cu ]
-
         for singleTroveIds in troveIdList:
             cu.execute("INSERT INTO gtlInst VALUES (?, ?)",
                        singleTroveIds[0], singleTroveIds[1],
                        start_transaction = False)
+        self.db.analyze("gtlInst")
+        
         troveTrovesCursor = self.db.cursor()
         troveTrovesCursor.execute("""
-                        SELECT %(STRAIGHTJOIN)s idx, item, version, flavor, 
-                               flags, Nodes.timeStamps
-                        FROM
-                            gtlInst, TroveTroves, Instances, Items,
-                            Versions, Flavors, Nodes
-                        WHERE
-                            gtlInst.instanceId = TroveTroves.instanceId AND
-                            TroveTroves.includedId = Instances.instanceId AND
-                            Instances.itemId = Items.itemId AND
-                            Instances.versionId = versions.versionId AND
-                            Instances.flavorId = Flavors.flavorId AND
-                            Instances.itemId = Nodes.itemId AND
-                            Instances.versionId = Nodes.versionId
-                        ORDER BY
-                            gtlInst.idx
-                   """ % self.db.keywords)
-
+        SELECT %(STRAIGHTJOIN)s gtlInst.idx, Items.item, Versions.version, Flavors.flavor,
+               TroveTroves.flags, Nodes.timeStamps
+        FROM gtlInst
+        JOIN TroveTroves using(instanceId)
+        JOIN Instances on TroveTroves.includedId = Instances.instanceId
+        JOIN Items on Instances.itemId = Items.itemId
+        JOIN Versions on Instances.versionId = Versions.versionId
+        JOIN Flavors on Instances.flavorId = Flavors.flavorId
+        JOIN Nodes on
+            Instances.itemId = Nodes.itemId and
+            Instances.versionId = Nodes.versionId
+        ORDER BY gtlInst.idx
+        """ % self.db.keywords)
         troveTrovesCursor = util.PeekIterator(troveTrovesCursor)
 
         troveFilesCursor = self.db.cursor()
 	if withFileStreams:
             troveFilesCursor.execute("""
-                        SELECT idx, pathId, path, version, fileId, stream
-                        FROM
-                            gtlInst, TroveFiles, Versions, FileStreams
-                        WHERE
-                            gtlInst.instanceId = TroveFiles.instanceId AND
-                            TroveFiles.versionId = versions.versionId AND
-                            TroveFiles.streamId = FileStreams.streamId
-                        ORDER BY
-                            gtlInst.idx
-                       """)
+            SELECT gtlInst.idx, TroveFiles.pathId, TroveFiles.path,
+                   Versions.version, FileStreams.fileId, FileStreams.stream
+            FROM gtlInst
+            JOIN TroveFiles using(instanceId)
+            JOIN FileStreams using(streamId)
+            JOIN Versions ON TroveFiles.versionId = Versions.versionId
+            ORDER BY gtlInst.idx
+            """)
             troveFilesCursor = util.PeekIterator(troveFilesCursor)
         elif withFiles:
             troveFilesCursor.execute("""
-                        SELECT idx, pathId, path, version, fileId, NULL
-                        FROM
-                            gtlInst, TroveFiles, Versions, FileStreams
-                        WHERE
-                            gtlInst.instanceId = TroveFiles.instanceId AND
-                            TroveFiles.versionId = versions.versionId AND
-                            TroveFiles.streamId = FileStreams.streamId
-                        ORDER BY
-                            gtlInst.idx
-                       """)
+            SELECT gtlInst.idx, TroveFiles.pathId, TroveFiles.path,
+                   Versions.version, FileStreams.fileId, NULL
+            FROM gtlInst
+            JOIN TroveFiles using(instanceId)
+            JOIN FileStreams using(streamId)
+            JOIN Versions ON TroveFiles.versionId = Versions.versionId
+            ORDER BY gtlInst.idx
+            """)
             troveFilesCursor = util.PeekIterator(troveFilesCursor)
         else:
             troveFilesCursor = util.PeekIterator(iter(()))
 
         troveRedirectsCursor = self.db.cursor()
         troveRedirectsCursor.execute("""
-                    SELECT idx, item, branch, flavor 
-                    FROM gtlInst 
-                        JOIN TroveRedirects using (instanceId)
-                        JOIN Items USING (itemId)
-                        JOIN Branches ON
-                            TroveRedirects.branchId = Branches.branchId
-                        LEFT OUTER JOIN Flavors ON
-                            TroveRedirects.flavorId = Flavors.flavorId
-                    ORDER BY
-                        gtlInst.idx
-                    """)
+        SELECT gtlInst.idx, Items.item, Branches.branch, Flavors.flavor 
+        FROM gtlInst 
+        JOIN TroveRedirects using (instanceId)
+        JOIN Items using (itemId)
+        JOIN Branches ON TroveRedirects.branchId = Branches.branchId
+        LEFT JOIN Flavors ON TroveRedirects.flavorId = Flavors.flavorId
+        ORDER BY gtlInst.idx
+        """)
         troveRedirectsCursor = util.PeekIterator(troveRedirectsCursor)
-
 
         neededIdx = 0
         versionObjCache = {}
@@ -876,10 +863,11 @@ class TroveStore:
 	troveInstanceId = self.instances[(troveItemId, troveVersionId,
 					  troveFlavorId)]
 
-	cu.execute("SELECT pathId, path, fileId, versionId, stream FROM "
-		   "TroveFiles JOIN FileStreams USING (streamId)"
-		   "WHERE instanceId = ? %s" %sort,
-		   troveInstanceId)
+	cu.execute("""SELECT pathId, path, fileId, versionId, stream
+        FROM TroveFiles
+        JOIN FileStreams USING (streamId)
+        WHERE instanceId = ?
+        %s""" %sort, troveInstanceId)
 
 	versionCache = {}
 	for (pathId, path, fileId, versionId, stream) in cu:
@@ -975,22 +963,16 @@ class TroveStore:
             #raise errors.CommitError('Marking a group as removed is not implemented')
         cu = self.db.cursor()
 
-        schema.resetTable(cu, 'tmpRemovals')
-        schema.resetTable(cu, 'tmpInstances')
-
         cu.execute("""
-                SELECT instanceId, itemId, Instances.versionId,
-                       Instances.flavorId, troveType FROM Instances
-                    JOIN Items USING (itemId)
-                    JOIN Versions ON
-                        Instances.versionId = Versions.versionId
-                    JOIN Flavors ON
-                        Instances.flavorId = Flavors.flavorId
-                    WHERE
-                        Items.item = ? AND
-                        Versions.version = ? AND
-                        Flavors.flavor = ?
-        """, name, version.asString(), flavor.freeze())
+        SELECT I.instanceId, I.itemId, I.versionId, I.flavorId, I.troveType
+        FROM Instances as I
+        JOIN Items USING (itemId)
+        JOIN Versions ON I.versionId = Versions.versionId
+        JOIN Flavors ON I.flavorId = Flavors.flavorId
+        WHERE Items.item = ?
+          AND Versions.version = ?
+          AND Flavors.flavor = ?
+        """, (name, version.asString(), flavor.freeze()))
 
         try:
             instanceId, itemId, versionId, flavorId, troveType = cu.next()
@@ -1000,15 +982,6 @@ class TroveStore:
         assert(troveType == trove.TROVE_TYPE_NORMAL or
                troveType == trove.TROVE_TYPE_REDIRECT)
 
-        cu.execute("SELECT nodeId, branchId FROM Nodes "
-                   "WHERE itemId = ? AND versionId = ?", itemId, versionId)
-        nodeId, branchId = cu.next()
-
-        # tmpRemovals drives the removal of most of the shared tables
-        cu.execute("INSERT INTO tmpRemovals (itemId, versionId, flavorId, "
-                                            "branchId) "
-                   "VALUES (?, ?, ?, ?)", itemId, versionId, flavorId, branchId)
-
         # remove all dependencies which are used only by this instanceId
         cu.execute("""
         select prov.depId as depId from
@@ -1017,7 +990,7 @@ class TroveStore:
             union
             select depId, instanceId  from Requires where instanceId = :instanceId
           ) as a
-          left outer join Provides as p on a.depId = p.depId and p.instanceId != a.instanceId
+          left join Provides as p on a.depId = p.depId and p.instanceId != a.instanceId
           where p.depId is NULL
         ) as prov
         join
@@ -1026,7 +999,7 @@ class TroveStore:
             union
             select depId, instanceId  from Requires where instanceId = :instanceId
           ) as a
-          left outer join Requires as r on a.depId = r.depId and r.instanceId != a.instanceId
+          left join Requires as r on a.depId = r.depId and r.instanceId != a.instanceId
           where r.depId is NULL
         ) as reqs
         where prov.depId = reqs.depId
@@ -1054,8 +1027,7 @@ class TroveStore:
                     FROM TroveFiles as Used
                    WHERE Used.streamId = Candidates.streamId
                      AND Used.instanceId != Candidates.instanceId ) = 0
-        WHERE
-            Candidates.instanceId = ?
+        WHERE Candidates.instanceId = ?
         """, instanceId)
         r = cu.fetchall()
         # if sha1 is None, the file has no contents
@@ -1075,35 +1047,40 @@ class TroveStore:
             if cu.next()[0] == 0:
                 filesToRemove.append(sha1)
 
+        # tmpRemovals drives the removal of most of the shared tables
+        schema.resetTable(cu, 'tmpRemovals')
+        cu.execute("SELECT nodeId, branchId FROM Nodes "
+                   "WHERE itemId = ? AND versionId = ?", (itemId, versionId))
+        nodeId, branchId = cu.next()
+        cu.execute("INSERT INTO tmpRemovals (itemId, versionId, flavorId, branchId) "
+                   "VALUES (?, ?, ?, ?)", (itemId, versionId, flavorId, branchId))
         # Look for troves which this trove references which aren't present
         # on this repository (if they are present, we shouldn't remove them)
         # and aren't referenced by anything else
         cu.execute("""
-            INSERT INTO tmpRemovals (instanceId, itemId, versionId, flavorId,
-                                     branchId)
-            SELECT Instances.instanceId, Instances.itemId, Instances.versionId,
-                                         Instances.flavorId, Nodes.branchId
-                FROM TroveTroves JOIN Instances ON
-                    TroveTroves.includedId = Instances.instanceId
-                JOIN Nodes ON
-                    Instances.itemId = Nodes.itemId AND
-                    Instances.versionId = Nodes.versionId
-                LEFT OUTER JOIN TroveTroves AS Other ON
-                    Instances.instanceId = Other.includedId AND
-                    Other.instanceId != ?
-                WHERE
-                    TroveTroves.instanceId = ? AND
-                    Instances.isPresent = 0 AND
-                    Other.includedId IS NULL
-        """, instanceId, instanceId)
-
+        INSERT INTO tmpRemovals (instanceId, itemId, versionId, flavorId, branchId)
+        SELECT Instances.instanceId, Instances.itemId, Instances.versionId,
+               Instances.flavorId, Nodes.branchId
+        FROM TroveTroves
+        JOIN Instances ON TroveTroves.includedId = Instances.instanceId
+        JOIN Nodes ON
+            Instances.itemId = Nodes.itemId AND
+            Instances.versionId = Nodes.versionId
+        LEFT JOIN TroveTroves AS Other ON
+            Instances.instanceId = Other.includedId AND
+            Other.instanceId != ?
+        WHERE
+            TroveTroves.instanceId = ? AND
+            Instances.isPresent = ? AND
+            Other.includedId IS NULL
+        """, (instanceId, instanceId, instances.INSTANCE_PRESENT_MISSING))
         cu.execute("""
-            INSERT INTO tmpRemovals (itemId, flavorId, branchId)
-            SELECT TroveRedirects.itemId, TroveRedirects.flavorId,
-                                          TroveRedirects.branchId
-                FROM TroveRedirects WHERE
-                    TroveRedirects.instanceId = ?
+        INSERT INTO tmpRemovals (itemId, flavorId, branchId)
+        SELECT TroveRedirects.itemId, TroveRedirects.flavorId,
+               TroveRedirects.branchId
+        FROM TroveRedirects WHERE TroveRedirects.instanceId = ?
         """, instanceId)
+        self.db.analyze("tmpRemovals")
 
         cu.execute("DELETE FROM TroveTroves WHERE instanceId=?", instanceId)
         cu.execute("DELETE FROM TroveRedirects WHERE instanceId=?", instanceId)
@@ -1119,49 +1096,50 @@ class TroveStore:
             cu.execute("DELETE FROM Instances WHERE instanceId = ?", instanceId)
 
         # look for troves referenced by this one
-
-        cu.execute("""INSERT INTO tmpInstances
-                SELECT Nodes.nodeId FROM tmpRemovals JOIN Nodes
-                        USING (itemId, versionId)
-                    LEFT OUTER JOIN Instances
-                        USING (itemId, versionId)
-                    WHERE
-                        Instances.itemId IS NULL
+        schema.resetTable(cu, 'tmpInstances')
+        cu.execute("""
+        INSERT INTO tmpInstances
+        SELECT Nodes.nodeId
+        FROM tmpRemovals
+        JOIN Nodes USING (itemId, versionId)
+        LEFT JOIN Instances USING (itemId, versionId)
+        WHERE Instances.itemId IS NULL
         """)
-
+        self.db.analyze("tmpInstances")
+        
         # Was this the only Instance for the node?
         cu.execute("""
-            DELETE FROM Changelogs WHERE Changelogs.nodeId IN (
-                SELECT * FROM tmpInstances)
+        DELETE FROM Changelogs
+        WHERE Changelogs.nodeId IN (SELECT * FROM tmpInstances)
         """)
 
         cu.execute("""
-            DELETE FROM Nodes WHERE Nodes.nodeId IN (
-                SELECT * FROM tmpInstances)
-       """)
+        DELETE FROM Nodes
+        WHERE Nodes.nodeId IN (SELECT * FROM tmpInstances)
+        """)
 
         # Now update the latest table
         self.versionOps.updateLatest(itemId, branchId, flavorId)
 
         # Delete flavors which are no longer needed
         cu.execute("""
-            DELETE FROM Flavors WHERE flavorId IN (
-                SELECT tmpRemovals.flavorId FROM tmpRemovals
-                    LEFT OUTER JOIN Latest ON
-                        tmpRemovals.flavorId = Latest.flavorId
-                    LEFT OUTER JOIN TroveRedirects ON
-                        tmpRemovals.flavorId = TroveRedirects.flavorId
-                    WHERE
-                        Latest.flavorId IS NULL AND
-                        TroveRedirects.flavorId IS NULL)
-        """)
+        DELETE FROM Flavors
+        WHERE flavorId IN (
+            SELECT tmpRemovals.flavorId
+            FROM tmpRemovals
+            LEFT JOIN Latest ON tmpRemovals.flavorId = Latest.flavorId
+            LEFT JOIN TroveRedirects ON tmpRemovals.flavorId = TroveRedirects.flavorId
+            WHERE Latest.flavorId IS NULL
+              AND TroveRedirects.flavorId IS NULL
+        )""")
         cu.execute("""
-            DELETE FROM FlavorMap WHERE flavorId IN (
-                SELECT tmpRemovals.flavorId FROM tmpRemovals
-                    LEFT OUTER JOIN Flavors USING (flavorId)
-                    WHERE
-                        Flavors.flavorId IS NULL)
-        """)
+        DELETE FROM FlavorMap
+        WHERE flavorId IN (
+            SELECT tmpRemovals.flavorId
+            FROM tmpRemovals
+            LEFT JOIN Flavors USING (flavorId)
+            WHERE Flavors.flavorId IS NULL
+        )""")
 
         # do we need the labelmap entry anymore?
         cu.execute("SELECT COUNT(*) FROM Nodes WHERE itemId = ? AND "
@@ -1171,10 +1149,9 @@ class TroveStore:
         # XXX This stinks, but to fix it we need a proper index column
         # on LabelMap.
         cu.execute("""
-            SELECT itemId, branchId FROM tmpRemovals
-                    LEFT OUTER JOIN Nodes USING (itemId, branchId)
-                    WHERE
-                        Nodes.itemId IS NULL
+        SELECT itemId, branchId FROM tmpRemovals
+        LEFT JOIN Nodes USING (itemId, branchId)
+        WHERE Nodes.itemId IS NULL
         """)
         for rmItemId, rmBranchId in cu.fetchall():
             cu.execute("DELETE FROM LabelMap WHERE itemId=? AND branchId=?",
@@ -1182,62 +1159,60 @@ class TroveStore:
 
         # do we need these branchIds anymore?
         cu.execute("""
-            DELETE FROM Branches WHERE branchId IN (
-                SELECT tmpRemovals.branchId FROM tmpRemovals
-                    LEFT OUTER JOIN LabelMap ON
-                        tmpRemovals.branchId = LabelMap.branchId
-                    LEFT OUTER JOIN TroveRedirects ON
-                        tmpRemovals.branchId = TroveRedirects.branchId
-                    WHERE
-                        LabelMap.branchId IS NULL AND
-                        TroveRedirects.branchId IS NULL)
-        """)
+        DELETE FROM Branches
+        WHERE branchId IN (
+            SELECT tmpRemovals.branchId
+            FROM tmpRemovals
+            LEFT JOIN LabelMap ON tmpRemovals.branchId = LabelMap.branchId
+            LEFT JOIN TroveRedirects ON tmpRemovals.branchId = TroveRedirects.branchId
+            WHERE LabelMap.branchId IS NULL
+              AND TroveRedirects.branchId IS NULL
+        )""")
 
         # XXX It would be nice to narrow this down based on tmpRemovals, but
         # in reality the labels table never gets that big.
         schema.resetTable(cu, 'tmpInstances')
-        cu.execute("""INSERT INTO tmpInstances
-             SELECT labelId FROM Labels
-                LEFT OUTER JOIN LabelMap USING (labelId)
-                WHERE
-                    LabelMap.labelId IS NULL AND
-                    Labels.labelId != 0
-        """)
-
         cu.execute("""
-            DELETE FROM Labels WHERE labelId IN (SELECT * from tmpInstances)
+        INSERT INTO tmpInstances
+        SELECT Labels.labelId
+        FROM Labels
+        LEFT JOIN LabelMap ON LabelMap.labelId = Labels.labelId
+        WHERE LabelMap.labelId IS NULL
+          AND Labels.labelId != 0
+        """)
+        self.db.analyze("tmpInstances")
+        
+        cu.execute("""
+        DELETE FROM Labels
+        WHERE labelId IN (SELECT * from tmpInstances)
         """)
 
         # do we need these branchIds anymore?
         cu.execute("""
-            DELETE FROM Versions WHERE versionId IN (
-                SELECT tmpRemovals.versionId FROM tmpRemovals
-                    LEFT OUTER JOIN Instances ON
-                        tmpRemovals.versionId = Instances.versionId
-                    LEFT OUTER JOIN TroveFiles ON
-                        tmpRemovals.versionId = TroveFiles.versionId
-                    WHERE
-                        Instances.versionId IS NULL AND
-                        TroveFiles.versionId IS NULL)
-        """)
+        DELETE FROM Versions
+        WHERE versionId IN (
+            SELECT tmpRemovals.versionId
+            FROM tmpRemovals
+            LEFT JOIN Instances ON tmpRemovals.versionId = Instances.versionId
+            LEFT JOIN TroveFiles ON tmpRemovals.versionId = TroveFiles.versionId
+            WHERE Instances.versionId IS NULL
+              AND TroveFiles.versionId IS NULL
+        )""")
 
         cu.execute("""
-            DELETE FROM Items WHERE itemId IN (
-                SELECT tmpRemovals.itemId FROM tmpRemovals
-                    LEFT OUTER JOIN Instances ON
-                        tmpRemovals.itemId = Instances.itemId
-                    LEFT OUTER JOIN Nodes ON
-                        tmpRemovals.itemId = Nodes.itemId
-                    LEFT OUTER JOIN TroveRedirects ON
-                        tmpRemovals.itemId = TroveRedirects.itemId
-                    WHERE
-                        Instances.itemId IS NULL AND
-                        Nodes.itemId IS NULL AND
-                        TroveRedirects.itemId IS NULL)
-        """)
+        DELETE FROM Items
+        WHERE itemId IN (
+            SELECT tmpRemovals.itemId
+            FROM tmpRemovals
+            LEFT JOIN Instances ON tmpRemovals.itemId = Instances.itemId
+            LEFT JOIN Nodes ON tmpRemovals.itemId = Nodes.itemId
+            LEFT JOIN TroveRedirects ON tmpRemovals.itemId = TroveRedirects.itemId
+            WHERE Instances.itemId IS NULL
+              AND Nodes.itemId IS NULL
+              AND TroveRedirects.itemId IS NULL
+        )""")
 
         # XXX what about metadata?
-
         return filesToRemove
 
     def markTroveRemoved(self, name, version, flavor):
@@ -1250,6 +1225,7 @@ class TroveStore:
         for (n,v,f) in troveList:
             cu.execute("insert into gtl(name,version,flavor) values (?,?,?)",
                        (n,v,f), start_transaction=False)
+        self.db.analyze("gtl")
         # get the instanceIds of the parents of what we can find
         cu.execute("""
         insert into gtlInst(instanceId)
@@ -1264,6 +1240,7 @@ class TroveStore:
             Flavors.flavorId = Instances.flavorId
         join TroveTroves on TroveTroves.includedId = Instances.instanceId
         """)
+        self.db.analyze("gtlInst")
         # gtlInst now has instanceIds of the parents
         cu.execute("""
         select Items.item, Versions.version, Flavors.flavor
@@ -1294,14 +1271,13 @@ class TroveStore:
         self._cleanCache()
 
 class FileRetriever:
-
     def __init__(self, db, log = None):
+        self.db = db
         self.cu = db.cursor()
         schema.resetTable(self.cu, 'getFilesTbl')
         self.log = log or tracelog.getLog(None)
 
     def get(self, l):
-	self.log(3, "start FileRetriever inserts")
         lookup = range(len(l))
         for itemId, tup in enumerate(l):
             (pathId, fileId) = tup[:2]
@@ -1309,13 +1285,9 @@ class FileRetriever:
                             (itemId, self.cu.binary(fileId)),
                             start_transaction = False)
             lookup[itemId] = (pathId, fileId)
-
-	self.log(3, "start FileRetriever select")
-        self.cu.execute("""
-            SELECT itemId, stream FROM getFilesTbl INNER JOIN FileStreams ON
-                    getFilesTbl.fileId = FileStreams.fileId
-        """)
-
+        self.db.analyze("getFilesTbl")
+        self.cu.execute("SELECT itemId, stream FROM getFilesTbl "
+                        "JOIN FileStreams using (fileId) ")
         d = {}
         for itemId, stream in self.cu:
             pathId, fileId = lookup[itemId]
@@ -1324,8 +1296,5 @@ class FileRetriever:
             else:
                 f = None
             d[(pathId, fileId)] = f
-        self.cu.execute("DELETE FROM getFilesTbl", start_transaction = False)
-
-	self.log(3, "stop FileRetriever")
-
+        schema.resetTable(self.cu, "getFilesTbl")
         return d

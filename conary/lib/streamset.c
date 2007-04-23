@@ -47,7 +47,7 @@ typedef struct {
 } StreamSetDefObject;
 
 typedef struct {
-    PyObject_HEAD;
+    PyObject_HEAD
     int unknownCount;
     struct unknownTags {
         unsigned int tag;
@@ -229,9 +229,13 @@ static int StreamSet_Cmp(PyObject * self, PyObject * other) {
 #define INCLUDE_EMPTY 1
 
 static inline int addTag(char** buf, int tag, int valSize, int valLen) {
-    char *chptr = *buf;
+    unsigned char *chptr = (unsigned char*) *buf;
     int len;
 
+    if (tag > UCHAR_MAX) {
+	PyErr_SetString(PyExc_TypeError, "tag number overflow. max value is uchar");
+	return -1;
+    }
     /* first char is the tag */
     *chptr++ = tag;
 
@@ -267,10 +271,10 @@ static inline int addTag(char** buf, int tag, int valSize, int valLen) {
     }
 
     /* figure out how much space we used */
-    len = chptr - *buf;
+    len = (int) chptr - (int) *buf;
 
     /* move the buffer pointer to the current posititon */
-    *buf = chptr;
+    *buf = (char *) chptr;
 
     /* return the amount of space consumed */
     return len;
@@ -278,7 +282,7 @@ static inline int addTag(char** buf, int tag, int valSize, int valLen) {
 
 static inline void getTag(char** buf, unsigned int *tag, int *valSize,
                           int *valLen) {
-    char *chptr = *buf;
+    unsigned char *chptr = (unsigned char *) *buf;
     char b;
 
     *tag = *chptr;
@@ -296,7 +300,7 @@ static inline void getTag(char** buf, unsigned int *tag, int *valSize,
 	chptr += sizeof(int16_t);
         *valSize = SMALL;
     }
-    *buf = chptr;
+    *buf = (char *) chptr;
 }
 
 static PyObject *concatStrings(StreamSetDefObject *ssd,
@@ -424,17 +428,25 @@ static PyObject * StreamSet_DeepCopy(PyObject * self, PyObject * args) {
     return obj;
 }
 
-static PyObject * StreamSet_Diff(StreamSetObject * self, PyObject * args) {
+static PyObject * StreamSet_Diff(StreamSetObject * self, PyObject * args,
+				 PyObject * kwargs) {
     PyObject ** vals;
     StreamSetDefObject * ssd;
     int i, len, useAlloca = 0;
-    PyObject * attr, * otherAttr, *rc;
+    PyObject * attr, * otherAttr, *rc, *ignoreUnknown = Py_False;
     StreamSetObject * other;
+    static char * kwlist[] = { "other", "ignoreUnknown", NULL };
 
-    if (!PyArg_ParseTuple(args, "O!", self->ob_type, &other))
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "O!|O", kwlist,
+				     self->ob_type, &other, &ignoreUnknown))
         return NULL;
 
-    if (self->unknownCount || other->unknownCount) {
+    if (ignoreUnknown != Py_False && ignoreUnknown != Py_True) {
+        PyErr_SetString(PyExc_TypeError, "ignoreUnknown must be boolean");
+        return NULL;
+    }
+
+    if (ignoreUnknown != Py_True && (self->unknownCount || other->unknownCount)) {
         PyErr_SetString(PyExc_ValueError,
                         "Cannot diff streams with unknown tags");
         return NULL;
@@ -456,7 +468,13 @@ static PyObject * StreamSet_Diff(StreamSetObject * self, PyObject * args) {
 	attr = PyObject_GetAttr((PyObject *) self, ssd->tags[i].name);
 	otherAttr = PyObject_GetAttr((PyObject *) other, ssd->tags[i].name);
 
-	vals[i] = PyObject_CallMethod(attr, "diff", "O", otherAttr);
+	if (PyObject_IsInstance((PyObject *) attr,
+				(PyObject *) &allStreams[STREAM_SET].pyType)) {
+	    vals[i] = PyObject_CallMethod(attr, "diff", "OO", otherAttr,
+					  ignoreUnknown);
+	} else {
+	    vals[i] = PyObject_CallMethod(attr, "diff", "O", otherAttr);
+	}
 
 	Py_DECREF(attr);
 	Py_DECREF(otherAttr);
@@ -669,7 +687,6 @@ static int StreamSet_Init(PyObject * o, PyObject * args,
 				     &dataLen, &offset)) {
         return -1;
     }
-
     ssd = StreamSet_GetSSD(o->ob_type);
     if (!ssd)
 	return -1;
@@ -792,10 +809,9 @@ static int Thaw_raw(PyObject * self, StreamSetDefObject * ssd,
     }
 
     if (chptr != end) {
-	printf("An internal error has occurred.  Halting execution.\n");
-	fflush(stdout);
-	i = 1;
-	while (i) ;
+	PyErr_SetString(PyExc_AssertionError,
+			"chptr != end in Thaw_raw");
+	return -1;
     }
     assert(chptr == end);
 
@@ -989,11 +1005,10 @@ static PyTypeObject StreamSetDefType = {
 
 static PyMethodDef StreamSetMethods[] = {
     { "__deepcopy__", (PyCFunction) StreamSet_DeepCopy, METH_VARARGS         },
-    { "diff",   (PyCFunction) StreamSet_Diff,   METH_VARARGS                 },
+    { "diff",   (PyCFunction) StreamSet_Diff,   METH_VARARGS | METH_KEYWORDS },
     { "__eq__", (PyCFunction) StreamSet_Eq,     METH_VARARGS | METH_KEYWORDS },
     { "find",   (PyCFunction) StreamSet_Find,   METH_VARARGS | METH_CLASS    },
     { "freeze", (PyCFunction) StreamSet_Freeze, METH_VARARGS | METH_KEYWORDS },
-    { "thaw",   (PyCFunction) StreamSet_Thaw,   METH_VARARGS                 },
     { "thaw",   (PyCFunction) StreamSet_Thaw,   METH_VARARGS                 },
     { "twm",    (PyCFunction) StreamSet_Twm,    METH_VARARGS | METH_KEYWORDS },
     {NULL}  /* Sentinel */

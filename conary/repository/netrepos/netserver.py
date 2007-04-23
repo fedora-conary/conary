@@ -701,6 +701,12 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
         for i, flavor in enumerate(flavorSet.iterkeys()):
             flavorId = i + 1
             flavorSet[flavor] = flavorId
+            if flavor is '':
+                # empty flavor yields a dummy dep on a null flag
+                cu.execute("INSERT INTO ffFlavor VALUES(?, 'use', ?, NULL)",
+                           flavorId, deps.FLAG_SENSE_REQUIRED,
+                           start_transaction = False)
+                continue
             for depClass in self.toFlavor(flavor).getDepClasses().itervalues():
                 for dep in depClass.getDeps():
                     cu.execute("INSERT INTO ffFlavor VALUES (?, ?, ?, NULL)",
@@ -710,9 +716,7 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
                         cu.execute("INSERT INTO ffFlavor VALUES (?, ?, ?, ?)",
                                    flavorId, dep.name, sense, flag,
                                    start_transaction = False)
-        cu.execute("select count(*) from ffFlavor")
-        entries = cu.next()[0]
-        self.log(4, "created temporary table ffFlavor", entries)
+        self.db.analyze("ffFlavor")
 
     def _setupTroveFilter(self, cu, troveSpecs, flavorIndices):
         self.log(3, troveSpecs, flavorIndices)
@@ -728,16 +732,11 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
                                start_transaction = False)
                 else:
                     for flavorSpec in flavorList:
-                        if flavorSpec:
-                            flavorId = flavorIndices[flavorSpec]
-                        else:
-                            flavorId = None
+                        flavorId = flavorIndices.get(flavorSpec, None)
                         cu.execute("INSERT INTO gtvlTbl VALUES (?, ?, ?)",
                                    troveName, versionSpec, flavorId,
                                    start_transaction = False)
-        cu.execute("select count(*) from gtvlTbl")
-        entries = cu.next()[0]
-        self.log(4, "created temporary table gtvlTbl", entries)
+        self.db.analyze("gtvlTbl")
 
     def _latestType(self, queryType):
         return queryType
@@ -771,7 +770,7 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
         flavorIndices = {}
         if troveSpecs:
             # populate flavorIndices with all of the flavor lookups we
-            # need. a flavor of 0 (numeric) means "None"
+            # need; a flavor of 0 (numeric) means "None"
             for versionDict in troveSpecs.itervalues():
                 for flavorList in versionDict.itervalues():
                     if flavorList is not None:
@@ -1620,6 +1619,7 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
                     VALUES (?, ?, ?, ?)
                 """, jobId, job[0], job[2][0], job[2][1])
 
+            self.db.analyze("gtl")
             cu.execute("""SELECT
                     gtl.idx, I_Items.item, I_Versions.version,
                     I_Flavors.flavor, TroveTroves.flags
@@ -1839,7 +1839,8 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
             # need to catch the DatabaseLocked errors here and retry
             # the commit ourselves
             try:
-                ret = self._commitChangeSet(authToken, cs, mirror, hidden)
+                ret = self._commitChangeSet(authToken, cs, mirror=mirror,
+                                            hidden=hidden)
             except sqlerrors.DatabaseLocked, e:
                 # deadlock occurred; we rollback and try again
                 log.error("Deadlock id %d: %s", attempt, str(e.args))
@@ -1865,7 +1866,6 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
     def _commitChangeSet(self, authToken, cs, mirror = False, hidden = False):
 	# walk through all of the branches this change set commits to
 	# and make sure the user has enough permissions for the operation
-
         verList = ((x.getName(), x.getOldVersion(), x.getNewVersion())
                     for x in cs.iterNewTroveList())
         self._checkCommitPermissions(authToken, verList, mirror, hidden)
@@ -1944,6 +1944,7 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
             cu.execute("INSERT INTO gfsTable (idx, fileId) VALUES (?, ?)",
                        (i, cu.binary(fileId)))
 
+        self.db.analyze("gfsTable")
         q = """
         SELECT DISTINCT
             gfsTable.idx, FileStreams.stream, UP.permittedTrove, Items.item
@@ -2080,7 +2081,7 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
             filePrefixes = ['']
         cu.executemany("INSERT INTO tmpFilePrefixes (prefix) VALUES (?)",
                        ( f + '%' for f in filePrefixes ))
-
+        self.db.analyze("tmpFilePrefixes")
         cu.execute(query, sourceName, branch)
         ids = {}
         for (pathId, path, version, fileId, timeStamp) in cu:
@@ -2099,16 +2100,16 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
         assert(len(fileIds) % fileIdLen == 0)
         fileIdCount = len(fileIds) // fileIdLen
 
-        def splitFileIds():
+        def splitFileIds(cu):
             for i in range(fileIdCount):
                 start = fileIdLen * i
                 end = start + fileIdLen
-                yield fileIds[start : end]
+                yield cu.binary(fileIds[start : end])
 
         schema.resetTable(cu, 'tmpFileIds')
-        cu.executemany("INSERT INTO tmpFileIds (fileId) "
-                       "VALUES (?)", splitFileIds())
-
+        cu.executemany("INSERT INTO tmpFileIds (fileId) VALUES (?)", splitFileIds(cu))
+        self.db.analyze("tmpFileIds")
+        
         # Fetch paths by file id too
         query = """
         SELECT DISTINCT
@@ -2151,17 +2152,16 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
     @accessReadOnly
     def hasTroves(self, authToken, clientVersion, troveList, hidden = False):
         # returns False for troves the user doesn't have permission to view
+        self.log(2, troveList)
         cu = self.db.cursor()
-        schema.resetTable(cu, 'hasTrovesTmp')
         userGroupIds = self.auth.getAuthGroups(cu, authToken)
         if not userGroupIds:
             return {}
-        self.log(2, troveList)
+        schema.resetTable(cu, 'hasTrovesTmp')
         for row, item in enumerate(troveList):
-            flavor = item[2]
             cu.execute("INSERT INTO hasTrovesTmp (row, item, version, flavor) "
-                       "VALUES (?, ?, ?, ?)", row, item[0], item[1], flavor)
-
+                       "VALUES (?, ?, ?, ?)", row, item[0], item[1], item[2])
+        self.db.analyze("hasTrovesTmp")
         if hidden:
             hiddenClause = ("OR (Instances.isPresent = %d AND UP.canWrite = 1)"
                         % instances.INSTANCE_PRESENT_HIDDEN)
@@ -2219,16 +2219,15 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
                          all=False):
         self.log(2, pathList, label, all)
         cu = self.db.cursor()
-        schema.resetTable(cu, 'trovesByPathTmp')
-
         userGroupIds = self.auth.getAuthGroups(cu, authToken)
         if not userGroupIds:
             return {}
 
+        schema.resetTable(cu, 'trovesByPathTmp')
         for row, path in enumerate(pathList):
             cu.execute("INSERT INTO trovesByPathTmp (row, path) "
                        "VALUES (?, ?)", row, path)
-
+        self.db.analyze("trovesByPathTmp")
 
         # FIXME: MySQL 5.0.18 does not like "SELECT row, ..." so we are
         # explicit
@@ -2595,8 +2594,12 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
     @accessReadOnly
     def getNewSigList(self, authToken, clientVersion, mark):
         # only show troves the user is allowed to see
-        cu = self.db.cursor()
+        try:
+            mark = long(mark)
+        except: # deny invalid marks
+            raise errors.InsufficientPermission
         self.log(2, mark)
+        cu = self.db.cursor()
         userGroupIds = self.auth.getAuthGroups(cu, authToken)
         if not userGroupIds:
             return []
@@ -2675,6 +2678,7 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
         for (n,v,f), sig in infoList:
             cu.execute("insert into gtl(name,version,flavor) values (?,?,?)",
                        (n,v,f))
+        self.db.analyze("gtl")
         # we'll need the min idx to account for differences in SQL backends
         cu.execute("SELECT MIN(idx) from gtl")
         minIdx = cu.fetchone()[0]
@@ -2691,6 +2695,7 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
             Versions.versionId = Instances.versionId AND
             Flavors.flavorId = Instances.flavorId
         """)
+        self.db.analyze("gtlInst")
         # see what troves are missing, if any
         cu.execute("""
         select gtl.idx
@@ -2707,7 +2712,8 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
         # about to set sigs for. we look over the signatures we need
         # to update and perform the updates
         cu.execute("""
-        select gtl.idx, gtlInst.instanceId, TroveInfo.data
+        select gtl.idx, gtlInst.instanceId,
+               TroveInfo.instanceId as tid, TroveInfo.data
         from gtl
         join gtlInst on gtl.idx = gtlInst.idx
         left join TroveInfo on
@@ -2717,24 +2723,21 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
         inserts = []
         updates = []
         sigList = [base64.decodestring(s) for (n,v,f),s in infoList]
-        for i, instanceId, sig in cu:
-            sig = cu.frombinary(sig)
+        for i, instanceId, tid, sig in cu:
+            if sig is not None:
+                sig = cu.frombinary(sig)
             i -= minIdx
-            if sig is None:
-                # don't have a sig yet
-                inserts.append((i, instanceId, sig))
-            elif sig != sigList[i]:
-                # it has changed
-                updates.append((i, instanceId, sigList[i]))
-        invList = []
+            # what do we need to put in the database
+            tup = (i, instanceId, sigList[i])
+            if tid is None: # don't have a sig yet
+                inserts.append(tup)
+            elif sig != sigList[i]: # it is has changed
+                updates.append(tup)
         if len(inserts):
             cu.executemany("insert into TroveInfo (instanceId, infoType, data) "
                            "values (?,?,?) ",
                            [(instanceId, trove._TROVEINFO_TAG_SIGS, cu.binary(sig))
                             for i, instanceId, sig in inserts])
-            for i, instanceId, sig in inserts:
-                (n,v,f),s = infoList[i]
-                invList.append((n,v,f))
         if len(updates):
             # SQL update does not executemany() very well
             for i, instanceId, sig in updates:
@@ -2742,14 +2745,15 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
                 UPDATE TroveInfo SET data = ?
                 WHERE infoType = ? AND instanceId = ?
                 """, (cu.binary(sig), trove._TROVEINFO_TAG_SIGS, instanceId))
-                (n,v,f),s = infoList[i]
-                invList.append((n,v,f))
         self.log(3, "updated signatures for", len(inserts+updates), "troves")
-        self.log(3, "invalidated cache for", len(invList), "troves")
         return len(inserts) + len(updates)
 
     @accessReadOnly
     def getNewPGPKeys(self, authToken, clientVersion, mark):
+        try:
+            mark = long(mark)
+        except: # deny invalid marks
+            raise errors.InsufficientPermission
 	if not self.auth.check(authToken, write = False, mirror = True):
 	    raise errors.InsufficientPermission
         self.log(2, authToken[0], mark)
@@ -2772,6 +2776,10 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
 
     @accessReadOnly
     def getNewTroveList(self, authToken, clientVersion, mark):
+        try:
+            mark = long(mark)
+        except: # deny invalid marks
+            raise errors.InsufficientPermission
 	if not self.auth.check(authToken, write = False, mirror = True):
 	    raise errors.InsufficientPermission
         self.log(2, authToken[0], mark)
@@ -2788,11 +2796,11 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
         FROM (
            SELECT COUNT(instanceId) AS c
            FROM Instances
-           WHERE Instances.isPresent != ?
+           WHERE Instances.isPresent = ?
              AND Instances.changed >= ?
            GROUP BY changed
            HAVING COUNT(instanceId) > 1
-        ) AS lims""", instances.INSTANCE_PRESENT_HIDDEN, mark)
+        ) AS lims""", (instances.INSTANCE_PRESENT_NORMAL, mark))
         lim = cu.fetchall()[0][0]
         if lim is None or lim < 1000:
             lim = 1000 # for safety and efficiency
@@ -2836,13 +2844,12 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
         JOIN Versions ON Versions.versionId = Instances.versionId
         JOIN Flavors ON Flavors.flavorId = Instances.flavorId
         WHERE Instances.changed >= ?
-          AND Instances.isPresent != ?
+          AND Instances.isPresent = ?
         ORDER BY Instances.changed
         LIMIT %d
         """ % (",".join("%d" % x for x in userGroupIds), lim * permCount)
-
-        cu.execute(query, (mark, instances.INSTANCE_PRESENT_HIDDEN))
-        self.log(4, "executing query", query, mark, instances.INSTANCE_PRESENT_HIDDEN)
+        cu.execute(query, (mark, instances.INSTANCE_PRESENT_NORMAL))
+        self.log(4, "executing query", query, mark, instances.INSTANCE_PRESENT_NORMAL)
         l = set()
 
         for pattern, name, version, flavor, timeStamps, mark, troveType in cu:
@@ -2893,6 +2900,7 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
             ret[i] = (-1,'') # next best thing is trive missing
             cu.execute("insert into gtl(idx,name,version,flavor) values (?,?,?,?)",
                        (i, n, v, f), start_transaction=False)
+        self.db.analyze("gtl")
         # get the data doing a full scan of gtl
         cu.execute("""
         SELECT gtl.idx, TroveInfo.data
@@ -2937,6 +2945,7 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
         for (n,v,f) in troveInfoList:
             cu.execute("insert into gtl(name,version,flavor) values (?,?,?)",
                        (n, v, f), start_transaction=False)
+        self.db.analyze("gtl")
         # we'll need the min idx to account for differences in SQL backends
         cu.execute("SELECT MIN(idx) from gtl")
         minIdx = cu.fetchone()[0]
@@ -2954,6 +2963,7 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
             Flavors.flavorId = Instances.flavorId
         join TroveTroves on TroveTroves.includedId = Instances.instanceId
         """, start_transaction=False)
+        self.db.analyze("gtlInst")
         # gtlInst now has instanceIds of the parents. retrieve the data we need
         cu.execute("""
         select

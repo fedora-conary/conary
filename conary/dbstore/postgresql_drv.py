@@ -26,7 +26,7 @@ class KeywordDict(BaseKeywordDict):
         'PRIMARYKEY' : 'SERIAL PRIMARY KEY',
         'BLOB'       : 'BYTEA',
         'MEDIUMBLOB' : 'BYTEA',
-        'PATHTYPE'   : 'BYTEA',
+        'PATHTYPE'   : 'VARCHAR',
         'STRING'     : 'VARCHAR'
         } )
 
@@ -324,3 +324,9 @@ class Database(BaseDatabase):
             # need to rollback the last transaction
             self.dbh.rollback()
         return ret
+
+    def analyze(self, table=""):
+        cu = self.cursor()
+        assert (isinstance(table, str))
+        cu.execute("ANALYZE %s" %table)
+        

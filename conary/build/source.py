@@ -22,7 +22,7 @@ import fcntl
 import gzip
 import os
 import re
-import subprocess
+import shutil, subprocess
 import sys
 import tempfile
 
@@ -997,6 +997,286 @@ class addAction(action.RecipeAction):
     def fetch(self, refreshFilter=None):
 	return None
 Action = addAction
+
+class _RevisionControl(addArchive):
+
+    keywords = {'dir': '',
+                'package': None}
+
+    def fetch(self, refreshFilter=None):
+        fullPath = self.getFilename()
+        url = 'lookaside:/' + fullPath
+        reposPath = '/'.join(fullPath.split('/')[:-1] + [ self.name ])
+
+        # don't look in the lookaside for a snapshot if we need to refresh
+        # the lookaside
+        if not refreshFilter or not refreshFilter(os.path.basename(fullPath)):
+            path = lookaside.findAll(self.recipe.cfg, self.recipe.laReposCache,
+                url, self.recipe.name, self.recipe.srcdirs, allowNone = True,
+                autoSource = True, refreshFilter = refreshFilter)
+
+            if path:
+                return path
+
+        # the source doesn't exist; we need to create the snapshot
+        repositoryDir = lookaside.createCacheName(self.recipe.cfg,
+                                                  reposPath,
+                                                  self.recipe.name)
+        del reposPath
+
+        if not os.path.exists(repositoryDir):
+            # get a new archive
+            util.mkdirChain(os.path.dirname(repositoryDir))
+            self.createArchive(repositoryDir)
+        else:
+            self.updateArchive(repositoryDir)
+
+        path = lookaside.createCacheName(self.recipe.cfg, fullPath,
+                                         self.recipe.name)
+
+        self.createSnapshot(repositoryDir, path)
+
+        return path
+
+    def doDownload(self):
+        return self.fetch()
+
+class addMercurialSnapshot(_RevisionControl):
+
+    """
+    NAME
+    ====
+
+    B{C{r.addMercurialSnapshot()}} - Adds a snapshot from a mercurial
+    repository.
+
+    SYNOPSIS
+    ========
+
+    C{r.addMercurialSnapshot([I{url},] [I{tag}=,])}
+
+    DESCRIPTION
+    ===========
+
+    The C{r.addMercurialSnapshot()} class extracts sources from a
+    mercurial repository, places a tarred, bzipped archive into
+    the source component, and extracts that into the build directory
+    in a manner similar to r.addArchive.
+
+    KEYWORDS
+    ========
+
+    The following keywords are recognized by C{r.addAction}:
+
+    B{dir} : Specify a directory to change into prior to executing the
+    command. An absolute directory specified as the C{dir} value
+    is considered relative to C{%(destdir)s}. 
+
+    B{package} : (None) If set, must be a string that specifies the package
+    (C{package='packagename'}), component (C{package=':componentname'}), or
+    package and component (C{package='packagename:componentname'}) in which
+    to place the files added while executing this command.
+    Previously-specified C{PackageSpec} or C{ComponentSpec} lines will
+    override the package specification, since all package and component
+    specifications are considered in strict order as provided by the recipe
+
+    B{tag} : Mercurial tag to use for the snapshot.
+    """
+
+    name = 'hg'
+
+    def getFilename(self):
+        urlBits = self.url.split('//', 1)
+        if len(urlBits) == 1:
+            dirPath = self.url
+        else:
+            dirPath = urlBits[0]
+
+        return '/%s/%s--%s.tar.bz2' % (dirPath, self.url.split('/')[-1],
+                                       self.tag)
+
+    def createArchive(self, lookasideDir):
+        log.info('Cloning repository from %s', self.url)
+        os.system('hg -q clone %s %s' % (self.url, lookasideDir))
+
+    def updateArchive(self, lookasideDir):
+        log.info('Updating repository %s', self.url)
+        os.system("cd %s; hg -q pull %s" % (lookasideDir, self.url))
+
+    def createSnapshot(self, lookasideDir, target):
+        log.info('Creating repository snapshot for %s tag %s', self.url,
+                 self.tag)
+        os.system("cd %s; hg archive -r %s -t tbz2 %s" %
+                        (lookasideDir, self.tag, target))
+
+    def __init__(self, recipe, url, tag = 'tip', **kwargs):
+        self.url = url
+        self.tag = tag
+        sourceName = self.getFilename()
+        _RevisionControl.__init__(self, recipe, sourceName, **kwargs)
+
+class addCvsSnapshot(_RevisionControl):
+
+    """
+    NAME
+    ====
+
+    B{C{r.addCvsSnapshot()}} - Adds a snapshot from a CVS
+    repository.
+
+    SYNOPSIS
+    ========
+
+    C{r.addCvsSnapshot([I{root},] [I{project},] [I{tag}=,])}
+
+    DESCRIPTION
+    ===========
+
+    The C{r.addCvsSnapshot()} class extracts sources from a
+    CVS repository, places a tarred, bzipped archive into
+    the source component, and extracts that into the build directory
+    in a manner similar to r.addArchive.
+
+    KEYWORDS
+    ========
+
+    The following keywords are recognized by C{r.addAction}:
+
+    B{dir} : Specify a directory to change into prior to executing the
+    command. An absolute directory specified as the C{dir} value
+    is considered relative to C{%(destdir)s}.
+
+    B{package} : (None) If set, must be a string that specifies the package
+    (C{package='packagename'}), component (C{package=':componentname'}), or
+    package and component (C{package='packagename:componentname'}) in which
+    to place the files added while executing this command.
+    Previously-specified C{PackageSpec} or C{ComponentSpec} lines will
+    override the package specification, since all package and component
+    specifications are considered in strict order as provided by the recipe
+
+    B{tag} : CVS tag to use for the snapshot.
+    """
+
+    name = 'cvs'
+
+    def getFilename(self):
+        s = '%s/%s--%s.tar.bz2' % (self.root, self.project, self.tag)
+        if s[0] == '/':
+            s = s[1:]
+
+        return s
+
+    def createArchive(self, lookasideDir):
+        os.mkdir(lookasideDir)
+        log.info('Checking out project %s from %s', self.project, self.root)
+        os.system('cvs -Q -d %s checkout -d %s %s' %
+                  (self.root, lookasideDir, self.project))
+
+    def updateArchive(self, lookasideDir):
+        log.info('Updating repository %s', self.project)
+        os.system("cd %s; cvs -Q -d %s update" % (lookasideDir, self.root))
+
+    def createSnapshot(self, lookasideDir, target):
+        log.info('Creating repository snapshot for %s tag %s', self.project,
+                 self.tag)
+        tmpPath = self.recipe.cfg.tmpDir = tempfile.mkdtemp()
+        stagePath = tmpPath + '/' + self.project + '--' + self.tag
+        os.mkdir(stagePath)
+        os.system("cvs -Q -d %s export -d %s -r %s %s; cd %s; "
+                  "tar cjf %s %s" %
+                        (self.root, stagePath, self.tag, self.project,
+                         tmpPath, target, os.path.basename(stagePath)))
+        shutil.rmtree(stagePath)
+
+    def __init__(self, recipe, root, project, tag = 'HEAD', **kwargs):
+        self.root = root
+        self.project = project
+        self.tag = tag
+        sourceName = self.getFilename()
+        _RevisionControl.__init__(self, recipe, sourceName, **kwargs)
+
+class addSvnSnapshot(_RevisionControl):
+
+    """
+    NAME
+    ====
+
+    B{C{r.addSvnSnapshot()}} - Adds a snapshot from a subversion
+    repository.
+
+    SYNOPSIS
+    ========
+
+    C{r.addSvnSnapshot([I{url},] [I{project}=,])}
+
+    DESCRIPTION
+    ===========
+
+    The C{r.addSvnSnapshot()} class extracts sources from a
+    subversion repository, places a tarred, bzipped archive into
+    the source component, and extracts that into the build directory
+    in a manner similar to r.addArchive.
+
+    KEYWORDS
+    ========
+
+    The following keywords are recognized by C{r.addAction}:
+
+    B{dir} : Specify a directory to change into prior to executing the
+    command. An absolute directory specified as the C{dir} value
+    is considered relative to C{%(destdir)s}. 
+
+    B{package} : (None) If set, must be a string that specifies the package
+    (C{package='packagename'}), component (C{package=':componentname'}), or
+    package and component (C{package='packagename:componentname'}) in which
+    to place the files added while executing this command.
+    Previously-specified C{PackageSpec} or C{ComponentSpec} lines will
+    override the package specification, since all package and component
+    specifications are considered in strict order as provided by the recipe
+    """
+
+    name = 'svn'
+
+    def getFilename(self):
+        urlBits = self.url.split('//', 1)
+        if urlBits[0] == 'file:':
+            dirPath = urlBits[1]
+        else:
+            dirPath = urlBits[0]
+
+        return '/%s/%s--%s.tar.bz2' % (dirPath, self.project,
+                                       self.url.split('/')[-1])
+
+    def createArchive(self, lookasideDir):
+        os.mkdir(lookasideDir)
+        log.info('Checking out %s', self.url)
+        os.system('svn -q checkout %s %s' % (self.url, lookasideDir))
+
+    def updateArchive(self, lookasideDir):
+        log.info('Updating repository %s', self.project)
+        os.system("cd %s; svn -q update" % lookasideDir)
+
+    def createSnapshot(self, lookasideDir, target):
+        log.info('Creating repository snapshot for %s', self.url)
+        tmpPath = self.recipe.cfg.tmpDir = tempfile.mkdtemp()
+        stagePath = tmpPath + '/' + self.project + '--' + \
+                            self.url.split('/')[-1]
+        os.system("svn -q export %s %s; cd %s; "
+                  "tar cjf %s %s" %
+                        (self.url, stagePath,
+                         tmpPath, target, os.path.basename(stagePath)))
+        shutil.rmtree(stagePath)
+
+    def __init__(self, recipe, url, project = None, **kwargs):
+        self.url = url
+        if project is None:
+            self.project = recipe.name
+        else:
+            self.project = project
+
+        sourceName = self.getFilename()
+
+        _RevisionControl.__init__(self, recipe, sourceName, **kwargs)
 
 def _extractFilesFromRPM(rpm, targetfile=None, directory=None):
     assert targetfile or directory

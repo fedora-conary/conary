@@ -194,11 +194,14 @@ class Database(BaseDatabase):
                 self.triggers.setdefault(name, tbl_name)
         return self.getVersion()
 
-    def analyze(self):
+    def analyze(self, table=""):
         if sqlite3._sqlite.sqlite_version_info() <= (3, 2, 2):
             # ANALYZE didn't appear until 3.2.3
             return
-
+        # sqlite's analyzer has not been tested yet for single table updates.
+        if table:
+            return
+        
         # perform table analysis to help the optimizer
         doAnalyze = False
         cu = self.cursor()
@@ -212,7 +215,7 @@ class Database(BaseDatabase):
                 doAnalyze = True
 
         if doAnalyze:
-            cu.execute('ANALYZE')
+            cu.execute('ANALYZE %s' % table)
             self.commit()
             self.loadSchema()
 
