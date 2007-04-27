@@ -1,25 +1,38 @@
-Changes in @NEW@:
-  o Bug Fixes:
-    * A bug in the way the proxy configuration variable is set has
-      been fixed. (CNY-1586)
-    * Local rollbacks didn't store weak references (CNY-1590)
+    * Restoring local rollbacks now creates the directories locally modified
+      files were stored in (CNY-1444)
+
+Changes in 1.1.24:
+  o New Feature:
+    * Conary 1.1.24 introduces the framework needed to implement a new
+      metadata design for Conary.  The new metadata feature allows
+      various information such as description to be set for a trove.
+      New XML-RPC interfaces, getNewTroveInfo() and setTroveInfo(),
+      have been added to facilitate mirroring metadata.
+      addMetadataItems() has been added to allow metadata to be added
+      to a trove after it has been built. (CNY-1577)
 
   o Client Changes:
     * The Conary client now distinguishes between an upstream Conary
       proxy and a plain HTTP proxy. This is so we can properly handle
       SSL traffic through an HTTP proxy using the CONNECT HTTP method.
-      As such, there is now a "conaryProxy" configuration variable,
-      in addition to the "proxy" variable.
-      (CNY-1550)x.
+      As such, there is now a "conaryProxy" configuration variable, in
+      addition to the "proxy" variable. (CNY-1550)
     * The "proxy" (and newly introduced "conaryProxy") variables can
-      be turned off by setting them to "None". (CNY-1378)x.
+      be turned off by setting them to "None". (CNY-1378)
     * Clients requesting the inclusion of configuration files residing
       on the network now upload their version. This opens up the
-      possibility for the server to serve different configuration files
-      to different client generations. (CNY-1588)
+      possibility for the server to serve different configuration
+      files to different client generations. (CNY-1588)
     * Configuration variables "localRollbacks" and "pinTroves" get
-      used as defaults when applying an update job; they can be 
+      used as defaults when applying an update job; they can be
       explicitly overridden. (CNY-1583)
+
+  o Bug Fixes:
+    * A bug in the way the proxy configuration variable is set has
+      been fixed. (CNY-1586)
+    * A bug that caused a traceback when rolling back group updates
+      from rollback changesets created when the "localRollback"
+      configuration option was set has been fixed. (CNY-1590)
 
 Changes in 1.1.23:
   o Client Changes:
