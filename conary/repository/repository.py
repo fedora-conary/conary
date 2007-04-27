@@ -552,8 +552,10 @@ class ChangeSetJob:
 	    del newFileMap
 	    self.addTroveDone(troveInfo)
 
-	configRestoreList.sort()
-	normalRestoreList.sort()
+        # use a key to select data up to, but not including, the first
+        # version.  We can't sort on version because we don't have timestamps
+        configRestoreList.sort(key=lambda x: x[0:5])
+        normalRestoreList.sort(key=lambda x: x[0:3])
 
         # config files are cached, so we don't have to worry about not
         # restoring the same fileId/pathId twice
