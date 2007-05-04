@@ -182,10 +182,10 @@ class BaseProxy(xmlshims.NetworkConvertors):
 
         # cut off older clients entirely, no negotiation
         if clientVersion < self.SERVER_VERSIONS[0]:
-            raise errors.InvalidClientVersion(
+            raise ProxyRepositoryError(("InvalidClientVersion",
                'Invalid client version %s.  Server accepts client versions %s '
                '- read http://wiki.rpath.com/wiki/Conary:Conversion' %
-               (clientVersion, ', '.join(str(x) for x in self.SERVER_VERSIONS)))
+               (clientVersion, ', '.join(str(x) for x in self.SERVER_VERSIONS))))
 
         useAnon, parentVersions = caller.checkVersion(clientVersion)
 
@@ -223,14 +223,7 @@ class ChangesetFilter(BaseProxy):
     @staticmethod
     def _getChangeSetVersion(clientVersion):
         # Determine the changeset version based on the client version
-        # Add more params if necessary
-        if clientVersion < 38:
-            return filecontainer.FILE_CONTAINER_VERSION_NO_REMOVES
-        elif clientVersion < 43:
-            return filecontainer.FILE_CONTAINER_VERSION_WITH_REMOVES
-        # Add more changeset versions here as the currently newest client is
-        # replaced by a newer one
-        return filecontainer.FILE_CONTAINER_VERSION_FILEID_IDX
+        return changeset.getNativeChangesetVersion(clientVersion)
 
     def _convertChangeSet(self, csPath, size, destCsVersion, csVersion):
         # Changeset is in the file csPath
@@ -310,7 +303,8 @@ class ChangesetFilter(BaseProxy):
         return cspath, size
 
     def getChangeSet(self, caller, authToken, clientVersion, chgSetList,
-                     recurse, withFiles, withFileContents, excludeAutoSource):
+                     recurse, withFiles, withFileContents, excludeAutoSource,
+                     changesetVersion = None):
 
         def _addToCache(fingerPrint, inF, csVersion, returnVal, size):
             csPath = self.csCache.hashToPath(fingerPrint + '-%d' % csVersion)
@@ -347,7 +341,7 @@ class ChangesetFilter(BaseProxy):
         else:
             getCsVersion = clientVersion
 
-        neededCsVersion = self._getChangeSetVersion(clientVersion)
+        neededCsVersion = changesetVersion or self._getChangeSetVersion(clientVersion)
         wireCsVersion = self._getChangeSetVersion(getCsVersion)
 
         # Get the desired changeset version for this client
@@ -520,7 +514,7 @@ class SimpleRepositoryFilter(ChangesetFilter):
 
 class ProxyRepositoryServer(ChangesetFilter):
 
-    SERVER_VERSIONS = [ 41, 42, 43, 44, 45, 46, 47 ]
+    SERVER_VERSIONS = [ 41, 42, 43, 44, 45, 46, 47, 48 ]
 
     def __init__(self, cfg, basicUrl):
         util.mkdirChain(cfg.changesetCacheDir)
