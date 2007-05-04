@@ -1,6 +1,42 @@
+Changes in @NEW@:
+
+  o New Feature:
+    * Conary now supports files whose compressed contents are more than
+      4 gig in size. Old versions of Conary will report an error saying
+      that "assert(subMagic == SUBFILE_MAGIC)" failed (CNY-1572).
+    * Redirects with multiple targets can now be built and installed
+      (CNY-1554)
+    * Use explicit commit lock to prevent overlapping updates and rollbacks
+      (CNY-1591)
+    * Conary now supports a "searchPath" configuration option, which works 
+      like the installLabelPath but can contain both packages and labels.
+      For example, "searchPath group-os contrib.rpath.org@rpl:1" would make
+      sense to first install the version of a package referenced in group-os,
+      then to fall back to installing from contrib.rpath.org@rpl:1. (CNY-1571)
+
   o Bug Fixes:
+    * During a cvc update, new files in the source component could result
+      in user/group warnings (CNY-763)
+    * Derived packages (experimental) built from unflavored troves get
+      properly flavored as unflavored. (CNY-1506)
+    * Macros in arguments to the version control system recipe class
+      commands are now properly expanded. (CNY-1614)
+    * The Conary client will now bypass proxies running on remote machines
+      with repositories running on localhost. (CNY-1621)
+    * Cvc promote no longer displays some warnings that were rarely helpful 
+      unless you are in --debug mode. (CNY-1581)
     * A bug that caused the storage of unneeded "unknown" entries in
       the TroveInfo table has been fixed. (CNY-1613)
+
+  o Client Changes:
+    * The conaryclient module now exposes ChangeSetFromFile to instantiate
+      changesets from .ccs files. (CNY-1578)
+
+  o Internal Changes:
+    * Conary clients can ask newer Conary repositories (speaking at least
+      protocol version 48) for a specific changeset format. This allows one
+      to use new Conary clients to generate changesets understood by older
+      clients. (CNY-1544)
 
 Changes in 1.1.24:
   o New Feature:
@@ -38,6 +74,8 @@ Changes in 1.1.24:
       changeset with a locally modified file has been fixed.  Conary
       needed to create the directory that the locally modified file
       resides in first. (CNY-1444)
+    * Applying rollbacks could attempt to invalidate the rollback stack,
+      which would cause corruption of the rollback stack (CNY-1587)
 
 Changes in 1.1.23:
   o Client Changes:
@@ -71,8 +109,6 @@ Changes in 1.1.23:
       server has been fixed.
     * Small race condition in populating the cache for both
       repositories and proxies has been fixed (CNY-1576)
-    * Applying rollbacks could attempt to invalidate the rollback stack,
-      which would cause corruption of the rollback stack (CNY-1587)
 
 Changes in 1.1.22:
   o Major Changes:
