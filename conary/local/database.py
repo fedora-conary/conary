@@ -1234,7 +1234,7 @@ class Database(SqlDbRepository):
             if self.lockFileObj is not None:
                 # closing frees the lockf() lock
                 self.lockFileObj.close()
-                self.lockFd = None
+                self.lockFileObj = None
         else:
             try:
                 lockFd = os.open(self.lockFile, os.O_RDWR | os.O_CREAT |
@@ -1253,10 +1253,10 @@ class Database(SqlDbRepository):
 
             try:
                 fcntl.lockf(lockFd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                pass
             except IOError, e:
                 if e.errno in (errno.EACCES, errno.EAGAIN):
                     raise DatabaseLockedError
+                raise
 
             self.lockFileObj = os.fdopen(lockFd)
 

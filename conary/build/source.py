@@ -1,4 +1,3 @@
-#
 # Copyright (c) 2004-2007 rPath, Inc.
 #
 # This program is distributed under the terms of the Common Public License,
@@ -1177,8 +1176,8 @@ class addMercurialSnapshot(_RevisionControl):
                         (lookasideDir, self.tag, target))
 
     def __init__(self, recipe, url, tag = 'tip', **kwargs):
-        self.url = url
-        self.tag = tag
+        self.url = url % recipe.macros
+        self.tag = tag % recipe.macros
         sourceName = self.getFilename()
         _RevisionControl.__init__(self, recipe, sourceName, **kwargs)
 
@@ -1256,9 +1255,9 @@ class addCvsSnapshot(_RevisionControl):
         shutil.rmtree(stagePath)
 
     def __init__(self, recipe, root, project, tag = 'HEAD', **kwargs):
-        self.root = root
-        self.project = project
-        self.tag = tag
+        self.root = root % recipe.macros
+        self.project = project % recipe.macros
+        self.tag = tag % recipe.macros
         sourceName = self.getFilename()
         _RevisionControl.__init__(self, recipe, sourceName, **kwargs)
 
@@ -1335,11 +1334,11 @@ class addSvnSnapshot(_RevisionControl):
         shutil.rmtree(stagePath)
 
     def __init__(self, recipe, url, project = None, **kwargs):
-        self.url = url
+        self.url = url % recipe.macros
         if project is None:
             self.project = recipe.name
         else:
-            self.project = project
+            self.project = project % recipe.macros
 
         sourceName = self.getFilename()
 
