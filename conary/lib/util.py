@@ -238,7 +238,7 @@ def execute(cmd, destDir=None, verbose=True):
     if verbose:
 	log.info(cmd)
     if destDir:
-	rc = os.system('cd %s; %s' %(destDir, cmd))
+	rc = os.system('cd \'%s\'; %s' %(destDir, cmd))
     else:
 	rc = os.system(cmd)
     _handle_rc(rc, cmd)
@@ -737,6 +737,7 @@ class SeekableNestedFile:
             raise IOError
 
         self.pos = newPos
+        return self.pos
 
     def tell(self):
         return self.pos

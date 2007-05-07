@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2004-2005 rPath, Inc.
+# Copyright (c) 2004-2007 rPath, Inc.
 #
 # This program is distributed under the terms of the Common Public License,
 # version 1.0. A copy of this license should have been distributed with this
@@ -25,7 +25,7 @@ from conary.deps import deps
 from conary.errors import ClientError, ConaryError, InternalConaryError, MissingTrovesError
 from conary.lib import log, util
 from conary.local import database
-from conary.repository import changeset, trovesource
+from conary.repository import changeset, trovesource, searchsource
 from conary.repository.errors import TroveMissing
 from conary import trove, versions
 
@@ -212,7 +212,7 @@ class ClientUpdate:
                                     ", ".join(x[0] for x in redirectSourceList))
                             assert(match not in redirectSourceList)
                             l = redirectHack.setdefault(match, 
-                                                        redirectSourceList)
+                                                        redirectSourceList[:])
                             l.append(item)
                             redirectJob = (match[0], (None, None),
                                                      match[1:], True)
@@ -1373,6 +1373,18 @@ conary erase '%s=%s[%s]'
         None. Flavors may be None.
         @type itemList: list
         """
+        searchSource = uJob.getSearchSource()
+        if not isinstance(searchSource, searchsource.AbstractSearchSource):
+            if searchSource.isSearchAsDatabase():
+                searchSource = searchsource.SearchSource(
+                                                  uJob.getSearchSource(),
+                                                  self.cfg.flavor, self.db)
+            else:
+                searchSource = searchsource.NetworkSearchSource(
+                                                  uJob.getSearchSource(),
+                                                  self.cfg.installLabelPath,
+                                                  self.cfg.flavor, self.db)
+            uJob.setSearchSource(searchSource)
 
         def _separateInstalledItems(jobSet):
             present = self.db.hasTroves([ (x[0], x[2][0], x[2][1]) for x in 
@@ -1510,31 +1522,17 @@ conary erase '%s=%s[%s]'
         results = {}
         searchSource = uJob.getSearchSource()
 
-        if searchSource.requiresLabelPath():
-            installLabelPath = self.cfg.installLabelPath
-        else:
-            installLabelPath = None
-
         if not useAffinity:
-            if searchSource.isSearchAsDatabase():
-                flavor = None
-            else:
-                flavor = self.cfg.flavor
-            results.update(searchSource.findTroves(installLabelPath, toFind,
-                                                   flavor))
+            results.update(searchSource.findTroves(toFind), useAffinity=False)
         else:
             if toFind:
+                results.update(searchSource.findTroves(toFind,
+                                                       useAffinity=True))
                 log.lowlevel("looking up troves w/ database affinity")
-                results.update(searchSource.findTroves(
-                                        installLabelPath, toFind, 
-                                        self.cfg.flavor,
-                                        affinityDatabase=self.db))
             if toFindNoDb:
                 log.lowlevel("looking up troves w/o database affinity")
-                results.update(searchSource.findTroves(
-                                           installLabelPath, 
-                                           toFindNoDb, self.cfg.flavor))
-
+                results.update(searchSource.findTroves(toFindNoDb,
+                                                       useAffinity=False))
         for troveSpec, (oldTroveInfo, isAbsolute) in \
                 itertools.chain(toFind.iteritems(), toFindNoDb.iteritems()):
             resultList = results[troveSpec]
@@ -1738,9 +1736,7 @@ conary erase '%s=%s[%s]'
                     return nonRedirects, troveNames
 
             while toFind:
-                matches = searchSource.findTroves([], toFind,
-                                                  self.cfg.flavor,
-                                                  affinityDatabase = self.db)
+                matches = searchSource.findTroves(toFind, useAffinity=True)
                 allTroveTups = list(set(itertools.chain(*matches.itervalues())))
                 allTroves = searchSource.getTroves(allTroveTups)
                 allTroves = dict(itertools.izip(allTroveTups, allTroves))
@@ -1812,14 +1808,8 @@ conary erase '%s=%s[%s]'
             toFind.append((troveName, newVersionStr, newFlavorStr))
 
         searchSource = uJob.getSearchSource()
-        if searchSource.requiresLabelPath():
-            installLabelPath = self.cfg.installLabelPath
-        else:
-            installLabelPath = None
 
-        results = searchSource.findTroves(installLabelPath, toFind,
-                                          self.cfg.flavor,
-                                          affinityDatabase=self.db)
+        results = searchSource.findTroves(toFind, useAffinity=True)
         newTroves = list(itertools.chain(*results.itervalues()))
         newTroves = searchSource.getTroves(newTroves, withFiles=False)
 
@@ -2373,8 +2363,7 @@ conary erase '%s=%s[%s]'
                     migrate = migrate,
                     criticalUpdateInfo = criticalUpdateInfo,
                     resolveSource = resolveSource,
-                    updateJob = updJob,
-            )
+                    updateJob = updJob)
         except DependencyFailure, e:
             if e.hasCriticalUpdates() and not applyCriticalOnly:
                 e.setErrorMessage(e.getErrorMessage() + '''\n\n** NOTE: A critical update is available and may fix dependency problems.  To update the critical components only, rerun this command with --apply-critical.''')
@@ -2563,26 +2552,33 @@ conary erase '%s=%s[%s]'
                 # a matching comment
                 uJob.getTroveSource().addChangeSet(cs,
                                                    includesFileContents = True)
+        mainSearchSource = None
+        troveSource = None
+        searchSource = None
         if sync:
-            uJob.setSearchSource(trovesource.ReferencedTrovesSource(self.db))
+            troveSource = trovesource.ReferencedTrovesSource(self.db)
         elif syncChildren:
-            uJob.setSearchSource(self.db)
+            troveSource = self.db
         elif fromChangesets:
-            uJob.setSearchSource(trovesource.stack(csSource, self.repos))
+            troveSource = trovesource.stack(csSource, self.repos)
+            mainSearchSource = self.getSearchSource(troveSource=troveSource)
+            searchSource = mainSearchSource
         else:
-            uJob.setSearchSource(self.repos)
+            mainSearchSource = self.getSearchSource()
+            searchSource = mainSearchSource
+            uJob.setSearchSource(mainSearchSource)
             useAffinity = True
 
-        if resolveGroupList:
-            if useAffinity:
-                affinityDb = self.db
-            else:
-                affinityDb = None
+        if not searchSource and troveSource:
+            searchSource = searchsource.SearchSource(troveSource,
+                                                     self.cfg.flavor)
+        uJob.setSearchSource(searchSource)
 
-            result = self.repos.findTroves(self.cfg.installLabelPath,
-                                           resolveGroupList,
-                                           self.cfg.flavor,
-                                           affinityDatabase=affinityDb)
+        if resolveGroupList:
+            if not mainSearchSource:
+                mainSearchSource = self.getSearchSource()
+            result = mainSearchSource.findTroves(resolveGroupList,
+                                                 useAffinity=useAffinity)
             groupTups = list(itertools.chain(*result.itervalues()))
             groupTroves = self.repos.getTroves(groupTups, withFiles=False)
             resolveSource = resolve.DepResolutionByTroveList(self.cfg, self.db,
@@ -2896,6 +2892,8 @@ conary erase '%s=%s[%s]'
                     autoPinList = conarycfg.RegularExpressionList(),
                     keepJournal = False):
 
+        self.db.commitLock(True)
+
         uJobTransactionCounter = uJob.getTransactionCounter()
         if uJobTransactionCounter is None:
             # Legacy applications
@@ -2917,8 +2915,6 @@ conary erase '%s=%s[%s]'
 
         if self.updateCallback is None:
             self.setUpdateCallback(UpdateCallback())
-
-        # def applyUpdate -- body begins here
 
         allJobs = uJob.getJobs()
         jobsCsList = uJob.getJobsChangesetList()
@@ -3046,7 +3042,7 @@ conary erase '%s=%s[%s]'
                 # DEBUGGING NOTE: if you need to debug update code not
                 # related to threading, the easiest thing is to add 
                 # 'threaded False' to your conary config.
-                pass
+                self.db.commitLock(False)
 
 
 class UpdateError(ClientError):
