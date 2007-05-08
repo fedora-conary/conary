@@ -1,11 +1,11 @@
 # -*- mode: python -*-
 #
-# Copyright (c) 2006 rPath, Inc.
+# Copyright (c) 2006-2007 rPath, Inc.
 #
 # This program is distributed under the terms of the Common Public License,
 # version 1.0. A copy of this license should have been distributed with this
 # source file in a file called LICENSE. If it is not present, the license
-# is always available at http://www.opensource.org/licenses/cpl.php.
+# is always available at http://www.rpath.com/permanent/licenses/CPL-1.0.
 #
 # This program is distributed in the hope that it will be useful, but
 # without any warranty; without even the implied warranty of merchantability
@@ -210,22 +210,25 @@ def buildJobList(repos, groupList):
         # for each job find what it's relative to and build up groupJobList
         # as the job list for this group
         for mark, (name, version, flavor) in group:
+            # name, version, versionDistance, flavorScore
+            currentMatch = (None, None, None, None)
             if name not in latestAvailable:
                 job = (name, (None, None), (version, flavor), True)
-                currentMatch = (None, None, None, None)
             else:
                 d = latestAvailable[name]
-                verFlvMap = set()
-                # name, version, versionDistance, flavorScore
-                currentMatch = (None, None, None, None)
                 for repVersion, flavorList in d.iteritems():
+                    # the versions have to be on the same host to be
+                    # able to generate relative changesets
+                    if version.getHost() != repVersion.getHost():
+                        continue
                     for repFlavor in flavorList:
                         score = flavor.score(repFlavor)
+                        if score is False:
+                            continue
                         if repVersion == version:
                             closeness = 100000
                         else:
                             closeness = version.closeness(repVersion)
-                        if score is False: continue
                         if score < currentMatch[3]:
                             continue
                         elif score > currentMatch[3]:
@@ -274,10 +277,10 @@ def recurseTrove(sourceRepos, name, version, flavor,
     assert(name.startswith("group-"))
     # there's nothing much we can recurse from the source
     if name.endswith(":source"):
-        return []
+        return [], []
     # avoid grabbing the same group multiple times
     if (name, version, flavor) in recursedGroups:
-        return []
+        return [], []
     # we need to grab the trove list recursively for
     # mirroring. Unfortunately the netclient does not wire the
     # repository's getChangeSet parameters, so we need to cheat a
@@ -291,14 +294,14 @@ def recurseTrove(sourceRepos, name, version, flavor,
     ret = []
     removedList = []
     for troveCs in groupCs.iterNewTroveList():
-        (trvName, trvVersion, trvFlavor) = troveCs.getNewNameVersionFlavor()
+        nvf = troveCs.getNewNameVersionFlavor()
         # keep track of groups we have already recursed through
-        if trvName.startswith("group-"):
-            recursedGroups.add((trvName, trvVersion, trvFlavor))
+        if nvf[0].startswith("group-"):
+            recursedGroups.add(nvf)
         if troveCs.getType() == trove.TROVE_TYPE_REMOVED:
-            removedList.append((trvName, trvVersion, trvFlavor))
+            removedList.append(nvf)
         else:
-            ret.append((trvName, trvVersion, trvFlavor))
+            ret.append(nvf)
     return ret, removedList
 
 # format a bundle for display
@@ -703,10 +706,10 @@ def mirrorRepository(sourceRepos, targetRepos, cfg,
     if cfg.recurseGroups:
         # avoid adding duplicates
         troveSetList = set([x[1] for x in troveList])
-        for (mark, (name, version, flavor), troveType) in troveList:
+        for mark, (name, version, flavor) in troveList:
             if name.startswith("group-"):
                 recTroves, rmTroves = recurseTrove(sourceRepos, name, version, flavor,
-                                         callback = callback)
+                                                   callback = callback)
                 # add the results at the end with the current mark
                 for (n,v,f) in recTroves:
                     if (n,v,f) not in troveSetList:
@@ -716,9 +719,10 @@ def mirrorRepository(sourceRepos, targetRepos, cfg,
                     removedSet.add(x)
         log.debug("after group recursion %d troves are needed", len(troveList))
         # we need to make sure we mirror the GPG keys of any newly added troves
-        for host in set([x[1].getHost() for x in troveSetList + removedSet]) - set([cfg.host]):
+        newHosts = set([x[1].getHost() for x in troveSetList.union(removedSet)])
+        for host in newHosts.difference(set([cfg.host])):
             for t in targets:
-                t.mirrorGPG(src, host)
+                t.mirrorGPG(sourceRepos, host)
 
     # we check which troves from the troveList are needed on each
     # target and we split the troveList into separate lists depending
@@ -764,14 +768,13 @@ def mirrorRepository(sourceRepos, targetRepos, cfg,
     bundlesMark = 0
     for idx, targetSet in targetSets:
         troveList = byTarget[idx]
-        if not troveList: # XXX: should notn happen...
+        if not troveList: # XXX: should not happen...
             continue
         log.debug("mirroring %d troves into %d targets", len(troveList), len(targetSet))
         # since these troves are required for all targets, we can use
         # the "first" one to build the relative changeset requests
         target = list(targetSet)[0]
         bundles = buildBundles(target, troveList)
-
         for i, bundle in enumerate(bundles):
             jobList = [ x[1] for x in bundle ]
             # XXX it's a shame we can't give a hint as to what server to use

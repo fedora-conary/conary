@@ -4,7 +4,7 @@
 # This program is distributed under the terms of the Common Public License,
 # version 1.0. A copy of this license should have been distributed with this
 # source file in a file called LICENSE. If it is not present, the license
-# is always available at http://www.opensource.org/licenses/cpl.php.
+# is always available at http://www.rpath.com/permanent/licenses/CPL-1.0.
 #
 # This program is distributed in the hope that it will be useful, but
 # without any warranty; without even the implied warranty of merchantability
@@ -308,6 +308,13 @@ class ServerCache:
              ' locally, and cannot be queried.')
         return serverName
 
+    def __delitem__(self, item):
+        serverName = self._getServerName(item)
+        del self.cache[serverName]
+
+    def keys(self):
+        return self.cache.keys()
+
     def __getitem__(self, item):
         serverName = self._getServerName(item)
 
@@ -458,6 +465,13 @@ class NetworkRepositoryClient(xmlshims.NetworkConvertors,
 
     def open(self, *args):
         pass
+
+    def reopen(self, hostname = None):
+        if hostname is None:
+            for hostname in self.c.keys():
+                del self.c[hostname]
+        else:
+            del self.c[hostname]
 
     def getUserMap(self):
         """

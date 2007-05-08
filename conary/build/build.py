@@ -4,7 +4,7 @@
 # This program is distributed under the terms of the Common Public License,
 # version 1.0. A copy of this license should have been distributed with this
 # source file in a file called LICENSE. If it is not present, the license
-# is always available at http://www.opensource.org/licenses/cpl.php.
+# is always available at http://www.rpath.com/permanent/licenses/CPL-1.0.
 #
 # This program is distributed in the hope that it will be useful, but
 # without any warranty; without even the implied warranty of merchantability
@@ -1618,7 +1618,7 @@ class _PutFiles(_FileAction):
 	mode = self.mode
 	if mode == -2:
 	    # any executable bit on in source means 0755 on target, else 0644
-	    sourcemode = os.lstat(source)[stat.ST_MODE]
+            sourcemode = os.lstat(source).st_mode
 	    if sourcemode & 0111:
 		mode = 0755
 	    else:
@@ -1628,6 +1628,9 @@ class _PutFiles(_FileAction):
             log.info('renaming %s to %s', source, dest)
             os.rename(source, dest)
 	else:
+            # remove old file (if any) so permission problems with the
+            # old file don't prevent the install
+            util.removeIfExists(dest)
             if os.path.islink(source) and self.preserveSymlinks:
                 # We have to copy the symlink
                 linksrc = os.readlink(source)
@@ -1642,7 +1645,6 @@ class _PutFiles(_FileAction):
 
         self.setComponents(destdir, dest)
         self.chmod(destdir, dest, mode=mode)
-
 
     def __init__(self, recipe, *args, **keywords):
         _FileAction.__init__(self, recipe, *args, **keywords)
