@@ -30,6 +30,9 @@ Changes in 1.1.25:
       organizations maintaining a set of packages as part of a Linux
       OS platform.
 
+    * A new macro, "%(name_version)s", has been added which resolves to
+      "%(name)s-%(version)s".
+
   o Client Changes:
     * An explicit commit lock is now used to prevent overlapping
       updates and rollbacks.  (CNY-1591)
