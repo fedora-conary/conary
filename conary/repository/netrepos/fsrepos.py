@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2004-2006 rPath, Inc.
+# Copyright (c) 2004-2007 rPath, Inc.
 #
 # This program is distributed under the terms of the Common Public License,
 # version 1.0. A copy of this license should have been distributed with this
@@ -30,7 +30,7 @@ from conary.repository import netclient
 
 class FilesystemChangeSetJob(ChangeSetJob):
     def __init__(self, *args, **kw):
-        self.mirror = kw.pop('mirror', False)
+        self.mirror = kw.get('mirror', False)
         ChangeSetJob.__init__(self, *args, **kw)
 
     def markTroveRemoved(self, name, version, flavor):
@@ -402,7 +402,7 @@ class FilesystemRepository(DataStoreRepository, AbstractRepository):
 		# config files to config files; these need to be included
 		# unconditionally so we always have the pristine contents
 		# to include in the local database
-		if (mirrorMode or contentsHash or
+		if ((mirrorMode and newFile.hasContents) or contentsHash or
                              (oldFile and newFile.flags.isConfig()
                                       and not oldFile.flags.isConfig())):
 		    if oldFileVersion and oldFile.hasContents:
