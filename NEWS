@@ -1,8 +1,25 @@
+Changes in @NEW@:
+  o Documentation Changes:
+    * Incorrect references to createGroup have been fixed. (CNY-1700)
+
+  o Build Changes:
+    * Files added with in the repository and locally no longer cause
+      'cvc update' to fail as long as the files have the same fileId
+      (CNY-1428)
+    * r.Link allows full paths to be specified for the target of the link
+      as long as the directory matches the source of the link (CNY-751)
+    * "cvc mv" has been added as a synonym for "cvc rename"
+
+  o Bug fixes:
+    * An index has been added to improve the performance of various
+      file stream related queries in a Conary repository. (CNY-1704)
+
 Changes in 1.1.27:
   o New Features:
     * All group cooks for one source must be done as a large cvc cook
       action instead of one-by-one. (CNY-1303)
-    * Group flavors are much shorter by default.  Some flags, like
+    * Group flavors are much shorter if you turn on the config item
+      "shortenGroupFlavors".  Some flags, like
       vmware and xen and architecture flags, are always included in a
       group flavor. (CNY-1641)
     * The Conary client is now able to access the network using

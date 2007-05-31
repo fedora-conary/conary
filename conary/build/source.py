@@ -658,7 +658,7 @@ class addPatch(_Source):
 
     def patchme(self, patch, f, destDir, patchlevels):
         logFiles = []
-        log.info('attempting to apply %s with to %s with patch level(s) %s'
+        log.info('attempting to apply %s to %s with patch level(s) %s'
                  %(f, destDir, ', '.join(str(x) for x in patchlevels)))
         for patchlevel in patchlevels:
             patchArgs = [ 'patch', '-d', destDir, '-p%s'%patchlevel, ]
@@ -942,6 +942,10 @@ class addSource(_Source):
         return f
 
     def do(self):
+        # make sure the user gave a valid source, and not a directory
+        if not os.path.basename(self.sourcename) and not self.contents:
+            raise SourceError('cannot specify a directory as input to '
+                'addSource')
 
         defaultDir = os.sep.join((self.builddir, self.recipe.theMainDir))
         destDir = action._expandOnePath(self.dir, self.recipe.macros,
