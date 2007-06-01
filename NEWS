@@ -13,6 +13,9 @@ Changes in @NEW@:
   o Bug fixes:
     * An index has been added to improve the performance of various
       file stream related queries in a Conary repository. (CNY-1704)
+    * Directories in binary directories are no longer (incorrectly)
+      provided.  (CNY-1721)
+    * "conary update" now works with read-only changesets. (CNY-1681)
 
 Changes in 1.1.27:
   o New Features:
@@ -45,6 +48,9 @@ Changes in 1.1.27:
       caused the generation of empty diffs in some cases. mirrorMode now
       includes full contents for all files instead of generating diffs
       (CNY-1699)
+    * If you're promoting two flavors of the same version of the same trove,
+      they will now always have the same version on the target branch.
+      (CNY-1692)
 
 Changes in 1.1.26:
   o New Features:
