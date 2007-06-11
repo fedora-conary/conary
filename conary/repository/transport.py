@@ -416,7 +416,7 @@ class Transport(xmlrpclib.Transport):
     # override?
     user_agent =  "xmlrpclib.py/%s (www.pythonware.com modified by rPath, Inc.)" % xmlrpclib.__version__
 
-    def __init__(self, https = False, entitlement = None, proxies = None,
+    def __init__(self, https = False, entitlementList = None, proxies = None,
                  serverName = None, extraHeaders = None):
         self.https = https
         self.compress = False
@@ -427,13 +427,18 @@ class Transport(xmlrpclib.Transport):
         self.responseHeaders = None
         self.responseProtocol = None
         self.usedProxy = False
+        if entitlementList is not None:
+            l = []
+            for entitlement in entitlementList:
+                if entitlement[0] is None:
+                    l.append("* %s" % (base64.b64encode(entitlement[1])))
+                else:
+                    l.append("%s %s" % (entitlement[0],
+                                        base64.b64encode(entitlement[1])))
+            self.entitlement = " ".join(l)
+
         self.proxyHost = None
         self.proxyProtocol = None
-        if entitlement is not None:
-            self.entitlement = "%s %s" % (entitlement[0],
-                                          base64.b64encode(entitlement[1]))
-        else:
-            self.entitlement = None
 
     def setExtraHeaders(self, extraHeaders):
         self.extraHeaders = extraHeaders or {}
