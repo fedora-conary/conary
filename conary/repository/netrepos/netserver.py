@@ -1948,7 +1948,6 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
         JOIN FileStreams USING (fileId)
         JOIN TroveFiles USING (streamId)
         JOIN Instances USING (instanceId)
-        JOIN Items ON Instances.itemId = Items.itemId
         JOIN Nodes ON
             Instances.itemId = Nodes.itemId AND
             Instances.versionId = Nodes.versionId
@@ -1964,6 +1963,7 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
                WHERE Permissions.userGroupId IN (%(ugid)s)
              ) as UP
                  ON ( UP.labelId = 0 or UP.labelId = LabelMap.labelId )
+        JOIN Items ON Instances.itemId = Items.itemId
         WHERE FileStreams.stream IS NOT NULL
         """ % { 'ugid' : ", ".join("%d" % x for x in userGroupIds) }
         cu.execute(q)
@@ -2803,7 +2803,11 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
             Items.itemId = Instances.itemId AND
             Versions.versionId = Instances.versionId AND
             Flavors.flavorId = Instances.flavorId
-        """, start_transaction=False)
+        where Instances.isPresent in (?,?)
+          and Instances.troveType != ?
+        """, (instances.INSTANCE_PRESENT_NORMAL, instances.INSTANCE_PRESENT_HIDDEN,
+              trove.TROVE_TYPE_REMOVED),
+                   start_transaction=False)
         self.db.analyze("tmpInstanceId")
         # see what troves are missing, if any
         cu.execute("""

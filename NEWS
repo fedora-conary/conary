@@ -1,53 +1,72 @@
+Changes in @NEW@:
+  o Bug Fixes:
+    * 'conary rblist' no longer produces a stack trace if the
+      installLabelPath configuration option is not set. (CNY-1731)
+    * A bug that caused an "Error parsing label" error message when
+      invoking "cvc commit" on a group recipe that used
+      r.setSearchPath(str(r.labelPath[0]), ...) has been
+      fixed. (CNY-1740)
+    * Proxy errors are now reported in the client, for easier
+      debugging.  (CNY-1313)
+    * A bug that caused an "Unknown error downloading changeset" error
+      when applying an update job that contained two different
+      versions of the same trove has been fixed. (CNY-1742)
     * Adding redirects which pointed to otherwise-unused branches corrupted
       the database by creating a branch without corresponding label information
+
+  o Client Changes:
     * repositoryMap conaryrc entries can now use wildcards for the server name
-    * (Nearly) all repository operations are now performed using the
-      permissions of the anonymous user in addition to the permission set
-      for any user authentication information which is present.
     * Multiple entitlements can be sent to each server now
-    * Path names in the entitlementsDirectory no longer have any meaning. All
-      entitlements are read, and the serverName in the XML for the entitlement
-      is used to determine which server to send the entitlement too.
     * Server names in entitlements may include wildcads.
-    * Entitlement classes are no longer used as part of authentication; they
-      may still be specified, but repositorys now look up the class(es) for an
-      entitlement based on the key.
     * Entitlements may be placed in conaryrc files now using
       'entitlement server entitlement'. conary config displays entitlement
       information.
 
-Changes in @NEW@:
+  o Server Changes:
+    * (Nearly) all repository operations are now performed using the
+      permissions of the anonymous user in addition to the permission set
+      for any user authentication information which is present.
+    * Path names in the entitlementsDirectory no longer have any meaning. All
+      entitlements are read, and the serverName in the XML for the entitlement
+      is used to determine which server to send the entitlement too.
+    * Entitlement classes are no longer used as part of authentication; they
+      may still be specified, but repositorys now look up the class(es) for an
+      entitlement based on the key.
+
+Changes in 1.1.28:
   o Documentation Changes:
     * Incorrect references to createGroup have been fixed. (CNY-1700)
 
   o Build Changes:
     * Files added with in the repository and locally no longer cause
-      'cvc update' to fail as long as the files have the same fileId
+      'cvc update' to fail as long as the files have the same fileId.
       (CNY-1428)
-    * r.Link allows full paths to be specified for the target of the link
-      as long as the directory matches the source of the link (CNY-751)
-    * "cvc mv" has been added as a synonym for "cvc rename"
-    * r.addCvsSnapshot() now works correctly with anon pserver-based servers.
-      Previously, cvs checkout would fail due to strange characters being in
-      the destination directory
-    * r.add*Snapshot() will now raise errors if the shell commands they are
-      executing fail for any reason
+    * r.Link allows full paths to be specified for the target of the
+      link as long as the directory matches the source of the link.
+      (CNY-751)
+    * "cvc mv" has been added as a synonym for "cvc rename".
+    * r.addCvsSnapshot() now works correctly with anonymous,
+      pserver-based, servers. Previously, cvs checkout would fail due
+      to strange characters being in the destination directory.
+    * r.add*Snapshot() will now raise errors if the shell commands they
+      are executing fail for any reason
 
-  o Bug fixes:
+  o Bug Fixes:
     * An index has been added to improve the performance of various
       file stream related queries in a Conary repository. (CNY-1704)
     * Directories in binary directories are no longer (incorrectly)
-      provided.  (CNY-1721)
+      provided. (CNY-1721)
     * "conary update" now works with read-only changesets. (CNY-1681)
+    * the setTroveInfo call refuses to update missing troves (CNY-1741)
 
   o Server Changes:
-    * getChangeSet call now returns supplemental information (trovesNeeded,
-      filesNeeded, and removedTroves) for each individual job separately
-      instead of combining them for the entire job list
+    * getChangeSet call now returns supplemental information
+      (trovesNeeded, filesNeeded, and removedTroves) for each individual
+      job separately, instead of combining them for the entire job list.
     * proxy now combines all upstream changeset requests into a single
-      job request for servers running this version or later (CNY-1716)
+      job request for servers running this version or later. (CNY-1716)
     * mirrorMode wasn't passed through to changeset fingerprint calls
-      from the caching code
+      from the caching code.
 
 Changes in 1.1.27:
   o New Features:

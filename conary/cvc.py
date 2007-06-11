@@ -832,6 +832,8 @@ class CvcMain(command.MainHandler):
 
         if cfg.installLabelPath:
             cfg.installLabel = cfg.installLabelPath[0]
+        else:
+            cfg.installLabel = None
 
         cfg.initializeFlavors()
         log.setMinVerbosity(log.INFO)
