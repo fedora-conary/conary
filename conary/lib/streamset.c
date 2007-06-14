@@ -303,10 +303,30 @@ static inline void getTag(char** buf, unsigned int *tag, int *valSize,
     *buf = (char *) chptr;
 }
 
+static inline int unknownInSkipSet(int idx, struct unknownTags * unknownTags,
+			       PyObject *skipSet) {
+    int rc;
+    PyObject *pyTag = PyInt_FromLong(unknownTags[idx].tag);
+
+    if (skipSet == NULL || skipSet == Py_None) {
+	return 0;
+    }
+
+    if (PyDict_Contains(skipSet, pyTag)) {
+	rc = 1;
+    } else {
+	rc = 0;
+    }
+
+    Py_DECREF(pyTag);
+    return rc;
+}
+
 static PyObject *concatStrings(StreamSetDefObject *ssd,
 			       PyObject ** vals,
                                int unknownCount,
                                struct unknownTags * unknownTags,
+			       PyObject *skipSet,
 			       int includeEmpty) {
     char *final, *chptr;
     int len, valLen, rc, useAlloca = 0;
@@ -325,6 +345,9 @@ static PyObject *concatStrings(StreamSetDefObject *ssd,
     }
 
     for (unknownIdx = 0; unknownIdx < unknownCount; unknownIdx++) {
+        if (unknownInSkipSet(unknownIdx, unknownTags, skipSet)) {
+            continue;
+        }
         valLen = PyString_GET_SIZE(unknownTags[unknownIdx].data);
         len += valLen + SIZE_LARGE;
     }
@@ -375,6 +398,10 @@ static PyObject *concatStrings(StreamSetDefObject *ssd,
         } else if ((tagIdx == ssd->tagCount && unknownIdx < unknownCount) ||
             (unknownIdx < unknownCount &&
                 ssd->tags[tagIdx].tag > unknownTags[unknownIdx].tag)) {
+            if (unknownInSkipSet(unknownIdx, unknownTags, skipSet)) {
+                unknownIdx++;
+                continue;
+            }
             valLen = PyString_GET_SIZE(unknownTags[unknownIdx].data);
             len += valLen;
             rc = addTag(&chptr, unknownTags[unknownIdx].tag,
@@ -493,7 +520,7 @@ static PyObject * StreamSet_Diff(StreamSetObject * self, PyObject * args,
     /* note that, unlike freeze(), diff() includes diffs that
        are zero length.  they have special meaning in some
        stream types (usually that the stored value is None) */
-    rc = concatStrings(ssd, vals, 0, NULL, INCLUDE_EMPTY);
+    rc = concatStrings(ssd, vals, 0, NULL, NULL, INCLUDE_EMPTY);
 
     if (!useAlloca)
 	free(vals);
@@ -666,7 +693,7 @@ static PyObject * StreamSet_Freeze(StreamSetObject * self,
         unknownCount = 0;
 
     /* do not include zero length frozen data */
-    rc = concatStrings(ssd, vals, unknownCount, sset->unknownTags,
+    rc = concatStrings(ssd, vals, unknownCount, sset->unknownTags, skipSet,
                        EXCLUDE_EMPTY);
     if (!useAlloca)
 	free(vals);
@@ -854,6 +881,53 @@ PyObject *StreamSet_split(PyObject *self, PyObject *args) {
     assert(chptr == end);
 
     return l;
+}
+
+PyObject *StreamSet_remove(PyObject *self, PyObject *args) {
+    char *data, *chptr, *end, *newdata, *newchptr;
+    int size, sizeType, dataLen, rc, skipId, len;
+    unsigned int streamId;
+    PyObject *pydata, *pyskipid, *s;
+
+    if (PyTuple_GET_SIZE(args) != 2) {
+        PyErr_SetString(PyExc_TypeError, "exactly 2 arguments expected");
+        return NULL;
+    }
+    pydata = PyTuple_GET_ITEM(args, 0);
+    pyskipid = PyTuple_GET_ITEM(args, 1);
+    skipId = PyInt_AsLong(pyskipid);
+    data = PyString_AsString(pydata);
+    dataLen = PyString_Size(pydata);
+    newdata = malloc(dataLen);
+    if (NULL == newdata) {
+	PyErr_NoMemory();
+	return NULL;
+    }
+    end = data + dataLen;
+    chptr = data;
+    newchptr = newdata;
+    len = 0;
+    while (chptr < end) {
+	getTag(&chptr, &streamId, &sizeType, &size);
+	if (streamId == skipId) {
+	    chptr += size;
+	    continue;
+	}
+	rc = addTag(&newchptr, streamId, sizeType, size);
+	if (-1 == rc)
+	    goto error;
+	len += rc;
+	memcpy(newchptr, chptr, size);
+	chptr += size;
+	newchptr += size;
+	len += size;
+    }
+    s = PyString_FromStringAndSize(newdata, len);
+    free(newdata);
+    return s;
+ error:
+    free(newdata);
+    return NULL;
 }
 
 static PyObject * StreamSet_Twm(StreamSetObject * self, PyObject * args,

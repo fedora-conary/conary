@@ -51,7 +51,7 @@ PermissionAlreadyExists = errors.PermissionAlreadyExists
 shims = xmlshims.NetworkConvertors()
 
 # end of range or last protocol version + 1
-CLIENT_VERSIONS = range(36,51)
+CLIENT_VERSIONS = range(36,52)
 
 from conary.repository.trovesource import TROVE_QUERY_ALL, TROVE_QUERY_PRESENT, TROVE_QUERY_NORMAL
 
@@ -350,7 +350,10 @@ class ServerCache:
             userInfo = (userInfo[0], "")
 
         # look for any entitlements for this server
-        entList = self.entitlements.find(serverName, allMatches = True)
+        if self.entitlements:
+            entList = self.entitlements.find(serverName, allMatches = True)
+        else:
+            entList = []
 
         usedMap = url is not None
         if url is None:
@@ -1682,7 +1685,7 @@ class NetworkRepositoryClient(xmlshims.NetworkConvertors,
         if target and cs:
             if cs.oldTroves or cs.newTroves:
                 os.unlink(target)
-                cs.writeToFile(target)
+                cs.writeToFile(target, versionOverride = changesetVersion)
 
             cs = None
         elif target:

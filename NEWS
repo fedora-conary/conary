@@ -7,7 +7,7 @@ Changes in @NEW@:
       r.setSearchPath(str(r.labelPath[0]), ...) has been
       fixed. (CNY-1740)
     * Proxy errors are now reported in the client, for easier
-      debugging.  (CNY-1313)
+      debugging. (CNY-1313)
     * A bug that caused an "Unknown error downloading changeset" error
       when applying an update job that contained two different
       versions of the same trove has been fixed. (CNY-1742)
@@ -26,6 +26,19 @@ Changes in @NEW@:
     * Entitlements may be placed in conaryrc files now using
       'entitlement server entitlement'. "conary config" displays
       entitlement information.
+    * A bug that limited a single MetadataItem to less than 64 KiB has
+      been fixed.  Conary 1.1.29 will produce metadata that will not
+      be visible to older clients.  Likewise, metadata produced by
+      older clients will not be visible to Conary 1.1.29 and later
+      clients. (CNY-1746)
+    * Metadata items can now store strings with NUL characters in
+      them. (CNY-1750)
+
+  o Build Changes:
+    * Refreshed autosource files are now displayed by 'cvc revert' and 
+      'cvc diff'. (CNY-1647)
+    * Support for the Bazaar revision control system has been added via
+      r.addBzrSnapshot(). (requires bzr >= 0.16).
 
   o Server Changes:
     * (Nearly) all repository operations are now performed using the

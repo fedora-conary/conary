@@ -30,7 +30,9 @@ StreamSet = cstreams.StreamSet
 StreamSetDef = cstreams.StreamSetDef
 ByteStream = cstreams.ByteStream
 LongLongStream = cstreams.LongLongStream
+
 splitFrozenStreamSet = cstreams.splitFrozenStreamSet
+whiteOutFrozenStreamSet = cstreams.whiteOutFrozenStreamSet
 
 SMALL = cstreams.SMALL
 LARGE = cstreams.LARGE
@@ -334,6 +336,26 @@ class OrderedStringsStream(StringsStream):
         self.append(val)
         # like StringsStream except not sorted
 
+class OrderedBinaryStringsStream(StringsStream):
+    # same as OrderedStringsStream, but stores length of each string
+    def freeze(self, skipSet = None):
+        if not self:
+            return ''
+        l = []
+        for s in self:
+            l.append(misc.dynamicSize(len(s)))
+            l.append(s)
+        return ''.join(l)
+
+    def thaw(self, frz):
+	del self[:]
+        if not frz:
+            return
+        i = 0
+        while i < len(frz):
+            i, (s,) = misc.unpack("!D", i, frz)
+            self.append(s)
+
 class ReferencedTroveList(list, InfoStream):
 
     def freeze(self, skipSet = None):
@@ -403,6 +425,8 @@ class StreamCollection(InfoStream):
         for typeId, itemDict in sorted(self._items.iteritems()):
             for item in sorted(itemDict):
                 s = item.freeze()
+                if len(s) >= (1 << 16):
+                    raise OverflowError
                 l.append(struct.pack("!BH", typeId, len(s)))
                 l.append(s)
 
@@ -449,13 +473,19 @@ class StreamCollection(InfoStream):
             return None
 
         l = []
+        if len(removed) >= (1 << 16):
+            raise OverflowError
+        if len(added) >= (1 << 16):
+            raise OverflowError
         l.append(struct.pack("!HH", len(removed), len(added)))
 
         for typeId, item in itertools.chain(removed, added):
             s = item.freeze()
+            if len(s) >= (1 << 16):
+                raise OverflowError
             l.append(struct.pack("!BH", typeId, len(s)))
             l.append(s)
-        
+
         return "".join(l)
 
     def twm(self, diff, base):
@@ -483,7 +513,8 @@ class StreamCollection(InfoStream):
 
 
 class OrderedStreamCollection(StreamCollection):
-    # same as StreamCollection, but ordered
+    # same as StreamCollection, but ordered and can holder bigger stuff
+
     def freeze(self, skipSet = {}):
         if self._data is not None:
             return self._data
@@ -492,7 +523,8 @@ class OrderedStreamCollection(StreamCollection):
         for typeId, itemList in (self._items.iteritems()):
             for item in itemList:
                 s = item.freeze()
-                l.append(struct.pack("!BH", typeId, len(s)))
+                l.append(struct.pack('!B', typeId))
+                l.append(misc.dynamicSize(len(s)))
                 l.append(s)
 
         return "".join(l)
@@ -502,7 +534,7 @@ class OrderedStreamCollection(StreamCollection):
         self._thawedItems = dict([ (x, []) for x in self.streamDict ])
 
         while (i < len(self._data)):
-            i, (typeId, s) = misc.unpack("!BSH", i, self._data)
+            i, (typeId, s) = misc.unpack('!BD', i, self._data)
             item = self.streamDict[typeId](s)
             self._thawedItems[typeId].append(item)
 
@@ -539,18 +571,24 @@ class OrderedStreamCollection(StreamCollection):
             return None
 
         l = []
+        if len(removed) >= (1 << 16):
+            raise OverflowError
+        if len(added) >= (1 << 16):
+            raise OverflowError
         l.append(struct.pack("!HH", len(removed), len(added)))
 
         for typeId, item in removed:
             s = item.freeze()
-            l.append(struct.pack("!BH", typeId, len(s)))
+            l.append(struct.pack('!B', typeId))
+            l.append(misc.dynamicSize(len(s)))
             l.append(s)
 
         # make sure the additions are ordered
-        for typeId, item in them:
+        for typeId, item in self.iterAll():
             if (typeId, item) in added:
                 s = item.freeze()
-                l.append(struct.pack("!BH", typeId, len(s)))
+                l.append(struct.pack('!B', typeId))
+                l.append(misc.dynamicSize(len(s)))
                 l.append(s)
 
         return "".join(l)
@@ -561,11 +599,8 @@ class OrderedStreamCollection(StreamCollection):
         i = 4
 
         for x in xrange(numRemoved + numAdded):
-            typeId, length = struct.unpack("!BH", diff[i : i + 3])
-            i += 3
-            item = self.streamDict[typeId](diff[i:i + length])
-            i += length
-
+            i, (typeId, s) = misc.unpack("!BD", i, diff)
+            item = self.streamDict[typeId](s)
             if x < numRemoved:
                 l = self._items[typeId]
                 del l[l.index(item)]
