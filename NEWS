@@ -14,6 +14,9 @@ Changes in @NEW@:
       clients. (CNY-1746)
     * Metadata items can now store strings with NUL characters in
       them. (CNY-1750)
+    * The client API will now raise an InsufficientPermission error
+      instead of an OpenError when the client's entitlements are
+      not allowing access. (CNY-1738)
 
   o Build Changes:
     * Refreshed autosource files are now displayed by 'cvc revert' and 
@@ -66,6 +69,12 @@ Changes in @NEW@:
       files has been fixed. (CNY-1765)
     * A bug that prevented epydoc from producing documentation on
       the Conary code has been fixed. (CNY-1772)
+    * Conary will temporarily fall back to reading unsigned group
+      script information from changeset files that are created by
+      Conary < 1.1.24.  Once rBuilder creates changesets with a newer
+      version of Conary, this change will be reverted. (CNY-1762)
+    * Changeset files are now written as absolute paths in the
+      changeset index file. (CNY-1776)
 
 Changes in 1.1.28:
   o Documentation Changes:

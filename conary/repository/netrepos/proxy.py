@@ -25,15 +25,13 @@ from conary.repository.netrepos import netserver, calllog
 _CSVER0 = filecontainer.FILE_CONTAINER_VERSION_NO_REMOVES
 _CSVER1 = filecontainer.FILE_CONTAINER_VERSION_WITH_REMOVES
 _CSVER2 = filecontainer.FILE_CONTAINER_VERSION_FILEID_IDX
-_CSVER3 = filecontainer.FILE_CONTAINER_VERSION_METADATA
 # The first in the list is the one the current generation clients understand
-CHANGESET_VERSIONS = [ _CSVER3, _CSVER2, _CSVER1, _CSVER0 ]
+CHANGESET_VERSIONS = [ _CSVER2, _CSVER1, _CSVER0 ]
 # Precedence list of versions - the version specified as key can be generated
 # from the version specified as value
 CHANGESET_VERSIONS_PRECEDENCE = {
     _CSVER0 : _CSVER1,
     _CSVER1 : _CSVER2,
-    _CSVER2 : _CSVER3,
 }
 
 class ProxyClient(xmlrpclib.ServerProxy):
@@ -301,8 +299,6 @@ class ChangesetFilter(BaseProxy):
             return self._convertChangeSetV1V0(csPath, size, destCsVersion)
         elif (csVersion, destCsVersion) == (_CSVER2, _CSVER1):
             return self._convertChangeSetV2V1(csPath, size, destCsVersion)
-        elif (csVersion, destCsVersion) == (_CSVER3, _CSVER2):
-            return self._convertChangeSetV3V2(csPath, size, destCsVersion)
         assert False, "Unknown versions"
 
     def _convertChangeSetV3V2(self, cspath, size, destCsVersion):
@@ -383,52 +379,55 @@ class ChangesetFilter(BaseProxy):
                      changesetVersion = None, mirrorMode = False,
                      infoOnly = False):
 
-        def _addToCache(fingerPrint, inF, csVersion, csInfo, sizeLimit):
-            csPath = self.csCache.hashToPath(fingerPrint + '-%d' % csVersion)
-            csDir = os.path.dirname(csPath)
-            util.mkdirChain(csDir)
-            (fd, csTmpPath) = tempfile.mkstemp(dir = csDir,
-                                               suffix = '.ccs-new')
-            outF = os.fdopen(fd, "w")
-            util.copyfileobj(inF, outF, sizeLimit = sizeLimit)
-            # closes the underlying fd opened by mkstemp
-            outF.close()
+        # This is how the caching algorithm works:
+        # - Produce verPath, a path in the digraph of possible version
+        # transformations. It starts with the version we need and ends with
+        # the version the upstream server knows how to produce.
+        # - For each changeset:
+        #   - walk verPath. If version is found, add it to changeSetList and
+        #     break (csInfo will contain the version we found, it may be newer
+        #     than what the client needs), otherwise try the next version
+        # - Fetch the changesets that are missing from changeSetList, and add
+        # them to changeSetList. Their version is wireCsVersion. Cache them as
+        # such in the process.
+        # - Walk changeSetList; if version is newer than what the client
+        # expects, start doing the conversions backwards.
 
-            (fd, dataTmpPath) = tempfile.mkstemp(dir = csDir,
-                                                 suffix = '.data-new')
-            data = os.fdopen(fd, 'w')
-            data.write(csInfo.pickle())
-            # closes the underlying fd
-            data.close()
-
-            os.rename(csTmpPath, csPath)
-            os.rename(dataTmpPath, csPath + '.data')
-
-            return csPath
-
-        if self.forceGetCsVersion is not None:
-            getCsVersion = self.forceGetCsVersion
-        else:
-            getCsVersion = clientVersion
-
+        # Changeset version we need to produce
         neededCsVersion = changesetVersion or self._getChangeSetVersion(clientVersion)
-        wireCsVersion = self._getChangeSetVersion(getCsVersion)
+        # Changeset version we expect the server to produce for us
+        # If we're a proxy, we can look in the cache to find the server's
+        # version, otherwise use the repository version
+        if caller.url is None:
+            serverVersion = ChangesetFilter.SERVER_VERSIONS[-1]
+        else:
+            serverVersion = self.versionsByUrl[caller.url]
 
-        # Get the desired changeset version for this client
+        wireCsVersion = self._getChangeSetVersion(serverVersion)
+        # Use this protocol version when talking upstream
+        if self.forceGetCsVersion is not None:
+            # Talking to a repository
+            maskClientVersion = self.forceGetCsVersion
+        else:
+            maskClientVersion = clientVersion
+
+        # Make sure we have a way to get from here to there
         iterV = neededCsVersion
         verPath = [iterV]
-        if neededCsVersion != wireCsVersion:
-            while 1:
-                if iterV not in CHANGESET_VERSIONS_PRECEDENCE:
-                    # No way to move forward
-                    break
-                # Move one edge in the DAG, try again
-                iterV = CHANGESET_VERSIONS_PRECEDENCE[iterV]
-                verPath.append(iterV)
+        while iterV != wireCsVersion:
+            if iterV not in CHANGESET_VERSIONS_PRECEDENCE:
+                # No way to move forward
+                break
+            # Move one edge in the DAG, try again
+            iterV = CHANGESET_VERSIONS_PRECEDENCE[iterV]
+            verPath.append(iterV)
 
         # This is important; if it doesn't work out the cache is likely
         # not working.
-        assert(verPath[-1] == wireCsVersion)
+        if verPath[-1] != wireCsVersion:
+            raise ProxyRepositoryError(('InvalidClientVersion',
+                "Unable to produce changeset version %s "
+                "with upstream server %s" % (neededCsVersion, wireCsVersion)))
 
         fingerprints = [ '' ] * len(chgSetList)
         if self.csCache:
@@ -459,29 +458,14 @@ class ChangesetFilter(BaseProxy):
             if not cachable:
                 continue
 
-            # look up the changeset in the cache
-            # empty fingerprint means "do not cache"
-            fullPrint = fingerprint + '-%d' % neededCsVersion
-            csPath = self.csCache.hashToPath(fullPrint)
-            dataPath = csPath + '.data'
-            if os.path.exists(csPath) and os.path.exists(dataPath):
-                # touch to refresh atime; try/except protects against race
-                # with someone removing the entry during the time it took
-                # you to read this comment
-                try:
-                    fd = os.open(csPath, os.O_RDONLY)
-                    os.close(fd)
-                except:
-                    pass
-
-                data = open(dataPath)
-                csInfo = ChangeSetInfo(pickled = data.read())
-                csInfo.version = neededCsVersion
-                data.close()
-
-                csInfo.path = csPath
-                csInfo.cached = True
-                changeSetList[jobIdx] = csInfo
+            # look up the changeset in the cache, oldest to newest
+            for iterV in verPath:
+                csInfo = self.csCache.get((fingerprint, iterV))
+                if csInfo:
+                    # Found in the cache (possibly with an older version)
+                    csInfo.fingerprint = fingerprint
+                    changeSetList[jobIdx] = csInfo
+                    break
 
         changeSetsNeeded = \
             [ x for x in
@@ -493,6 +477,7 @@ class ChangesetFilter(BaseProxy):
         # internal server as well (since internal servers only support
         # single jobs!)
         while changeSetsNeeded:
+            getCsVersion = maskClientVersion
             if self.forceSingleCsJob:
                 # calling internal changeset generation, which only supports
                 # a single job
@@ -524,8 +509,9 @@ class ChangesetFilter(BaseProxy):
                                      [ x[1][0] for x in neededHere ],
                                      recurse, withFiles, withFileContents,
                                      excludeAutoSource,
-                                     neededCsVersion, mirrorMode)[1]
+                                     wireCsVersion, mirrorMode)[1]
             else:
+                # We don't support requesting specific changeset versions
                 rc = caller.getChangeSet(getCsVersion,
                                      [ x[1][0] for x in neededHere ],
                                      recurse, withFiles, withFileContents,
@@ -593,8 +579,9 @@ class ChangesetFilter(BaseProxy):
                 cachable = bool(fingerprint and self.csCache)
 
                 if cachable:
-                    path =_addToCache(fingerprint, inF, wireCsVersion, csInfo,
-                                      sizeLimit = sizeLimit)
+                    # Add it to the cache
+                    path = self.csCache.set((fingerprint, csInfo.version),
+                        (csInfo, inF, sizeLimit))
                 else:
                     # If only one file was requested, and it's already
                     # a file://, this is unnecessary :-(
@@ -618,6 +605,9 @@ class ChangesetFilter(BaseProxy):
 
             inF.close()
 
+        # hash versions to quickly find the index in verPath
+        verHash = dict((csVer, idx) for (idx, csVer) in enumerate(verPath))
+
         # Handle format conversions
         for csInfo in changeSetList:
             if infoOnly and csInfo.path is None:
@@ -629,18 +619,19 @@ class ChangesetFilter(BaseProxy):
                 util.ExtendedFile(csInfo.path, 'r', buffering = False))
             csVersion = fc.version
             fc.close()
-            if csVersion == neededCsVersion:
+            if csInfo.version == neededCsVersion:
+                # We already have the right version
                 continue
 
             # Now walk the precedence list backwards for conversion
-            oldV = csVersion
+            oldV = csInfo.version
             csPath = csInfo.path
 
-            for iterV in reversed(verPath[:-1]):
-                # skip noop converstions
-                if iterV == oldV:
-                    continue
-                # Convert the changeset - not the first time around
+            # Find the position of this version into the precedence list
+            idx = verHash[oldV]
+
+            for iterV in reversed(verPath[:idx]):
+                # Convert the changeset
                 path, newSize = self._convertChangeSet(csPath, csInfo.size,
                                                        iterV, oldV)
                 csInfo.size = newSize
@@ -651,8 +642,8 @@ class ChangesetFilter(BaseProxy):
                     os.unlink(csPath)
                     csPath = path
                 else:
-                    csPath = _addToCache(csInfo.fingerprint, open(path), iterV,
-                                         csInfo, sizeLimit = None)
+                    csPath = self.csCache.set((csInfo.fingerprint, iterV),
+                        (csInfo, open(path), None))
 
                 oldV = iterV
 
@@ -716,7 +707,7 @@ class SimpleRepositoryFilter(ChangesetFilter):
     def __init__(self, cfg, basicUrl, repos):
         if cfg.changesetCacheDir:
             util.mkdirChain(cfg.changesetCacheDir)
-            csCache = datastore.DataStore(cfg.changesetCacheDir)
+            csCache = ChangesetCache(datastore.DataStore(cfg.changesetCacheDir))
         else:
             csCache = None
 
@@ -725,12 +716,12 @@ class SimpleRepositoryFilter(ChangesetFilter):
 
 class ProxyRepositoryServer(ChangesetFilter):
 
-    SERVER_VERSIONS = [ 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51 ]
+    SERVER_VERSIONS = [ 41, 42, 43, 44, 45, 46, 47, 48, 49, 50 ]
     forceSingleCsJob = False
 
     def __init__(self, cfg, basicUrl):
         util.mkdirChain(cfg.changesetCacheDir)
-        csCache = datastore.DataStore(cfg.changesetCacheDir)
+        csCache = ChangesetCache(datastore.DataStore(cfg.changesetCacheDir))
 
         util.mkdirChain(cfg.proxyContentsDir)
         self.contents = datastore.DataStore(cfg.proxyContentsDir)
@@ -743,8 +734,7 @@ class ProxyRepositoryServer(ChangesetFilter):
                         authCheckOnly = False):
         if clientVersion < 42:
             # server doesn't support auth checks through getFileContents
-            return caller(getFileContents,
-                                clientVersion, fileList, authCheckOnly)
+            return caller.getFileContents(clientVersion, fileList, authCheckOnly)
 
         hasFiles = []
         neededFiles = []
@@ -844,6 +834,71 @@ class ProxyRepositoryServer(ChangesetFilter):
             return False, (url, sizeList)
         finally:
             os.close(fd)
+
+class ChangesetCache(object):
+    __slots__ = ['dataStore']
+
+    def __init__(self, dataStore):
+        self.dataStore = dataStore
+
+    def hashKey(self, key):
+        (fingerPrint, csVersion) = key
+        return self.dataStore.hashToPath(fingerPrint + '-%d' % csVersion)
+
+    def set(self, key, value):
+        (csInfo, inF, sizeLimit) = value
+
+        csPath = self.hashKey(key)
+        csDir = os.path.dirname(csPath)
+        util.mkdirChain(csDir)
+        (fd, csTmpPath) = tempfile.mkstemp(dir = csDir,
+                                           suffix = '.ccs-new')
+        outF = os.fdopen(fd, "w")
+        util.copyfileobj(inF, outF, sizeLimit = sizeLimit)
+        # closes the underlying fd opened by mkstemp
+        outF.close()
+
+        (fd, dataTmpPath) = tempfile.mkstemp(dir = csDir,
+                                             suffix = '.data-new')
+        data = os.fdopen(fd, 'w')
+        data.write(csInfo.pickle())
+        # closes the underlying fd
+        data.close()
+
+        os.rename(csTmpPath, csPath)
+        os.rename(dataTmpPath, csPath + '.data')
+
+        return csPath
+
+    def get(self, key):
+        csPath = self.hashKey(key)
+        csVersion = key[1]
+        dataPath = csPath + '.data'
+        if not (os.path.exists(csPath) and os.path.exists(dataPath)):
+            # Not in the cache
+            return None
+
+        # touch to refresh atime; try/except protects against race
+        # with someone removing the entry during the time it took
+        # you to read this comment
+        try:
+            fd = os.open(csPath, os.O_RDONLY)
+            os.close(fd)
+        except OSError:
+            pass
+
+        try:
+            data = open(dataPath)
+            csInfo = ChangeSetInfo(pickled = data.read())
+            data.close()
+        except IOError:
+            return None
+
+        csInfo.path = csPath
+        csInfo.cached = True
+        csInfo.version = csVersion
+
+        return csInfo
 
 def redirectUrl(authToken, url):
     # return the url to use for the final server

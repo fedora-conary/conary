@@ -51,7 +51,7 @@ PermissionAlreadyExists = errors.PermissionAlreadyExists
 shims = xmlshims.NetworkConvertors()
 
 # end of range or last protocol version + 1
-CLIENT_VERSIONS = range(36,52)
+CLIENT_VERSIONS = range(36,51)
 
 from conary.repository.trovesource import TROVE_QUERY_ALL, TROVE_QUERY_PRESENT, TROVE_QUERY_NORMAL
 
@@ -424,6 +424,8 @@ class ServerCache:
 
         try:
             serverVersions = server.checkVersion()
+        except errors.InsufficientPermission:
+            raise
         except Exception, e:
             if isinstance(e, socket.error):
                 errmsg = e[1]
@@ -2409,13 +2411,6 @@ class NetworkRepositoryClient(xmlshims.NetworkConvertors,
             url = server.prepareChangeSet(jobs, mirror)
         else:
             url = server.prepareChangeSet()
-
-        if server.getProtocolVersion() <= 50:
-            (outFd, tmpName) = util.mkstemp()
-            os.close(outFd)
-            changeset._convertChangeSetV3V2(fName, tmpName)
-            autoUnlink = True
-            fName = tmpName
 
         if server.getProtocolVersion() <= 42:
             (outFd, tmpName) = util.mkstemp()
