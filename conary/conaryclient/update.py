@@ -2946,6 +2946,18 @@ conary erase '%s=%s[%s]'
 
         # returning terminates the thread
 
+    def getDownloadSizes(self, uJob):
+        allJobs = uJob.getJobs()
+        flatJobs = [ x for x in itertools.chain(*allJobs) ]
+        flatSizes = self.repos.getChangeSetSize(flatJobs)
+
+        sizes = []
+        for job in allJobs:
+            sizes.append(sum(flatSizes[0:len(job)]))
+            flatSizes = flatSizes[len(job):]
+
+        return sizes
+
     def downloadUpdate(self, uJob, destDir):
         allJobs = uJob.getJobs()
         csFiles = []
@@ -3299,7 +3311,7 @@ def _storeJobInfo(remainingJobs, changeSetSource):
         if isinstance(cs, changeset.ChangeSetFromFile):
             # Write the file name in the changesets file - when thawing we
             # will need this information
-            csFileName = cs.fileName
+            csFileName = util.normpath(os.path.abspath(cs.fileName))
         else:
             cs.reset()
             csFileName = os.path.join(restartDir, '%d.ccs' % idx)
