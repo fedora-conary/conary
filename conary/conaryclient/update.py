@@ -2497,6 +2497,12 @@ conary erase '%s=%s[%s]'
         @autoPinList: A list of troves that will not change. Defaults to the
         value from self.cfg.pinList
         @type autoPinList: list
+        @keepJournal: If set, the conary journal file will be left behind
+        (useful only for debugging journal cleanup routines)
+        @type keepJournal: bool
+        @noRestart: If set, suppresses the restart after critical updates
+        behavior default to conary.
+        @type noRestart: bool
         @return: None if the update was fully applied, or restart information
         if a critical update was applied and a restart is necessary to make it
         active.
@@ -2795,12 +2801,12 @@ conary erase '%s=%s[%s]'
                 # have info-foo and info-bar in the same update job
                 # because info-foo might depend on info-bar being
                 # installed already.  This should be fixed.
-                uJob.addJob(newJob)
+                if newJob:
+                    uJob.addJob(newJob)
                 count = len(jobList)
                 newJob = list(jobList)             # make a copy
                 newJobIsInfo = False
-                if foundGroup:
-                    inGroup = True
+                inGroup = foundGroup
             else:
                 newJobIsInfo = isInfo
                 newJob += jobList
