@@ -41,6 +41,10 @@ Changes in @NEW@:
       or using a different python executable than Conary is running
       with, Conary will use an external python process to determine
       python dependencies. (CNY-1517)
+    * Ruby dependencies are now generated, and Ruby modules are placed
+      in a :ruby component by default.  Flags are included in the
+      dependencies similar to the Python flags, except that they are
+      not conditional. (CNY-612)
     * Ensure that two binaries with the same source count but different
       build counts end up with the same build count after cloning. (CNY-1871)
 
