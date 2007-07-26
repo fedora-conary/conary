@@ -1595,6 +1595,7 @@ class AbstractJobSource(AbstractTroveSource):
 class JobSource(AbstractJobSource):
 
     def __init__(self, newTroveSource, oldTroveSource):
+        AbstractJobSource.__init__(self)
         self.newTroveSource = newTroveSource
         self.oldTroveSource = oldTroveSource
         self.jobMap = {}
