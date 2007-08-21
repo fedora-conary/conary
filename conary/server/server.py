@@ -210,6 +210,7 @@ class HttpRequests(SimpleHTTPRequestHandler):
             return None
 
         httpAuthToken.append(entitlementList)
+        httpAuthToken.append(self.connection.getpeername()[0])
         return httpAuthToken
 
     def checkAuth(self):
@@ -232,8 +233,6 @@ class HttpRequests(SimpleHTTPRequestHandler):
     def handleXml(self, authToken):
 	contentLength = int(self.headers['Content-Length'])
         data = self.rfile.read(contentLength)
-
-        targetServerName = self.headers.get('X-Conary-Servername', None)
 
         encoding = self.headers.get('Content-Encoding', None)
         if encoding == 'deflate':
@@ -377,12 +376,16 @@ class ResetableNetworkRepositoryServer(NetworkRepositoryServer):
 
 class HTTPServer(BaseHTTPServer.HTTPServer):
     def close_request(self, request):
-        while select.select([request], [], [], 0)[0]:
+        pollObj = select.poll()
+        pollObj.register(request, select.POLLIN)
+
+        while pollObj.poll(0):
             # drain any remaining data on this request
             # This avoids the problem seen with the keepalive code sending
             # extra bytes after all the request has been sent.
             if not request.recv(8096):
                 break
+
         BaseHTTPServer.HTTPServer.close_request(self, request)
 
 if SSL:
@@ -403,12 +406,7 @@ if SSL:
                 return
 
         def close_request(self, request):
-            while select.select([request], [], [], 0)[0]:
-                # drain any remaining data on this request
-                # This avoids the problem seen with the keepalive code sending
-                # extra bytes after all the request has been sent.
-                if not request.recv(8096):
-                    break
+            HTTPServer.close_request(self, request)
             request.set_shutdown(SSL.SSL_RECEIVED_SHUTDOWN |
                                  SSL.SSL_SENT_SHUTDOWN)
             HTTPServer.close_request(self, request)

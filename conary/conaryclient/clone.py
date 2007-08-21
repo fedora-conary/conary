@@ -234,7 +234,8 @@ class ClientClone:
             needed = []
 
             for info in toClone:
-                if info[0].startswith("fileset"):
+                if (info[0].startswith("fileset")
+                    and not info[0].endswith(':source')):
                     raise CloneError("File sets cannot be cloned")
 
                 if info not in seen:
@@ -254,6 +255,10 @@ class ClientClone:
                     cloneMap.addTrove(troveTup, targetBranch, sourceName)
                     chooser.addSource(troveTup, sourceName)
                     cloneJob.add(troveTup)
+                elif trove.troveIsPackage(troveTup[0]):
+                    # don't bother downloading components for something
+                    # we're not cloning
+                    continue
                 newToClone.extend(trv.iterTroveList(strongRefs=True))
 
             toClone = newToClone
@@ -318,7 +323,7 @@ class ClientClone:
             for host, troveTups in hasTrovesByHost.items():
                 try:
                     results = troveCache.hasTroves(troveTups)
-                except neterrors.OpenError, msg:
+                except errors.ConaryError, msg:
                     log.debug('warning: Could not access host %s: %s' % (host, msg))
                     results = dict((x, False) for x in troveTups)
                 hasTroves.update(results)
@@ -400,10 +405,11 @@ class ClientClone:
 
             byVersion = {}
             for binaryTup in binaryList:
-                byFlavor = byVersion.setdefault(binaryTup[1], {})
+                byFlavor = byVersion.setdefault(binaryTup[1].getSourceVersion(),
+                                                {})
                 byFlavor.setdefault(binaryTup[2], []).append(binaryTup)
 
-            for version, byFlavor in byVersion.iteritems():
+            for byFlavor in byVersion.itervalues():
                 finalNewVersion = None
                 for flavor, binaryList in byFlavor.iteritems():
                     # Binary list is a list of binaries all created from the

@@ -771,6 +771,8 @@ def cookGroupObjects(repos, db, cfg, recipeClasses, sourceVersion, macros={},
             compatClass = group.compatibilityClass
             if compatClass is not None:
                 grpTrv.setCompatibilityClass(compatClass)
+            # Add build flavor
+            grpTrv.setBuildFlavor(use.allFlagsToFlavor(recipeObj.name))
 
             for (recipeScripts, isRollback, troveScripts) in \
                     [ (group.postInstallScripts, False,
@@ -901,6 +903,7 @@ def cookFilesetObject(repos, db, cfg, recipeClass, sourceVersion, buildFlavor,
     fileset.setSize(size)
     fileset.setConaryVersion(constants.version)
     fileset.setIsCollection(False)
+    fileset.setBuildFlavor(use.allFlagsToFlavor(fullName))
     fileset.computePathHashes()
     
     filesetDiff = fileset.diff(None, absolute = 1)[0]
@@ -1242,6 +1245,14 @@ def _createPackageChangeSet(repos, db, cfg, bldList, recipeObj, sourceVersion,
 
     buildReqs = set((x.getName(), x.getVersion(), x.getFlavor())
                     for x in recipeObj.buildReqMap.itervalues())
+    packageReqs = [ x for x in recipeObj.buildReqMap.itervalues() 
+                    if trove.troveIsCollection(x.getName()) ]
+    for package in packageReqs:
+        childPackages = [ x for x in package.iterTroveList(strongRefs=True,
+                                                           weakRefs=True) ]
+        hasTroves = db.hasTroves(childPackages)
+        buildReqs.update(x[0] for x in itertools.izip(childPackages,
+                                                      hasTroves) if x[1])
     buildReqs = getRecursiveRequirements(db, buildReqs, cfg.flavor)
 
     # create all of the package troves we need, and let each package provide
@@ -1264,6 +1275,7 @@ def _createPackageChangeSet(repos, db, cfg, bldList, recipeObj, sourceVersion,
                 grpMap[main].setPolicyProviders(policyTroves)
             grpMap[main].setLoadedTroves(recipeObj.getLoadedTroves())
             grpMap[main].setBuildRequirements(buildReqs)
+            grpMap[main].setBuildFlavor(use.allFlagsToFlavor(recipeObj.name))
 	    provides = deps.DependencySet()
 	    provides.addDep(deps.TroveDependencies, deps.Dependency(main))
 	    grpMap[main].setProvides(provides)
@@ -1331,6 +1343,9 @@ def _createPackageChangeSet(repos, db, cfg, bldList, recipeObj, sourceVersion,
         p.setConaryVersion(constants.version)
         p.setIsCollection(False)
         p.setIsDerived(recipeObj._isDerived)
+
+        # Add build flavor
+        p.setBuildFlavor(use.allFlagsToFlavor(recipeObj.name))
 
         _signTrove(p, signatureKey)
 
