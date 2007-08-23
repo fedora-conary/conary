@@ -14,6 +14,10 @@ Changes in @NEW@:
     * An error in the way attributes of ServerProxy classes get
       marshaled has been fixed. (CNY-1956)
 
+  o Server Changes
+    * a bug which triggered an exception while migrating postgresql
+      repositories has been fixed (CNY-1912)
+
 Changes in 1.1.91:
   o Client Changes:
     * A new configuration option, "flavorPreferences", has been added.
@@ -35,6 +39,9 @@ Changes in 1.1.91:
       version arguemnt without a source count. (CNY-1921)
 
   o Server Changes:
+
+Changes in 1.1.31.4:
+  o Server changes:
     * Setting "forceSSL" once again requires a HTTPS connection be
       used when authentication data is passed to an Apache based
       Conary Repository. (CNY-1880)
