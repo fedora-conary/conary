@@ -10,6 +10,11 @@ Changes in @NEW@:
     * crossRequires are now ignored when not cross compiling (CNY-1950)
   o Build Changes:
     * Filesets now accept macros (CNY-148)
+    * a bug which triggered an exception while migrating postgresql
+      repositories has been fixed (CNY-1912)
+  o Client Changes:
+    * a bug which prevented the mirror client from using hidden comitts
+      when mirroring to a single target has been fixed (CNY-1981)
 
 Changes in 1.1.92:
   o Bug Fixes:
@@ -60,8 +65,6 @@ Changes in 1.1.91:
       calls now, and uses a single changeset.
     * The 'cvc update' and 'cvc diff' commands now accept a source
       version arguemnt without a source count. (CNY-1921)
-
-  o Server Changes:
 
 Changes in 1.1.31.4:
   o Server changes:
