@@ -1,4 +1,34 @@
 Changes in @NEW@:
+  o Bug Fixes:
+    * The clone and promote commands now work when cloning over removed
+      packages. (CNY-1955)
+    * searchPath will now provide only the best flavor match when matching
+      against groups with more than one version of a package available.
+      Previously, it would return all matches.  (CNY-1881)
+
+  o Build Changes:
+    * Filesets now accept macros. (CNY-148)
+    * crossRequires are now ignored when not cross compiling. (CNY-1950)
+    * Malformed .jar files are now ignored when computing Java
+      dependencies.  Previously, Conary exited with an error while
+      attempting to process them. (CNY-1983)
+    * Conary dependencies are no longer attempted when cross-compiling,
+      and when bootstrapping python, modules are now sought in system
+      python directories as well as in the destdir. (CNY-1986)
+
+  o Client Changes:
+    * The cvc promote and clone commands are now more efficient and do
+      not download unnecessary packages.  This also makes it possible
+      to clone packages where access to some of the included troves
+      is unavailable at the time of the promote or clone operation.
+      (CNY-1913)
+    * A bug which prevented the mirror client from using hidden commits
+      when mirroring to a single target has been fixed. (CNY-1981)
+    * Filesets are now cloneable. (CNY-1297)
+
+  o Server Changes
+    * A bug which triggered an exception while migrating postgresql
+      repositories has been fixed. (CNY-1912)
 
 Changes in 1.1.92:
   o Bug Fixes:
@@ -48,9 +78,7 @@ Changes in 1.1.91:
     * A 'cvc checkout' of multiple projects uses far fewer repository
       calls now, and uses a single changeset.
     * The 'cvc update' and 'cvc diff' commands now accept a source
-      version arguemnt without a source count. (CNY-1921)
-
-  o Server Changes:
+      version argument without a source count. (CNY-1921)
 
 Changes in 1.1.31.4:
   o Server changes:

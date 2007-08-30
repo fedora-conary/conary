@@ -50,6 +50,7 @@ from conary.build.nextversion import nextVersions
 from conary.deps import deps
 from conary.lib import log
 from conary.repository import changeset
+from conary.repository import trovesource
 from conary.repository import errors as neterrors
 
 V_LOADED = 0
@@ -234,9 +235,9 @@ class ClientClone:
             needed = []
 
             for info in toClone:
-                if (info[0].startswith("fileset")
-                    and not info[0].endswith(':source')):
-                    raise CloneError("File sets cannot be cloned")
+                if (trove.troveIsPackage(info[0])
+                    and chooser.shouldPotentiallyClone(info) is False):
+                    continue
 
                 if info not in seen:
                     needed.append(info)
@@ -278,7 +279,8 @@ class ClientClone:
             query.append((binTup[0], targetBranch, binTup[2]))
         result = self.repos.findTroves(None, query,
                                        defaultFlavor = deps.parseFlavor(''),
-                                       getLeaves=False, allowMissing=True)
+                                       getLeaves=False, allowMissing=True,
+                                       troveTypes=trovesource.TROVE_QUERY_ALL)
         if not result:
             return leafMap
         leafMap.addLeafResults(result)
@@ -605,9 +607,13 @@ class ClientClone:
                 _updateVersion(trv, mark, newVersion)
             elif chooser.troveInfoNeedsErase(mark, src):
                 _updateVersion(trv, mark, None)
+        if trove.troveIsFileSet(trv.getName()):
+            needsRewriteFn = chooser.filesetFileNeedsRewrite
+        else:
+            needsRewriteFn = chooser.fileNeedsRewrite
 
         for (pathId, path, fileId, version) in trv.iterFileList():
-            if chooser.fileNeedsRewrite(troveBranch, targetBranch, version):
+            if needsRewriteFn(troveBranch, targetBranch, version):
                 needsNewVersions.append((pathId, path, fileId))
 
         # need to be reversioned
@@ -829,7 +835,12 @@ class CloneChooser(object):
         sourceTup = (sourceName, sourceVersion, noFlavor)
         self.byDefaultMap[sourceTup] = True
 
-    def shouldClone(self, troveTup, sourceName=None):
+    def shouldPotentiallyClone(self, troveTup):
+        """
+            returns True if you definitely should clone this trove
+            returns False if you definitely should not clone this trove
+            returns None if it's undecided.
+        """
         name, version, flavor = troveTup
         if self.byDefaultMap is not None:
             if troveTup not in self.byDefaultMap:
@@ -843,6 +854,11 @@ class CloneChooser(object):
                 return True
         elif self.options.fullRecurse:
             return True
+
+    def shouldClone(self, troveTup, sourceName=None):
+        shouldClone = self.shouldPotentiallyClone(troveTup)
+        if shouldClone is not None:
+            return shouldClone
         return self._matchesPrimaryTrove(troveTup, sourceName)
 
     def _matchesPrimaryTrove(self, troveTup, sourceName):
@@ -893,6 +909,12 @@ class CloneChooser(object):
             # on same branch
             return False
         return self.options.updateBuildInfo
+
+    def filesetFileNeedsRewrite(self, troveBranch, targetBranch, fileVersion):
+        targetMap = self.targetMap
+        return (fileVersion.branch() in targetMap or
+            fileVersion.trailingLabel() in targetMap
+            or None in targetMap)
 
     def fileNeedsRewrite(self, troveBranch, targetBranch, fileVersion):
         if fileVersion.depth() == targetBranch.depth():

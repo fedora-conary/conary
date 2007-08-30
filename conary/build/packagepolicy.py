@@ -3071,6 +3071,8 @@ class Requires(_addInfo, _dependency):
 
     def _getPythonRequiresModuleFinder(self, pythonPath, destdir, sysPath, bootstrapPython):
 
+        if self.recipe.isCrossCompiling():
+            return None
         if pythonPath not in self.pythonModuleFinderMap:
             if not bootstrapPython and pythonPath == sys.executable:
                 self.pythonModuleFinderMap[pythonPath] = pydeps.DirBasedModuleFinder(destdir, sysPath)
@@ -3089,6 +3091,12 @@ class Requires(_addInfo, _dependency):
         
         (sysPath, pythonModuleFinder, systemPythonFlags, pythonVersion
         )= self._getPythonRequiresSysPath(path)
+
+        if not pythonModuleFinder:
+            # We cannot (reliably) determine runtime python requirements
+            # in the cross-compile case, so don't even try (for
+            # consistency).
+            return
 
         try:
             if script:
