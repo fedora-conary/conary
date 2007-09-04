@@ -739,12 +739,15 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
         else:
             spec = "tmpGTVL.versionSpec"
         if versionType == self._GTL_VERSION_TYPE_LABEL:
-            coreQdict["spec"] = """JOIN Labels ON
+            coreQdict["spec"] = """JOIN LabelMap ON
+            LabelMap.itemId = Nodes.itemId AND
+            LabelMap.branchId = Nodes.branchId
+        JOIN Labels ON
             Labels.labelId = LabelMap.labelId
             AND Labels.label = %s""" % spec
         elif versionType == self._GTL_VERSION_TYPE_BRANCH:
             coreQdict["spec"] = """JOIN Branches ON
-            Branches.branchId = LabelMap.branchId
+            Branches.branchId = Nodes.branchId
             AND Branches.branch = %s""" % spec
         elif versionType == self._GTL_VERSION_TYPE_VERSION:
             coreQdict["spec"] = """JOIN Versions ON
@@ -759,17 +762,18 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
         # all the time
         where = []
         where.append(
-            "Permissions.userGroupId IN (%s)" % (
+            "ugi.userGroupId IN (%s)" % (
             ", ".join("%d" % x for x in userGroupIds),))
         # "leaves" == Latest ; "all" == Instances
         coreQdict["latest"] = ""
         if latestFilter != self._GET_TROVE_ALL_VERSIONS:
-            coreQdict["latest"] = """JOIN Latest ON
-            Latest.itemId = Nodes.itemId AND
-            Latest.versionId = Nodes.versionId AND
-            Latest.branchId = Nodes.branchId AND
-            Latest.flavorId = Instances.flavorId """
-            where.append("Latest.latestType = :ltype")
+            coreQdict["latest"] = """JOIN LatestCache ON
+            LatestCache.itemId = Nodes.itemId AND
+            LatestCache.versionId = Nodes.versionId AND
+            LatestCache.branchId = Nodes.branchId AND
+            LatestCache.flavorId = Instances.flavorId AND
+            LatestCache.userGroupId = ugi.userGroupId AND
+            LatestCache.latestType = :ltype"""
             argDict["ltype"] = self._latestType(troveTypes)
         elif troveTypes != TROVE_QUERY_ALL:
             if troveTypes == TROVE_QUERY_PRESENT:
@@ -793,18 +797,12 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
         FROM %(trove)s
         JOIN Instances ON
             Items.itemId = Instances.itemId
+        JOIN UserGroupInstancesCache AS ugi ON
+            Instances.instanceId = ugi.instanceId
         JOIN Nodes ON
             Instances.itemId = Nodes.itemId AND
             Instances.versionId = Nodes.versionId
         %(latest)s
-        JOIN UserGroupInstancesCache AS ugi ON
-            Instances.instanceId = ugi.instanceId
-        JOIN Permissions ON
-            Permissions.userGroupId = ugi.userGroupId
-        JOIN LabelMap ON
-            LabelMap.itemId = Nodes.itemId AND
-            LabelMap.branchId = Nodes.branchId AND
-            ( Permissions.labelId = 0 OR Permissions.labelId = LabelMap.labelId )
         %(spec)s
         WHERE %(where)s
         """ % coreQdict
@@ -1011,59 +1009,33 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
     def troveNames(self, authToken, clientVersion, labelStr):
         cu = self.db.cursor()
 
+        
         groupIds = self.auth.getAuthGroups(cu, authToken)
         if not groupIds:
             return {}
 
         if not labelStr:
             cu.execute("""
-                select distinct item from usergroupinstancescache 
-                    join instances using (instanceId)
-                    join items using (itemId)
-                    where usergroupid in (%s)
+            select distinct item
+            from UserGroupInstancesCache as ugi
+            join Instances using (instanceId)
+            join Items using (itemId)
+            where ugi.userGroupId in (%s)
             """ % (",".join("%d" % x for x in groupIds)))
         else:
             cu.execute("""
-                select distinct item from labels
-                    join labelMap using (labelId)
-                    join nodes using (itemId, branchId)
-                    join instances using (itemId, versionId)
-                    join usergroupinstancescache using (instanceId)
-                    join items on
-                        instances.itemId = items.itemId
-                    where
-                        label = ? and
-                        userGroupId in (%s)
+            select distinct item
+            from Labels
+            join LabelMap using (labelId)
+            join Nodes using (itemId, branchId)
+            join Instances using (itemId, versionId)
+            join UserGroupInstancesCache using (instanceId)
+            join Items on Items.itemId = LabelMap.itemId
+            where label = ?
+              and userGroupId in (%s)
             """ % (",".join("%d" % x for x in groupIds)), labelStr)
 
         return [ x[0] for x in cu ]
-
-        groupIds = self.auth.getAuthGroups(cu, authToken)
-        if not groupIds:
-            return {}
-        self.log(2, labelStr)
-        # now get them troves
-        args = [ ]
-        labelQ = ""
-        if labelStr:
-            labelQ = "and Labels.label = ?"
-            args.append(labelStr)
-        query = """
-        select distinct Items.Item
-        from Items
-        join CheckTroveCache as ctc using (itemId)
-        join Permissions on ctc.patternId = Permissions.itemId
-        join LabelMap on
-            (Permissions.labelId = LabelMap.labelId or Permissions.labelId = 0)
-            and Items.itemId = LabelMap.itemId
-        join Labels on LabelMap.labelId = Labels.labelId
-        where Permissions.userGroupId in (%s)
-          and Items.hasTrove = 1
-          %s
-        """ % (",".join("%d" % x for x in groupIds),labelQ)
-        cu.execute(query, args)
-        names = [ x[0] for x in cu ]
-        return names
 
     @accessReadOnly
     def getTroveVersionList(self, authToken, clientVersion, troveSpecs,
@@ -1124,15 +1096,17 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
             Versions.version as version,
             Flavors.flavor as flavor,
             Nodes.timeStamps as timeStamps
-        from UserGroupInstancesCache as ugi
-        join Instances using (instanceId)
-        join Latest using (versionId, itemId, flavorId)
-        join Nodes using (versionId, itemId, branchId)
-        join Items on Instances.itemId = Items.itemId
-        join Flavors on Instances.flavorId = Flavors.flavorId
-        join Versions on Instances.versionId = Versions.versionId
-        where ugi.userGroupId in (%s)
-          and Latest.latestType = %d
+        from LatestCache 
+        join Instances using (itemId, versionId, flavorId)
+        join Nodes on
+            LatestCache.itemId = Nodes.itemId and
+            LatestCache.branchId = Nodes.branchId and
+            LatestCache.versionId = Nodes.versionId
+        join Items on LatestCache.itemId = Items.itemId
+        join Flavors on LatestCache.flavorId = Flavors.flavorId
+        join Versions on LatestCache.versionId = Versions.versionId
+        where LatestCache.userGroupId in (%s)
+          and LatestCache.latestType = %d
         """ % (",".join("%d" % x for x in groupIds), latestType)
         cu.execute(query)
         ret = {}
@@ -2074,7 +2048,7 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
                        start_transaction=False)
         self.db.analyze("tmpNVF")
         if hidden:
-            hiddenClause = ("OR (Instances.isPresent = %d AND ugi.canWrite > 0)"
+            hiddenClause = ("OR (Instances.isPresent = %d AND ugi.canWrite = 1)"
                         % instances.INSTANCE_PRESENT_HIDDEN)
         else:
             hiddenClause = ""
@@ -2098,8 +2072,8 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
         JOIN UserGroupInstancesCache as ugi ON
             Instances.instanceId = ugi.instanceId
         WHERE ugi.userGroupId in (%s)
-        AND Instances.isPresent = ?
-        %s """ % (",".join("%d" % x for x in userGroupIds), hiddenClause)
+        AND (Instances.isPresent = ? %s) """ % (
+            ",".join("%d" % x for x in userGroupIds), hiddenClause)
         cu.execute(query, instances.INSTANCE_PRESENT_NORMAL)
         for (row,) in cu:
             results[row] = True

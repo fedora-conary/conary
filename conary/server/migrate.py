@@ -216,7 +216,6 @@ def rebuildLatest(db, recreate=False):
       and instances.troveType = %(trove)d
     """ % {"type" : versionops.LATEST_TYPE_NORMAL,
            "present" :  instances.INSTANCE_PRESENT_NORMAL,
-           "latest" : versionops.LATEST_TYPE_PRESENT,
            "trove" : trove.TROVE_TYPE_NORMAL, })
     return True
     
@@ -531,34 +530,13 @@ def updateLabelMap(db):
     return True
     
 class MigrateTo_16(SchemaMigration):
-    Version = (16,3)
+    Version = (16,4)
     # migrate to 16.0
     # create a primary key for labelmap
     def migrate(self):
         return updateLabelMap(self.db)
-    # populate the UserGroupInstances map
-    def migrate1(self):
-        schema.createAccessMaps(self.db)
-        if not createCheckTroveCache(self.db):
-            return False
-        if not createUserGroupInstances(self.db):
-            return False
-        return True
-    def migrate2(self):
-        # need to rebuild flavormap
-        logMe(2, "Recreating the FlavorMap table...")
-        cu = self.db.cursor()
-        cu.execute("drop table FlavorMap")
-        self.db.loadSchema()
-        schema.createFlavors(self.db)
-        cu.execute("select flavorId, flavor from Flavors")
-        flavTable = flavors.Flavors(self.db)
-        for (flavorId, flavorStr) in cu.fetchall():
-            flavor = deps.ThawFlavor(flavorStr)
-            flavTable.createFlavorMap(flavorId, flavor, cu)
-        return True
     # move the admin field from Permissions into UserGroups
-    def migrate3(self):
+    def migrate1(self):
         logMe(2, "Relocating the admin field from Permissions to UserGroups...")
         cu = self.db.cursor()
         self.db.loadSchema()
@@ -582,7 +560,43 @@ class MigrateTo_16(SchemaMigration):
         cu.execute("drop table OldPermissions")
         self.db.loadSchema()
         return True
-    
+    def migrate2(self):
+        # need to rebuild flavormap
+        logMe(2, "Recreating the FlavorMap table...")
+        cu = self.db.cursor()
+        cu.execute("drop table FlavorMap")
+        self.db.loadSchema()
+        schema.createFlavors(self.db)
+        cu.execute("select flavorId, flavor from Flavors")
+        flavTable = flavors.Flavors(self.db)
+        for (flavorId, flavorStr) in cu.fetchall():
+            flavor = deps.ThawFlavor(flavorStr)
+            flavTable.createFlavorMap(flavorId, flavor, cu)
+        return True
+    # populate the UserGroupInstances map
+    def migrate3(self):
+        schema.createAccessMaps(self.db)
+        if not createCheckTroveCache(self.db):
+            return False
+        if not createUserGroupInstances(self.db):
+            return False
+        return True
+    # drop the old Latest table and create views instead
+    def migrate4(self):
+        cu = self.db.cursor()
+        self.db.loadSchema()
+        if "Latest" in self.db.tables:
+            cu.execute("drop table Latest")
+        logMe(2, "creating the Latest by role tables...")
+        schema.createLatest(self.db, withIndexes=False)
+        logMe(3, "rebuilding the LatestCache entries...")
+        latest = versionops.LatestTable(self.db)
+        latest.rebuild()
+        logMe(3, "creating the LatestCache indexes...")
+        schema.createLatest(self.db)
+        self.db.analyze("LatestCache")
+        return True
+
 def _getMigration(major):
     try:
         ret = sys.modules[__name__].__dict__['MigrateTo_' + str(major)]
