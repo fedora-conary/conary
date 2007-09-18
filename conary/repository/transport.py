@@ -30,6 +30,8 @@ try:
 except ImportError:
     from StringIO import StringIO
 
+from conary.lib import util
+
 class InfoURL(urllib.addinfourl):
     def __init__(self, fp, headers, url, protocolVersion):
         urllib.addinfourl.__init__(self, fp, headers, url)
@@ -338,7 +340,8 @@ class URLOpener(urllib.FancyURLopener):
             if encoding == 'deflate':
                 # disable until performace is better
                 #fp = DecompressFileObj(fp)
-                fp = StringIO(zlib.decompress(fp.read()))
+                fp = util.decompressStream(fp)
+                fp.seek(0)
 
             protocolVersion = "HTTP/%.1f" % (response.version / 10.0)
             return InfoURL(fp, headers, selector, protocolVersion)
@@ -362,13 +365,17 @@ class URLOpener(urllib.FancyURLopener):
             check = self.abortCheck
         else:
             check = lambda: False
-        sourceFd = h.sock.fileno()
+
+        pollObj = select.poll()
+        pollObj.register(h.sock.fileno(), select.POLLIN)
+
         while True:
             if check():
                 raise AbortError
             # wait 5 seconds for a response
-            l1, l2, l3 = select.select([ sourceFd ], [], [], 5)
-            if not l1:
+            l = pollObj.poll(5000)
+
+            if not l:
                 # still no response from the server.  send a space to
                 # keep the connection alive - in case the server is
                 # behind a load balancer/firewall with short
@@ -419,8 +426,8 @@ class Transport(xmlrpclib.Transport):
     # spew messages once per host.
     failedHosts = set()
 
-    def __init__(self, https = False, entitlementList = None, proxies = None,
-                 serverName = None, extraHeaders = None):
+    def __init__(self, https = False, proxies = None, serverName = None,
+                 extraHeaders = None):
         self.https = https
         self.compress = False
         self.abortCheck = None
@@ -430,6 +437,10 @@ class Transport(xmlrpclib.Transport):
         self.responseHeaders = None
         self.responseProtocol = None
         self.usedProxy = False
+        self.entitlement = None
+
+    def setEntitlements(self, entitlementList):
+        self.entitlements = entitlementList
         if entitlementList is not None:
             l = []
             for entitlement in entitlementList:
@@ -444,6 +455,9 @@ class Transport(xmlrpclib.Transport):
 
         self.proxyHost = None
         self.proxyProtocol = None
+
+    def getEntitlements(self):
+        return self.entitlements
 
     def setExtraHeaders(self, extraHeaders):
         self.extraHeaders = extraHeaders or {}
@@ -526,6 +540,9 @@ class Transport(xmlrpclib.Transport):
         resp = self.parse_response(response)
         rc = ( [ usedAnonymous ] + resp[0], )
 	return rc
+
+    def getparser(self):
+        return util.xmlrpcGetParser()
 
 class AbortError(Exception): pass
 

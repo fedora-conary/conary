@@ -22,7 +22,7 @@ import time
 import types
 
 from conary import files, trove, versions, streams
-from conary.conarycfg import CfgProxy, CfgRepoMap
+from conary.conarycfg import CfgEntitlement, CfgProxy, CfgRepoMap, CfgUserInfo
 from conary.deps import deps
 from conary.lib import log, tracelog, sha1helper, util
 from conary.lib.cfg import *
@@ -284,6 +284,13 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
         elif isinstance(e, errors.RepositoryMismatch):
             return (False, True, (e.__class__.__name__,
                                   e.right, e.wrong))
+        elif isinstance(e, errors.InvalidSourceNameError):
+            return (False, True, (e.__class__.__name__,
+                                  e.name, e.version,
+                                  e.oldSourceItem, e.newSourceItem))
+        elif isinstance(e, errors.EntitlementTimeout):
+            return (False, True, (e.__class__.__name__,
+                                  e.getEntitlements()))
         elif isinstance(e, errors.TroveSchemaError):
             return (False, True, (errors.TroveSchemaError.__name__, str(e),
                                   self.fromTroveTup(e.nvf),
@@ -1976,73 +1983,34 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
                                trove = sourceName,
 			       label = self.toBranch(branch).label()):
 	    raise errors.InsufficientPermission
-        self.log(2, sourceName, branch, clientVersion, fileIds)
-        cu = self.db.cursor()
-        query = """
-        SELECT DISTINCT
-            TroveFiles.pathId, TroveFiles.path, Versions.version,
-            FileStreams.fileId, Nodes.finalTimestamp
-        FROM Instances
-        JOIN Nodes ON
-            Instances.itemid = Nodes.itemId AND
-            Instances.versionId = Nodes.versionId
-        JOIN Branches using (branchId)
-        JOIN Items ON
-            Nodes.sourceItemId = Items.itemId
-        JOIN TroveFiles ON
-            Instances.instanceId = TroveFiles.instanceId
-        JOIN Versions ON
-            TroveFiles.versionId = Versions.versionId
-        INNER JOIN FileStreams ON
-            TroveFiles.streamId = FileStreams.streamId
-        JOIN tmpFilePrefixes ON
-            TroveFiles.path LIKE tmpFilePrefixes.prefix
-        WHERE
-            Items.item = ? AND
-            Branches.branch = ?
-        ORDER BY
-            Nodes.finalTimestamp DESC
-        """
-
-        schema.resetTable(cu, 'tmpFilePrefixes')
-        if filePrefixes is None:
-            # Will look for anything - gets expanded as "LIKE '%'" which is a
-            # bit lame
-            filePrefixes = ['']
-        cu.executemany("INSERT INTO tmpFilePrefixes (prefix) VALUES (?)",
-                       ( f + '%' for f in filePrefixes ),
-                       start_transaction=False)
-        self.db.analyze("tmpFilePrefixes")
-        cu.execute(query, sourceName, branch)
-        ids = {}
-        for (pathId, path, version, fileId, timeStamp) in cu:
-            encodedPath = self.fromPath(path)
-            if not encodedPath in ids:
-                ids[encodedPath] = (self.fromPathId(pathId),
-                                   version,
-                                   self.fromFileId(fileId))
-        if not fileIds:
-            return ids
-
-        fileIds = base64.b64decode(fileIds)
-
-        # Length of a fileId - same as len of sha1
-        fileIdLen = 20
-        assert(len(fileIds) % fileIdLen == 0)
-        fileIdCount = len(fileIds) // fileIdLen
-
-        def splitFileIds(cu):
+        # decode the fileIds to check before doing heavy work
+        if fileIds:
+            fileIds = base64.b64decode(fileIds)
+        else:
+            fileIds = ""
+        def splitFileIds(fileIds):
+            fileIdLen = 20
+            assert(len(fileIds) % fileIdLen == 0)
+            fileIdCount = len(fileIds) // fileIdLen
             for i in range(fileIdCount):
                 start = fileIdLen * i
                 end = start + fileIdLen
-                yield cu.binary(fileIds[start : end])
+                yield fileIds[start : end]
+        # fileIds need to unique at for performance reasons
+        fileIds = set(splitFileIds(fileIds))
+        self.log(2, sourceName, branch, filePrefixes, fileIds)
+        cu = self.db.cursor()
 
-        schema.resetTable(cu, 'tmpFileId')
-        cu.executemany("INSERT INTO tmpFileId (fileId) VALUES (?)", splitFileIds(cu),
-                       start_transaction=False)
-        self.db.analyze("tmpFileId")
-        
-        # Fetch paths by file id too
+        prefixQuery = ""
+        if filePrefixes:
+            schema.resetTable(cu, 'tmpFilePrefixes')
+            cu.executemany("INSERT INTO tmpFilePrefixes (prefix) VALUES (?)",
+                           ( f + '%' for f in filePrefixes ),
+                           start_transaction=False)
+            self.db.analyze("tmpFilePrefixes")
+            prefixQuery = """JOIN tmpFilePrefixes ON
+            TroveFiles.path LIKE tmpFilePrefixes.prefix """
+
         query = """
         SELECT DISTINCT
             TroveFiles.pathId, TroveFiles.path, Versions.version,
@@ -2058,27 +2026,32 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
             Instances.instanceId = TroveFiles.instanceId
         JOIN Versions ON
             TroveFiles.versionId = Versions.versionId
-        INNER JOIN FileStreams ON
+        JOIN FileStreams ON
             TroveFiles.streamId = FileStreams.streamId
-        JOIN tmpFileId ON
-            FileStreams.fileId = tmpFileId.fileId
+        %s
         WHERE
             Items.item = ? AND
             Branches.branch = ?
         ORDER BY
             Nodes.finalTimestamp DESC
-        """
+        """ % (prefixQuery,)
 
-        cu.execute(query, sourceName, branch)
-
-        newids = {}
+        cu.execute(query, (sourceName, branch))
+        ids = {}
         for (pathId, path, version, fileId, timeStamp) in cu:
             encodedPath = self.fromPath(path)
-            if not encodedPath in newids:
-                newids[encodedPath] = (self.fromPathId(pathId),
-                                       version,
-                                       self.fromFileId(fileId))
-        ids.update(newids)
+            currVal = ids.get(encodedPath, None)
+            newVal = (cu.frombinary(pathId), version, cu.frombinary(fileId))
+            if currVal is None:
+                ids[encodedPath] = newVal
+                continue
+            # if we already had a value set, we prefer to use the one
+            # that has a fileId in the set we were sent
+            if newVal[2] in fileIds and not (currVal[2] in fileIds):
+                ids[encodedPath] = newVal
+        # prepare for return
+        ids = dict([(k, (self.fromPathId(v[0]), v[1], self.fromFileId(v[2])))
+                    for k,v in ids.iteritems()])
         return ids
 
     @accessReadOnly
@@ -3190,6 +3163,8 @@ class ServerConfig(ConfigFile):
     closed                  = CfgString
     commitAction            = CfgString
     contentsDir             = CfgPath
+    deadlockRetry           = (CfgInt, 5)
+    entitlement             = CfgEntitlement
     entitlementCheckURL     = CfgString
     externalPasswordURL     = CfgString
     forceSSL                = CfgBool
@@ -3205,4 +3180,4 @@ class ServerConfig(ConfigFile):
     staticPath              = (CfgPath, '/conary-static')
     tmpDir                  = (CfgPath, '/var/tmp')
     traceLog                = tracelog.CfgTraceLog
-    deadlockRetry           = (CfgInt, 5)
+    user                    = CfgUserInfo
