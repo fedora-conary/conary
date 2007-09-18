@@ -1,4 +1,8 @@
 Changes in @NEW@:
+  o Server Changes
+    * External entitlement servers can now specify per-entitlement
+      timeouts and automatic retry values (CNY-2060)
+
   o Other Changes
     * InodeStreams and FileStreams now preserve unknown elements, allowing
       future additions to those without breaking fileId computation (CNY-1971)
