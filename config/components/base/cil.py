@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2004-2007 rPath, Inc.
+# Copyright (c) 2007 rPath, Inc.
 #
 # This program is distributed under the terms of the Common Public License,
 # version 1.0. A copy of this license should have been distributed with this
@@ -12,35 +12,8 @@
 # full details.
 #
 
-python_files = __init__.py	\
-		accessmap.py	\
-		cacheset.py	\
-		calllog.py	\
-		cltable.py	\
-		deptable.py	\
-		flavors.py	\
-		fsrepos.py	\
-		__init__.py	\
-		instances.py	\
-		items.py	\
-		keytable.py	\
-                netauth.py	\
-		netserver.py	\
-		proxy.py	\
-		troveinfo.py	\
-		trovestore.py	\
-		versionops.py
+# Note that cil components have %(lib)s in them; we depend on the
+# NonMultilibComponent policy to ensure that cil is multilib-safe.
 
-extra_dist = Makefile
-dist_files = $(python_files) $(extra_dist)
-
-all: default-all
-
-install: pyfiles-install
-
-dist: default-dist
-
-clean: default-clean
-
-include ../../../Make.rules
-
+filters = ('cil', ('%(prefix)s/(%(lib)s|lib)/(mono|[^/]*-sharp-[^/]*)/', ))
+precedes = ('devellib', 'lib', 'devel')
