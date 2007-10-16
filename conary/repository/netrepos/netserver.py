@@ -220,6 +220,8 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
         attempt = 1
         # nested try:...except statements.... Yeeee-haaa!
         while True:
+            exceptionOverride = None
+
             try:
                 # the first argument is a version number
                 try:
@@ -258,15 +260,18 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
             if isinstance(e, HiddenException):
                 self.callLog.log(remoteIp, authToken, methodname, orderedArgs,
                                  kwArgs, exception = e.forLog)
-                e = e.forReturn
+                exceptionOverride = e.forReturn
             else:
                 self.callLog.log(remoteIp, authToken, methodname, orderedArgs,
                                  kwArgs, exception = e)
 
         if isinstance(e, sqlerrors.DatabaseLocked):
-            e = RepositoryLocked()
+            exceptionOverride = errors.RepositoryLocked()
 
-        raise e
+        if exceptionOverride:
+            raise exceptionOverride
+
+        raise
 
     def urlBase(self, urlName = True):
         if urlName and self._baseUrlOverride:
@@ -544,7 +549,7 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
             raise errors.InsufficientPermission
         self.ugo.addTroveAccess(userGroup, troveList, recursive=True)
         return ""
-    
+
     @accessReadWrite
     def deleteTroveAccess(self, authToken, clientVersion, userGroup, troveList):
         if not self.auth.authCheck(authToken, admin = True):
@@ -982,13 +987,22 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
         return troveVersions
 
     @accessReadOnly
-    def troveNames(self, authToken, clientVersion, labelStr):
+    def troveNames(self, authToken, clientVersion, labelStr,
+                   troveTypes = TROVE_QUERY_ALL):
         cu = self.db.cursor()
 
-        
         groupIds = self.auth.getAuthGroups(cu, authToken)
         if not groupIds:
             return {}
+
+        if troveTypes == TROVE_QUERY_PRESENT:
+            troveTypeClause = \
+                'and Instances.troveType != %d' % trove.TROVE_TYPE_REMOVED
+        elif troveTypes == TROVE_QUERY_NORMAL:
+            troveTypeClause = \
+                'and Instances.troveType == %d' % trove.TROVE_TYPE_NORMAL
+        else:
+            troveTypeClause = ''
 
         if not labelStr:
             cu.execute("""
@@ -998,7 +1012,9 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
             join Items using (itemId)
             where ugi.userGroupId in (%s)
               and Items.hasTrove = 1
-            """ % (",".join("%d" % x for x in groupIds)))
+              %s
+            """ % (",".join("%d" % x for x in groupIds),
+                   troveTypeClause))
         else:
             cu.execute("""
             select distinct item
@@ -1011,8 +1027,9 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
             where label = ?
               and userGroupId in (%s)
               and Items.hasTrove = 1
-            """ % (",".join("%d" % x for x in groupIds)), labelStr)
-
+              %s
+            """ % (",".join("%d" % x for x in groupIds), troveTypeClause),
+                       labelStr)
         return [ x[0] for x in cu ]
 
     @accessReadOnly
@@ -1728,7 +1745,7 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
         # Figure out what to return back
         if isinstance(e, sqlerrors.DatabaseLocked):
             # too many retries
-            raise errors.CommitError("DeadlockError", e.args)
+            raise errors.RepositoryLocked()
         raise
 
     def _commitChangeSet(self, authToken, cs, mirror = False, hidden = False):
@@ -1893,10 +1910,6 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
         # In practical terms, this means that we could jump several revisions
         # back in a file's history.
         # Added as part of protocol version 42
-	if not self.auth.check(authToken, write = False,
-                               trove = sourceName,
-			       label = self.toBranch(branch).label()):
-	    raise errors.InsufficientPermission
         # decode the fileIds to check before doing heavy work
         if fileIds:
             fileIds = base64.b64decode(fileIds)
@@ -1914,6 +1927,8 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
         fileIds = set(splitFileIds(fileIds))
         self.log(2, sourceName, branch, filePrefixes, fileIds)
         cu = self.db.cursor()
+
+        userGroupIds = self.auth.getAuthGroups(cu, authToken)
 
         prefixQuery = ""
         if filePrefixes:
@@ -1936,6 +1951,8 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
         JOIN Branches using (branchId)
         JOIN Items ON
             Nodes.sourceItemId = Items.itemId
+        JOIN UserGroupInstancesCache as ugi ON
+            Instances.instanceId = ugi.instanceId
         JOIN TroveFiles ON
             Instances.instanceId = TroveFiles.instanceId
         JOIN Versions ON
@@ -1945,10 +1962,11 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
         %s
         WHERE
             Items.item = ? AND
-            Branches.branch = ?
+            Branches.branch = ? AND
+            ugi.userGroupId in (%s)
         ORDER BY
             Nodes.finalTimestamp DESC
-        """ % (prefixQuery,)
+        """ % (prefixQuery, ",".join("%d" % x for x in userGroupIds))
 
         cu.execute(query, (sourceName, branch))
         ids = {}
