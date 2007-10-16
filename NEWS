@@ -1,3 +1,8 @@
+Changes in @NEW@:
+  o Bug Fixes:
+    * A bug that resulted in a KeyError when removing a trove from a
+      group that has 3 levels of subgroups has been fixed. (CNY-1372)
+
 Changes in 1.2.4:
   o Bug Fixes:
     * A file that was mistakenly ommitted from packaging has been
@@ -5,8 +10,8 @@ Changes in 1.2.4:
 
 Changes in 1.2.3:
   o Build Changes:
-    * addSvnSnapshot() now has the ability to add specific SVN
-      revisions via the 'revision' argument.
+    * The addSvnSnapshot() source action now has the ability to add
+      specific SVN revisions via the 'revision' argument.
   o Bug Fixes:
     * An update failure that would occur when two versions of a package
       have been installed, one local, one from a repository, has been
