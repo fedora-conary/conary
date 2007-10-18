@@ -1,15 +1,107 @@
 Changes in @NEW@:
+  o Bug Fixes:
+    * A bug that resulted in a KeyError when removing a trove from a
+      group that has 3 levels of subgroups has been fixed. (CNY-1372)
+    * A bug that could result in a decremented source count when promoting
+      a package to a sibling of a parent branch has been fixed. (CNY-2108)
+
+Changes in 1.2.4:
+  o Bug Fixes:
+    * A file that was mistakenly ommitted from packaging has been
+      added to the build. (CNY-2155)
+
+Changes in 1.2.3:
   o Build Changes:
-    * A bug which caused Conary to incorrectly determine the flags
-      for python dependencies on 64-bit systems has been fixed.
-      (CNY-2091)
-    * Added addGitSnapshot (CNY-1965)
+    * The addSvnSnapshot() source action now has the ability to add
+      specific SVN revisions via the 'revision' argument. (CNY-2156)
+  o Bug Fixes:
+    * An update failure that would occur when two versions of a package
+      have been installed, one local, one from a repository, has been
+      fixed. (CNY-2127)
+    * A regression introduced in 1.2.1 affecting patch files that apply
+      multiple changes to the same file has been fixed. (CNY-2141)
+    * Group scripts now have file descriptor 0 (stdin) connected to
+      /dev/null. Previously, stdin was closed, a potential problem
+      for scripts that open file descriptors and then disconnect from
+      the terminal. (CNY-2143)
+
+  o Client Changes:
+    * Added listkeys, addkey, and getkey commands to cvc for basic
+      command line PGP key management. (CNY-2150)
+
+Changes in 1.2.2:
+  o Build Changes:
+    * Python and Ruby dependencies with lib-specific flags now cause
+      the package to be architecture-flavored. (CNY-2110)
+    * Groups using setSearchPath now prefer packages on the labels and
+      troves listed explicitly in the searchPath over other labels,
+      even if the label is specified in the add() command. For example,
+      if your searchPath includes foo=conary.rpath.com@rpl:1/1-1-1, then
+      r.add('foo', 'conary.rpath.com@rpl:1') in a group recipe will now
+      find version 1-1-1 over later versions. Before, it would find the
+      latest version in the repository if you specified the label in the
+      r.add() command. (CNY-1993)
+
+  o Client Changes:
+    * The conary command line now accepts 'rb' as an alias for
+      'rollback'.
+    * The output of 'rblist' now combines packages and their components
+      in a single line (similar to the output of 'update'). (CNY-2134)
+
+  o Bug Fixes:
+    * When parsing the GPG keyring, PGP version 2 keys are now ignored.
+      (CNY-2115)
+    * Direct key signatures for PGP keys are now accepted. (CNY-2120)
+    * Source control recipe actions such as addMercurialSnapshot()
+      no longer produce directory names that can collide with
+      a trove with the same name on a different label, producing
+      a snapshot of a different source control repository. (CNY-2124)
+    * Tag scripts are now closing file descriptors larger than 2
+      before calling a function from the exec family. (CNY-2114)
+    * A bug in determining the correct version for packages when
+      multiple branches of that package exist on the same label has
+      been fixed. (CNY-2128)
+    * Multiple entitlements to the same host name are now properly
+      handled. (CNY-2105)
+    * The URL sent back to the client when connecting through an
+      HTTP proxy is now correctly computed by repositories. (CNY-2117)
+    * setSearchPath now searches the leaves for every source in the
+      search path before falling back and searching the rest of the
+      repository. Before, it would search the leaves for each label,
+      then the rest of the labels, and finally groups. (CNY-2131)
+
+Changes in 1.2.1:
+  o Build Changes:
+    * The addGitSnapshot() source action is now available. (CNY-1965)
+    * Cooking derived packages no longer warns about their
+      experimental state. (CNY-2092)
+    * loadInstalled does not search the local database for a matching
+      package on checkin, but instead searches the repository. This
+      makes it easier to develop packages that are correct, with the
+      potential of not building on the current machine. (CNY-2027)
+
+  o Client Changes:
+    * The Conary client is now less aggressive in sending keepalive
+      packets with long-running requests. (CNY-2104)
+    * Promote and clone callbacks are more verbose. (CNY-2063)
 
   o Bug Fixes:
     * Schema migration for the Latest table now correctly handles
       branches that end in redirects. (CNY-2081)
     * Adding a large number of user maps is now more efficient
       if the new addServerGlobs method is used. (CNY-2083)
+    * Redirects between branches on the same label, which were
+      necessary before Conary 1.2.0, are again handled correctly.
+      (CNY-2103)
+    * The 'conary updateall' command again properly handles the
+      --replace-files command-line argument. (CNY-2112)
+    * Patches are no longer partially applied when building. A
+      partially applying patch results now in a failure. (CNY-2017)
+    * A bug which caused Conary to incorrectly determine the flags
+      for python dependencies on 64-bit systems has been fixed.
+      (CNY-2091)
+    * Ruby dependencies now function properly in a bootstrap build
+      of the ruby package. (CNY-2109)
 
 Changes in 1.2.0:
   o Build Changes:
@@ -42,7 +134,7 @@ Changes in 1.1.96:
       that is not available on the system or in the builddir.  It will
       print a warning and not attempt to compute dependency information
       for those files. (CNY-2050)
-    * loadSuperClass and loadInstalled now print out name, version 
+    * loadSuperClass and loadInstalled now print out name, version
       flavor of the package that was used when loading. (CNY-1967)
 
   o Bug Fixes:
@@ -64,9 +156,9 @@ Changes in 1.1.96:
       the return URL. (CNY-2069)
     * The client is now properly computing the downloaded file's
       digest if a size limit was specified. (CNY-2072)
-    * A regression from Conary 1.1.94 that caused some local cooks to fail  
-      to be installable due to incorrect primary trove information has 
-      been fixed (CNY-2078)
+    * A regression from Conary 1.1.94 that caused some local cooks to
+      fail to be installable due to incorrect primary trove information
+      has been fixed (CNY-2078)
 
   o Other Changes
     * InodeStreams and FileStreams now preserve unknown elements,

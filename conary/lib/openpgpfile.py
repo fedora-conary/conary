@@ -492,7 +492,6 @@ def getFingerprints(keyRing):
 def parseAsciiArmorKey(asciiData):
     data = StringIO(asciiData)
     nextLine=' '
-
     try:
         while(nextLine[0] != '-'):
             nextLine = data.readline()
@@ -500,7 +499,7 @@ def parseAsciiArmorKey(asciiData):
             nextLine = data.readline()
         buf = ""
         nextLine = data.readline()
-        while(nextLine[0] != '='):
+        while(nextLine[0] != '=' and nextLine[0] != '-'):
             buf = buf + nextLine
             nextLine = data.readline()
     except IndexError:
@@ -681,7 +680,11 @@ class PGP_Message(object):
         """Iterate over main keys"""
         for pkt in self.iterPackets():
             if isinstance(pkt, PGP_MainKey):
-                pkt.initSubPackets()
+                try:
+                    pkt.initSubPackets()
+                except InvalidBodyError:
+                    # Skip this key
+                    continue
                 yield pkt
 
     def iterByKeyId(self, keyId):
@@ -2015,7 +2018,7 @@ class PGP_MainKey(PGP_Key):
             if not isinstance(pkt, PGP_Signature):
                 continue
             pkt.parse()
-            if pkt.sigType == SIG_TYPE_KEY_REVOC:
+            if pkt.sigType in (SIG_TYPE_KEY_REVOC, SIG_TYPE_DIRECT_KEY):
                 # Key revocation
                 # No circular reference here, setParentPacket does a clone
                 pkt.setParentPacket(self)
@@ -2674,7 +2677,10 @@ def newKeyFromStream(stream):
         return None
     if not isinstance(pkt, PGP_MainKey):
         return None
-    pkt.initSubPackets()
+    try:
+        pkt.initSubPackets()
+    except InvalidBodyError:
+        return None
     return pkt
 
 
