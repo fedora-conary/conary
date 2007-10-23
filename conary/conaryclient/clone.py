@@ -1177,10 +1177,26 @@ class LeafMap(object):
         # the last shadow count is not allowed to be a 0
         if [ x for x in revision.getSourceCount().iterCounts() ][-1] == 0:
             desiredVersion.incrementSourceCount()
+        # if 1-3.6 exists we don't want to be created 1-3.5.
+        matchingUpstream = [ x.trailingRevision()
+                             for x in targetBranchVersionList
+                             if (x.trailingRevision().getVersion()
+                                 == revision.getVersion()) ]
+        if matchingUpstream:
+            def _sourceCounts(revision):
+                return list(revision.getSourceCount().iterCounts())
+            revisionCount = _sourceCounts(revision)[:-1]
+            matchingShadowCounts = [ x for x in matchingUpstream
+                                     if _sourceCounts(x)[:-1] == revisionCount ]
+            if matchingShadowCounts:
+                latest = sorted(matchingShadowCounts, key=_sourceCounts)[-1]
+                if (revision in matchingShadowCounts
+                    or _sourceCounts(latest) > _sourceCounts(revision)):
+                    revision = latest.copy()
+                    desiredVersion = targetBranch.createVersion(revision)
+                    desiredVersion.incrementSourceCount()
 
-        while desiredVersion in targetBranchVersionList:
-            desiredVersion.incrementSourceCount()
-
+        assert(not desiredVersion in targetBranchVersionList)
         return desiredVersion
 
     def createBinaryVersion(self, repos, binaryList, sourceVersion):
