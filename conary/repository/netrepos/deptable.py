@@ -109,8 +109,10 @@ class DependencyTables:
         #    check)
         # 3. filter only the instanceIds the user has access to
         query = """
-        select tmpDepNum.idx, tmpDepNum.depNum,
-            item, flavor, version, Nodes.timeStamps
+        select distinct
+            tmpDepNum.idx as idx, tmpDepNum.depNum as depNum,
+            Items.item, flavor, version, Nodes.timeStamps,
+            Nodes.finalTimestamp as finalTimestamp
         from tmpDepNum
         join ( 
             select 
@@ -123,7 +125,8 @@ class DependencyTables:
             join Provides using(depId)
             group by tmpDeps.idx, tmpDeps.depNum, Provides.instanceId
         ) as DepSelect using(idx, depNum, flagCount)
-        join Instances using(instanceId)
+        join Instances on
+            Instances.instanceId = DepSelect.instanceId
         join Nodes using(itemId, versionId) """    
 
         where = ["ugi.userGroupId in (%s)" % (
@@ -133,7 +136,8 @@ class DependencyTables:
             self._setupTroveList(cu, troveList)
             query += """
             join tmpInstances as ti on ti.instanceId = Instances.instanceId
-            join UserGroupInstancesCache as ugi using(instanceId) """
+            join UserGroupInstancesCache as ugi on
+                ugi.instanceId = ti.instanceId """
         else:
             if leavesOnly:
                 query += """
@@ -159,20 +163,35 @@ class DependencyTables:
         join Versions on Instances.versionId = Versions.versionId
         join Flavors on Instances.flavorId = Flavors.flavorId
         where %s
-        order by idx, depNum, Nodes.finalTimestamp desc """ % (
-            " and ".join(where), )
+        order by idx, depNum, finalTimestamp desc """ % (
+            " and ".join(where))
         cu.execute(query, args)
 
+        # sqlite version 3.2.2 have trouble sorting correctly the
+        # results from the previous query. If we're running on sqlite,
+        # we take the hit here and resort the results in Python...
+        if self.db.driver == "sqlite":
+            # order by idx, depNum, finalTimestamp desc
+            retList = sorted(cu, key = lambda a: (a[0], a[1], -a[6]))
+        else:
+            retList = cu
+            
         ret = {}
-        for (depId, depNum, troveName, flavorStr, versionStr, timeStamps) in cu:
+        for (depId, depNum, troveName, flavorStr, versionStr, timeStamps, ft) in retList:
             retd = ret.setdefault(depId, [{} for x in xrange(depNums[depId])])
             # remember the first version of each (n,f) tuple for each query
             retd[depNum].setdefault((troveName, flavorStr), (versionStr, timeStamps))
-        result = {}
+        ret2 = {}
         for depId, depDictList in ret.iteritems():
             key = requires[depSetList[depId]]
-            retList = result.setdefault(key, [ [] for x in xrange(len(depDictList)) ])
+            retList = ret2.setdefault(key, [ [] for x in xrange(len(depDictList)) ])
             for i, depDict in enumerate(depDictList):
                 retList[i] = [ (trv[0], versions.strToFrozen(ver[0], ver[1].split(":")),
                                 trv[1]) for trv, ver in depDict.iteritems() ]
+        # fill in the result dictionary for the values we have not resolved deps for
+        result = {}
+        for depId, depSet in enumerate(depSetList):
+            result.setdefault(requires[depSet],
+                              [ [] for x in xrange(depNums[depId])])
+        result.update(ret2)
         return result
