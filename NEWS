@@ -59,6 +59,16 @@ o Protocol Changes:
     * Protocol allows passing keyword arguments for exceptions (CNY-747)
     * No longer include useAnonymous flag in return value
 
+Changes in @NEW@:
+  o Build Changes:
+    * Fixed a traceback that would occur where a component doesn't exist
+      even though its containing package does.  (CNY-2213)
+    * The cvc command now prints out the most recent log message from
+      the underlying source code control system when creating new
+      snapshot archives. (CNY-1778)
+    * Conary now has support for cmake, using the "r.CMake" class recipe.
+      (CNY-1321)
+
 Changes in 1.2.6:
   o Build Changes:
     * When cooking packages or groups, conary now displays the methods
