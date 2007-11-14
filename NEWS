@@ -60,6 +60,12 @@ o Protocol Changes:
     * No longer include useAnonymous flag in return value
 
 Changes in @NEW@:
+  o Client Changes:
+    * Conary now allows a biarch system to have one flavor that expresses
+      both the x86 and x86_64 support.  The flavorPreferences configuration
+      option informs conary to prefer x86_64 packages. This change allows
+      group building to automatically resolve x86 packages. (CNY-525)
+
   o Build Changes:
     * The cvc command now prints out the most recent log message from
       the underlying source code control system when creating new
