@@ -58,9 +58,17 @@ Changes in 2.0.0:
       available (during a promote or shadow, for example) with one query
       (CNY-2053)
 
-o Protocol Changes:
+  o Protocol Changes:
     * Protocol allows passing keyword arguments for exceptions (CNY-747)
     * No longer include useAnonymous flag in return value
+
+  o Internal Changes:
+    * The Conary library now has a parallel implementation to gpg
+      for the trust algorithm. (CNY-1988)
+
+  o Bug Fixes:
+    * A problem occurring when updating troves with sharing a large
+      number of identical files has been fixed. (CNY-2273)
 
 Changes in 1.2.7:
   o Build Changes:
