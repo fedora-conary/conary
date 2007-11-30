@@ -69,3 +69,33 @@ class RepositoryCallLogger(calllog.AbstractCallLogger):
                                 methodName, args, kwArgs, exception,
                                 latency))
         os.write(self.logFd, struct.pack("!I", len(logStr)) + logStr)
+
+    def __iter__(self):
+        fd = os.open(self.path, os.O_RDONLY)
+        size = os.fstat(fd).st_size
+        if size == 0:
+            raise StopIteration
+        map = mmap.mmap(fd, size, access = mmap.ACCESS_READ)
+        i = 0
+        while i < size:
+            length = struct.unpack("!I", map[i: i + 4])[0]
+            i += 4
+            yield self.EntryClass(cPickle.loads(map[i:i + length]))
+            i += length
+
+        os.close(fd)
+
+    def getEntry(self):
+        size = struct.unpack("!I", os.read(self.logFd, 4))[0]
+        return self.EntryClass(cPickle.loads(os.read(self.logFd, size)))
+
+    def follow(self):
+        where = os.lseek(self.logFd, 0, 2)
+        while True:
+            size = os.fstat(self.logFd).st_size
+            while where < size:
+                yield self.getEntry()
+                where = os.lseek(self.logFd, 0, 1)
+
+            time.sleep(1)
+

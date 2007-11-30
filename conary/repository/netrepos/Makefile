@@ -26,6 +26,7 @@ python_files = __init__.py	\
                 netauth.py	\
 		netserver.py	\
 		proxy.py	\
+		reposlog.py	\
 		troveinfo.py	\
 		trovestore.py	\
 		versionops.py
