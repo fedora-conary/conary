@@ -72,6 +72,11 @@ Changes in 2.0.0:
     * Protocol allows passing keyword arguments for exceptions (CNY-747)
     * No longer include useAnonymous flag in return value
 
+Changes in 1.2.9:
+  o Client Changes:
+    * Added keepRequired config option that has the same effect as always 
+      setting the --keep-required flag on update. (CNY-569)
+
 Changes in 1.2.8:
   o Client Changes:
     * Added the cvc derive command. (CNY-2237)
