@@ -81,7 +81,7 @@ Changes in 2.0.0:
     * Many repository permission manipulation methods have been
       renamed for consistency.  For a list, see PROTOCOL.versions. (CNY-2298)
 
-Changes in @NEW@:
+Changes in 1.2.10:
   o Client Changes:
     * The command line interface to cvc derive (added in Conary 1.2.8)
       has been changed.  It now derives onto your buildLabel by default,
