@@ -205,7 +205,7 @@ def rebuildLatest(db, recreate=False):
     return True
     
 class MigrateTo_15(SchemaMigration):
-    Version = (15, 9)
+    Version = (15, 10)
     def updateLatest(self):
         return rebuildLatest(self.db, recreate=True)
 
@@ -471,6 +471,10 @@ class MigrateTo_15(SchemaMigration):
     def migrate9(self):
         # we make this a noop since schema version 16 changes all this anyway
         return True
+    # 15.10 - create the lock table(s)
+    def migrate10(self):
+        # we make this a noop because the same will be done at schema 16.1
+        return True
     
 # populate the CheckTroveCache table
 def createCheckTroveCache(db):
@@ -622,7 +626,7 @@ class MigrateTo_16(SchemaMigration):
         self.db.loadSchema()
         schema.createLockTables(self.db)
         return True
-    
+
 def _getMigration(major):
     try:
         ret = sys.modules[__name__].__dict__['MigrateTo_' + str(major)]
