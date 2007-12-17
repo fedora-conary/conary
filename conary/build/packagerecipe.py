@@ -76,38 +76,73 @@ class _policyUpdater:
     def __call__(self, *args, **keywords):
 	self.theobject.updateArgs(*args, **keywords)
 
-def clearBuildReqs(*buildReqs):
+def clearBuildRequires(*buildReqs):
     """ Clears inherited build requirement lists of a given set of packages,
         or all packages if none listed.
     """
     _clearReqs('buildRequires', buildReqs)
 
-def clearCrossReqs(*crossReqs):
+def clearBuildReqs(*buildReqs):
+    #log.warning('clearBuildReqs() is deprecated.  Use clearBuildRequires()')
+    clearBuildRequires(*buildReqs)
+
+def clearCrossRequires(*crossReqs):
     """ Clears inherited build requirement lists of a given set of packages,
         or all packages if none listed.
     """
     _clearReqs('crossRequires', crossReqs)
 
-def _clearReqs(attrName, reqs):
-    def _removePackages(class_, pkgs):
-        if not pkgs:
-            setattr(class_, attrName, [])
-        else:
-            for pkg in pkgs:
-                if pkg in getattr(class_, attrName):
-                    getattr(class_, attrName).remove(pkg)
+def clearCrossReqs(*crossReqs):
+    #log.warning('clearCrossReqs() is deprecated.  Use clearCrossRequires()')
+    clearCrossRequires(*crossReqs)
 
-    callerGlobals = inspect.stack()[2][0].f_globals
+def _clearReqs(attrName, reqs):
+    # walk the stack backwards until we find the frame
+    # that looks like a recipe frame.  loadrecipe sets up
+    # a __localImportModules dictionary in the global space
+    # of the module that is created for the recipe.  PackageRecipe
+    # should also be a global in the frame.
+    # First get the stack
+    stack = inspect.stack()
+    # now get the innermost frame, which is the first element of
+    # the stack list.
+    frame = stack.pop(0)[0]
+    while stack:
+        callerGlobals = frame.f_globals
+        if ('PackageRecipe' in callerGlobals
+            and '__localImportModules' in callerGlobals):
+            # if we have PackageRecipe and __localImportModules, we
+            # found the most likely candidate for the recipe frame
+            break
+        # try the next frame up
+        frame = stack.pop(0)[0]
+    if not stack:
+        raise RuntimeError('unable to determine the frame that is '
+                           'creating the recipe class')
+    # get a list of all classes that are derived from AbstractPackageRecipe
     classes = []
     for value in callerGlobals.itervalues():
         if inspect.isclass(value) and issubclass(value, AbstractPackageRecipe):
             classes.append(value)
 
+    # define a convenience function for removing buildReqs from a list
+    # or clearing them.
+    def _removePackages(class_, pkgs):
+        # if no specific buildReqs were mentioned to remove, remove them all
+        if not pkgs:
+            setattr(class_, attrName, [])
+            return
+        # get the set of packages to remove
+        buildReqs = set(getattr(class_, attrName))
+        remove = set(pkgs)
+        buildReqs = buildReqs - remove
+        setattr(class_, attrName, list(buildReqs))
+
     for class_ in classes:
         _removePackages(class_, reqs)
 
         for base in inspect.getmro(class_):
-            if issubclass(base, AbstractPackageRecipe):
+            if issubclass(base, AbstractPackageRecipe) and base not in classes:
                 _removePackages(base, reqs)
 
 crossFlavor = deps.parseFlavor('cross')
