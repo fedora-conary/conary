@@ -24,6 +24,8 @@ Changes in @NEW@:
       flag. (CNY-2345)
     * the searchPath parameter to groups now works when it contains
       packages (before it only worked with labels). (CNY-2372)
+    * A bug that was preventing users with colons in their passwords
+      to use the web interface has been fixed. (CNY-2374)
 
 Changes in 1.2.10:
   o Client Changes:
