@@ -930,6 +930,9 @@ class NetworkAuthorization:
 
         entClassId = self.__checkEntitlementOwner(cu, roleIds, entClass)
 
+        if entGroupId == -1:
+            raise errors.UnknownEntitlementGroup
+
         # check for duplicates
         cu.execute("SELECT * FROM Entitlements WHERE entGroupId = ? AND entitlement = ?",
                    (entClassId, entKey))
