@@ -9,6 +9,10 @@ Changes in 2.0.3:
     * When building packages, Conary now reads /etc/ld.so.conf.d/*.conf
       files to determine whether to include the path in the dependency.
       (CNY-2433)
+    * The /etc/ld.so.conf.d/*.conf handling added to Conary 1.2.13
+      introduced a bug that could erase necessary entries from
+      ld.so.conf in some circumstances.  This bug has been
+      resolved. (CNY-2440)
     * Spaces in URLs are now automatically escaped. (CNY-2389)
     * The Requires() policy now inspects Lib: and Lib.private:
       pkg-config keywords in .pc files to find library files, and
