@@ -16,6 +16,9 @@ Changes in @NEW@:
     * Fixed a bug when that caused a traceback when moving an unmodified 
      shadow to tip via promoting. (CNY-2441)
     * Don't modify cfg.tmpDir when calling addSvnSnapshot (CNY-2401)
+    * Fixed a rare bug in which dependency resolution would fail when
+      a dependency that used to be provided by one installed package
+      is now provided by two new packages. (CNY-2459)
 
 Changes in 2.0.3:
   o Build Changes:
