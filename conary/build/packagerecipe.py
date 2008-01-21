@@ -55,8 +55,8 @@ def loadMacros(paths):
         compiledPath = path+'c'
         deleteCompiled = not util.exists(compiledPath)
         macroModule = imp.load_source('tmpmodule', path)
-        if deleteCompiled and util.exists(compiledPath):
-            os.unlink(compiledPath)
+        if deleteCompiled:
+            util.removeIfExists(compiledPath)
         baseMacros.update(x for x in macroModule.__dict__.iteritems()
                           if not x[0].startswith('__'))
 
@@ -870,6 +870,9 @@ class PackageRecipe(AbstractPackageRecipe):
         for name, item in build.__dict__.items():
             if inspect.isclass(item) and issubclass(item, action.Action):
                 self._addBuildAction(name, item)
+
+    def setupAbstractBaseClass(r):
+        r.addSource(r.name + '.recipe', dest = str(r.cfg.baseClassDir) + '/')
 
 # need this because we have non-empty buildRequires in PackageRecipe
 _addRecipeToCopy(PackageRecipe)

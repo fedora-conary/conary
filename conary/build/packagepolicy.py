@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2004-2006 rPath, Inc.
+# Copyright (c) 2004-2008 rPath, Inc.
 #
 # This program is distributed under the terms of the Common Public License,
 # version 1.0. A copy of this license should have been distributed with this
@@ -28,7 +28,7 @@ from conary import files, trove
 from conary.build import buildpackage, filter, policy
 from conary.build import tags, use
 from conary.deps import deps
-from conary.lib import elf, util, pydeps, graph
+from conary.lib import elf, util, pydeps, fixedglob, graph
 from conary.local import database
 
 from elementtree import ElementTree
@@ -282,6 +282,13 @@ class ComponentSpec(_filterSpec):
     Uses C{r.ComponentSpec} to specify that all files below the
     C{%(contentdir)s/manual/} directory are part of the C{:manual} component.
 
+    C{r.ComponentSpec('foo:bar', '%(sharedir)s/foo/')}
+
+    Uses C{r.ComponentSpec} to specify that all files below the
+    C{%(sharedir)s/foo/} directory are part of the C{:bar} component
+    of the C{foo} package, avoiding the need to invoke both the
+    C{ComponentSpec} and C{PackageSpec} policies.
+
     C{r.ComponentSpec(catchall='data')}
 
     Uses C{r.ComponentSpec} to specify that all files not otherwise specified
@@ -457,14 +464,15 @@ class PackageSpec(_filterSpec):
     SYNOPSIS
     ========
 
-    C{r.PackageSpec([I{packagename},] [I{filterexp}])}
+    C{r.PackageSpec(I{packagename}, I{filterexp})}
 
     DESCRIPTION
     ===========
 
-    The C{r.PackageSpec()} policy determines which package and optionally
-    which component each file is in. (Use C{r.ComponentSpec()} to specify
-    the component without specifying the package.)
+    The C{r.PackageSpec()} policy determines which package each file
+    is in. (Use C{r.ComponentSpec()} to specify the component without
+    specifying the package, or to specify C{I{package}:I{component}}
+    in one invocation.)
 
     EXAMPLES
     ========
@@ -1959,15 +1967,18 @@ class _dependency(policy.Policy):
         troveName = troveNames[0]
 
         # prefer corresponding :devel to :devellib if it exists
-        if troveName.endswith(':devellib'):
-            troveSpec = (
-                troveName.replace(':devellib', ':devel'),
-                None, None
-            )
-            results = db.findTroves(None, [troveSpec],
-                                         allowMissing = True)
-            if troveSpec in results:
-                troveName = results[troveSpec][0][0]
+        package, component = troveName.split(':', 1)
+        if component in ('devellib', 'lib'):
+            for preferredComponent in ('devel', 'devellib'):
+                troveSpec = (
+                    ':'.join((package, preferredComponent)),
+                    None, None
+                )
+                results = db.findTroves(None, [troveSpec],
+                                             allowMissing = True)
+                if troveSpec in results:
+                    troveName = results[troveSpec][0][0]
+                    break
 
         if troveName not in self.recipe._getTransitiveBuildRequiresNames():
             self.recipe.reportMissingBuildRequires(troveName)
@@ -2797,7 +2808,7 @@ class Requires(_addInfo, _dependency):
     bucket = policy.PACKAGE_CREATION
     requires = (
         ('PackageSpec', policy.REQUIRED_PRIOR),
-        ('SharedLibrary', policy.REQUIRED),
+        ('SharedLibrary', policy.REQUIRED_PRIOR),
         # Requires depends on ELF dep path discovery previously done in Provides
         ('Provides', policy.REQUIRED_PRIOR),
     )
@@ -2881,9 +2892,15 @@ class Requires(_addInfo, _dependency):
         self.bootstrapPythonFlags= set(x%macros
                                        for x in self.bootstrapPythonFlags)
         # anything that any buildreqs have caused to go into ld.so.conf
-        # is a system library by definition
-        self.systemLibPaths |= set(os.path.normpath(x[:-1])
-                                   for x in file('/etc/ld.so.conf').readlines())
+        # or ld.so.conf.d/*.conf is a system library by definition,
+        # but only look at paths, not (for example) "include" lines
+        self.systemLibPaths |= set(os.path.normpath(x.strip())
+            for x in file('/etc/ld.so.conf').readlines()
+            if x.startswith('/'))
+        for fileName in fixedglob.glob('/etc/ld.so.conf.d/*.conf'):
+            self.systemLibPaths |= set(os.path.normpath(x.strip())
+                for x in file(fileName).readlines()
+                if x.startswith('/'))
         self.rpathFixup = [(filter.Filter(x, macros), y % macros)
                            for x, y in self.rpathFixup]
         self.PkgConfigRe = re.compile(
@@ -3457,33 +3474,53 @@ class Requires(_addInfo, _dependency):
         # parse pkgconfig file
         variables = {}
         requirements = set()
-        preface = True
+        libDirs = []
+        libraries = set()
+        variableLineRe = re.compile('^[a-zA-Z0-9]+=')
+        filesRequired = []
+
         pcContents = [x.strip() for x in file(fullpath).readlines()]
         for pcLine in pcContents:
-            for var in variables:
-                pcLine = pcLine.replace(var, variables[var])
-            if ':' in pcLine:
-                preface = False
-            if preface:
-                if '=' in pcLine:
-                    key, val = pcLine.split('=', 1)
-                    variables['${%s}' %key] = val
+            # interpolate variables: assume variables are interpreted
+            # line-by-line while processing
+            pcLineIter = pcLine
+            while True:
+                for var in variables:
+                    pcLineIter = pcLineIter.replace(var, variables[var])
+                if pcLine == pcLineIter:
+                    break
+                pcLine = pcLineIter
+            pcLine = pcLineIter
+
+            if variableLineRe.match(pcLine):
+                key, val = pcLine.split('=', 1)
+                variables['${%s}' %key] = val
             else:
-                if pcLine.startswith('Requires') and ':' in pcLine:
-                    pcLine = pcLine.split(':', 1)[1]
+                if (pcLine.startswith('Requires') or
+                    pcLine.startswith('Lib')) and ':' in pcLine:
+                    keyWord, args = pcLine.split(':', 1)
                     # split on ',' and ' '
-                    reqList = itertools.chain(*[x.split(',')
-                                                for x in pcLine.split()])
-                    reqList = [x for x in reqList if x]
-                    versionNext = False
-                    for req in reqList:
-                        if [x for x in '<=>' if x in req]:
-                            versionNext = True
-                            continue
-                        if versionNext:
-                            versionNext = False
-                            continue
-                        requirements.add(req)
+                    argList = itertools.chain(*[x.split(',')
+                                                for x in args.split()])
+                    argList = [x for x in argList if x]
+                    if keyWord.startswith('Requires'):
+                        versionNext = False
+                        for req in argList:
+                            if [x for x in '<=>' if x in req]:
+                                versionNext = True
+                                continue
+                            if versionNext:
+                                versionNext = False
+                                continue
+                            requirements.add(req)
+                    elif keyWord.startswith('Lib'):
+                        for lib in argList:
+                            if lib.startswith('-L'):
+                                libDirs.append(lib[2:])
+                            elif lib.startswith('-l'):
+                                libraries.add(lib[2:])
+                            else:
+                                pass
 
         # find referenced pkgconfig files and add requirements
         for req in requirements:
@@ -3496,27 +3533,57 @@ class Requires(_addInfo, _dependency):
             candidateFileNames = [ x % macros for x in candidateFileNames ]
             candidateFiles = [ util.exists(x) for x in candidateFileNames ]
             if True in candidateFiles:
-                fileRequired = candidateFileNames[candidateFiles.index(True)]
+                filesRequired.append(
+                    (candidateFileNames[candidateFiles.index(True)], 'pkg-config'))
             else:
                 self.warn('pkg-config file %s.pc not found', req)
                 continue
+
+        # find referenced library files and add requirements
+        libraryPaths = sorted(list(self.systemLibPaths))
+        for libDir in libDirs:
+            if libDir not in libraryPaths:
+                libraryPaths.append(libDir)
+        for library in libraries:
+            found = False
+            for libDir in libraryPaths:
+                candidateFileNames = [
+                    macros.destdir+libDir+'/lib'+library+'.so',
+                    macros.destdir+libDir+'/lib'+library+'.a',
+                    libDir+'/lib'+library+'.so',
+                    libDir+'/lib'+library+'.a',
+                ]
+                candidateFiles = [ util.exists(x) for x in candidateFileNames ]
+                if True in candidateFiles:
+                    filesRequired.append(
+                        (candidateFileNames[candidateFiles.index(True)], 'library'))
+                    found = True
+                    break
+
+            if not found:
+                self.warn('library file lib%s not found', library)
+                continue
+
+
+        for fileRequired, fileType in filesRequired:
             if fileRequired.startswith(macros.destdir):
                 # find requirement in packaging
                 fileRequired = fileRequired[len(macros.destdir):]
                 autopkg = self.recipe.autopkg
                 troveName = autopkg.componentMap[fileRequired].name
-                if troveName.endswith(':devellib'):
-                    # prefer corresponding :devel to :devellib
-                    # if it exists
-                    develTroveName = troveName.replace(':devellib', ':devel')
-                    if develTroveName in autopkg.components and autopkg.components[develTroveName]:
-                        # found a non-empty :devel compoment
-                        troveName = develTroveName
+                package, component = troveName.split(':', 1)
+                if component in ('devellib', 'lib'):
+                    for preferredComponent in ('devel', 'devellib'):
+                        develTroveName = ':'.join((package, preferredComponent))
+                        if develTroveName in autopkg.components and autopkg.components[develTroveName]:
+                            # found a non-empty :devel compoment
+                            troveName = develTroveName
+                            break
                 self._addRequirement(path, troveName, [], pkg,
                                      deps.TroveDependencies)
             else:
                 troveName = self._enforceProvidedPath(fileRequired,
-                                                      fileType='pkg-config',
+                                                      fileType=fileType,
                                                       unmanagedError=True)
                 if troveName:
                     self._addRequirement(path, troveName, [], pkg,

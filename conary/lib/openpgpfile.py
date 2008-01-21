@@ -170,6 +170,8 @@ TRUST_MARGINAL  = 4
 TRUST_FULL      = 5
 TRUST_ULTIMATE  = 6
 
+TRUST_TRUSTED   = 120
+
 #trust packet headers
 TRP_VERSION     = chr(1)
 TRP_KEY         = chr(12)
@@ -306,18 +308,13 @@ def exportKey(keyId, keyRing, armored=False):
         except (IOError, OSError), e:
             # if we can't read/find the key, it's not there.
             raise KeyNotFound(keyId)
-    fd = keyRing.fileno()
-    try:
-        fcntl.lockf(fd, fcntl.LOCK_SH)
-        msg = PGP_Message(keyRing)
-        key = msg.getKeyByKeyId(keyId)
-        # if the key we requested was a subkey, use the main key
-        if isinstance(key, PGP_SubKey):
-            key = key.getParentPacket()
-        sio = util.ExtendedStringIO()
-        key.writeAll(sio)
-    finally:
-        fcntl.lockf(fd, fcntl.LOCK_UN)
+    msg = PGP_Message(keyRing)
+    key = msg.getKeyByKeyId(keyId)
+    # if the key we requested was a subkey, use the main key
+    if isinstance(key, PGP_SubKey):
+        key = key.getParentPacket()
+    sio = util.ExtendedStringIO()
+    key.writeAll(sio)
 
     if armored:
         sio.seek(0)
@@ -451,19 +448,21 @@ def getFingerprint(keyId, keyFile=''):
     pkt = msg.getKeyByKeyId(keyId)
     return pkt.getKeyFingerprint()
 
-def addKeys(keys, stream):
-    """Add keys to the stream"""
-    return addPackets(keys, stream, "getKeyFingerprint",
+def addKeys(keys, fpath):
+    """Add keys to the file"""
+    return addPackets(keys, fpath, "getKeyFingerprint",
         PGP_Message, "iterMainKeys")
 
-def addKeyTimestampPackets(pkts, stream):
-    """Add key timestamp packets to the stream"""
-    return addPackets(pkts, stream, "getKeyId",
+def addKeyTimestampPackets(pkts, fpath):
+    """Add key timestamp packets to the file"""
+    return addPackets(pkts, fpath, "getKeyId",
         TimestampPacketDatabase, "iterTrustPackets")
 
-def addPackets(pkts, stream, pktIdFunc, messageFactory, streamIterFunc):
-    """Add packets to the stream. Return the packet IDs for the added packets"""
-    # Expand generators
+def addPackets(pkts, fpath, pktIdFunc, messageFactory, streamIterFunc):
+    """Add packets to the file. Return the packet IDs for the added packets"""
+    # This code really expects the stream to be based on a file, since we need
+    # a fileno() too
+
     pktsDict = {}
     for k in pkts:
         pktId = getattr(k, pktIdFunc)()
@@ -474,25 +473,37 @@ def addPackets(pkts, stream, pktIdFunc, messageFactory, streamIterFunc):
     if not pktsDict:
         return []
 
+    tmpfd, tmpfname = tempfile.mkstemp(prefix=os.path.basename(fpath),
+                                       dir=os.path.dirname(fpath))
+    # XXX This is disgusting. Ideally we should be able to fdopen directly
+    # into an ExtendedFile.
+    tempf = util.ExtendedFile(tmpfname, mode = "w+", buffering = False)
+    os.close(tmpfd)
+
+    pktIds = []
+
     # Lock the stream
-    fd = stream.fileno()
     try:
-        try:
-            fcntl.lockf(fd, fcntl.LOCK_EX)
-        except IOError, e:
-            if e.errno == errno.EBADF:
-                # The file was open in read-only mode
-                raise PGPError("Please pass in a file descriptor open in "
-                               "write mode")
-            raise
-        tempfd, tempf = tempfile.mkstemp()
-        # XXX This is disgusting. Ideally we should be able to fdopen directly
-        # into an ExtendedFile.
-        tempf = util.ExtendedFile(tempf, mode = "w+", buffering = False)
-        os.close(tempfd)
+        stream = file(fpath, "r+")
+        while 1:
+            streamfd = stream.fileno()
+            fcntl.lockf(streamfd, fcntl.LOCK_EX)
+            # We got the lock. Did the file change?
+            # There is a possibility that another writer that was previously
+            # holding the lock replaced the file, which would mean our current
+            # stream is stale.
+            newstream = file(fpath, "r+")
+            oStat = os.fstat(streamfd)
+            nStat = os.fstat(newstream.fileno())
+            if (oStat.st_dev, oStat.st_ino) == (nStat.st_dev, nStat.st_ino):
+                # Same file descriptor, we can continue
+                del oStat, nStat
+                break
+            # Replace our existing stream and continue
+            fcntl.lockf(streamfd, fcntl.LOCK_UN)
+            stream = newstream
 
-        pktIds = []
-
+        # At this point, we have an exclusive lock on the stream
         msg = messageFactory(stream, start = 0)
         for ipkt in getattr(msg, streamIterFunc)():
             iPktId = getattr(ipkt, pktIdFunc)()
@@ -510,15 +521,13 @@ def addPackets(pkts, stream, pktIdFunc, messageFactory, streamIterFunc):
             pkt.writeAll(tempf)
             del pktsDict[pktId]
             pktIds.append(pktId)
+
         # Now copy the keyring back
-        tempf.seek(0, SEEK_SET)
-        stream.seek(0, SEEK_SET)
-        stream.truncate()
-        PGP_BasePacket._copyStream(tempf, stream)
-        stream.flush()
+        tempf.close()
+        os.rename(tmpfname, fpath)
         return pktIds
     finally:
-        fcntl.lockf(fd, fcntl.LOCK_UN)
+        fcntl.lockf(streamfd, fcntl.LOCK_UN)
 
 def verifyRFC2440Checksum(data):
     # RFC 2440 5.5.3 - Secret Key Packet Formats documents the checksum
@@ -1189,6 +1198,7 @@ class PGP_BasePacket(object):
     @staticmethod
     def readTimestamp(stream):
         """Reads a timestamp from the stream"""
+        stream.seek(0)
         PGP_BasePacket.checkStreamLength(stream, 4)
         return len4bytes(*PGP_BasePacket._readBin(stream, 4))
 
@@ -1315,7 +1325,7 @@ class PGP_Signature(PGP_BaseKeySig):
     __slots__ = ['version', 'sigType', 'pubKeyAlg', 'hashAlg', 'hashSig',
                  'mpiFile', 'signerKeyId', 'hashedFile', 'unhashedFile',
                  'creation', '_parsed', '_sigDigest', '_parentPacket',
-                 '_hashedSubPackets', '_unhashedSubPackets']
+                 '_hashedSubPackets', '_unhashedSubPackets', '_verifies',]
     tag = PKT_SIG
 
     _parentPacketTypes = set(PKT_ALL_KEYS).union(PKT_ALL_USER)
@@ -1329,6 +1339,7 @@ class PGP_Signature(PGP_BaseKeySig):
         self._sigDigest = None
         self._hashedSubPackets = None
         self._unhashedSubPackets = None
+        self._verifies = None
 
     def parse(self, force = False):
         """Parse the signature body and initializes the internal data
@@ -1340,10 +1351,12 @@ class PGP_Signature(PGP_BaseKeySig):
         self.initialize()
 
         sigVersion, = self.readBin(1)
-        if sigVersion not in [3, 4]:
+        if sigVersion not in [2, 3, 4]:
             raise InvalidBodyError("Invalid signature version %s" % sigVersion)
         self.version = sigVersion
-        if sigVersion == 3:
+        # Version 2 signatures are documented in RFC1991, and are identical to
+        # version 3 signatures
+        if sigVersion in [2, 3]:
             self._readSigV3()
         else:
             self._readSigV4()
@@ -1450,52 +1463,59 @@ class PGP_Signature(PGP_BaseKeySig):
         self._copyStream(self.mpiFile, stream)
         return stream
 
+    def _getSubpacketInt4(self, subpacketTypes):
+        stream = self._getSubpacketStream(subpacketTypes)
+        if stream is None:
+            return None
+        return int4FromBytes(*self._readBin(stream, 4))
+
+    def _getSubpacketStream(self, subpacketTypes):
+        pkts = [ x[1] for x in self.decodeHashedSubpackets()
+                 if x[0] in subpacketTypes ]
+        if not pkts:
+            return None
+        pkt = pkts[0]
+        pkt.seek(0, SEEK_SET)
+        return pkt
+
     def getCreation(self):
         """Return the signature creation timestamp, or 0 if no creation time
         is available"""
         if self.creation is not None:
             return self.creation
-        pkts = [ x[1] for x in self.decodeHashedSubpackets()
-                 if x[0] == SIG_SUBPKT_CREATION ]
-        if not pkts:
-            self.creation = 0
-            return self.creation
-
-        pkts[0].seek(0, SEEK_SET)
-        self.creation = int4FromBytes(*self._readBin(pkts[0], 4))
+        creation = self._getSubpacketInt4([SIG_SUBPKT_CREATION])
+        if creation is None:
+            creation = 0
+        self.creation = creation
         return self.creation
 
     def getExpiration(self):
         """Return the expiration offset, or None if the signature does not
         expire"""
-        pkts = [ x[1] for x in self.decodeHashedSubpackets()
-                 if x[0] == SIG_SUBPKT_SIG_EXPIRE ]
-        if not pkts:
-            return None
-        pkts[0].seek(0, SEEK_SET)
-        return int4FromBytes(*self._readBin(pkts[0], 4))
+        return self._getSubpacketInt4([SIG_SUBPKT_SIG_EXPIRE])
+
+    def getKeyExpiration(self):
+        """Return the key expiration offset, or None if the signature does not
+        contain one"""
+        return self._getSubpacketInt4([SIG_SUBPKT_KEY_EXPIRE])
 
     def getTrust(self):
         """Return the trust level, the trust amount and the trust regex for
         this signature"""
         spktTypes = set([SIG_SUBPKT_TRUST, 0x80 | SIG_SUBPKT_TRUST])
-        pkts = [ x[1] for x in self.decodeHashedSubpackets()
-                   if x[0] in spktTypes ]
-        if not pkts:
+        stream = self._getSubpacketStream(spktTypes)
+        if stream is None:
             return None, None, None
-        pkts[0].seek(0)
-        tlevel, tamt = self._readBin(pkts[0], 2)
+        tlevel, tamt = self._readBin(stream, 2)
 
         # Look for a trust regex
         # critical packets are ANDed with 0x80
         spktTypes = set([SIG_SUBPKT_REGEX, 0x80 | SIG_SUBPKT_REGEX])
-        pkts = [ x[1] for x in self.decodeHashedSubpackets()
-                   if x[0] in spktTypes ]
-        if not pkts:
+        stream = self._getSubpacketStream(spktTypes)
+        if stream is None:
             return tlevel, tamt, None
-        pkts[0].seek(0)
         # Trust packet is NULL-terminated
-        tregex = pkts[0].read()[:-1]
+        tregex = stream.read()[:-1]
         return tlevel, tamt, tregex
 
     def rewriteBody(self):
@@ -1518,7 +1538,7 @@ class PGP_Signature(PGP_BaseKeySig):
         """Get the key ID of the issuer for this signature.
         Return None if the packet did not contain an issuer key ID"""
         self.parse()
-        if self.version == 3:
+        if self.version in [2, 3]:
             assert self.signerKeyId is not None
             return binSeqToString(self.signerKeyId)
         # Version 3 packets should have already set signerKeyId
@@ -1601,7 +1621,7 @@ class PGP_Signature(PGP_BaseKeySig):
             pkpkt = parentPacket.getParentPacket().toPublicKey(minHeaderLen = 3)
             pkpkt.write(sio)
             if isinstance(parentPacket, PGP_UserID):
-                parentPacket.writeHash(sio)
+                parentPacket.writeHash(sio, keyVersion = self.version)
             else:
                 parentPacket.toPublicKey(minHeaderLen = 3).write(sio)
         else:
@@ -1610,6 +1630,7 @@ class PGP_Signature(PGP_BaseKeySig):
 
     def resetSignatureHash(self):
         self._sigDigest = None
+        self._verifies = None
 
     def getSignatureHash(self):
         """Compute the signature digest"""
@@ -1780,7 +1801,9 @@ class PGP_Signature(PGP_BaseKeySig):
         digSig = self.parseMPIs()
         if not self.verifySignature(sigString, cryptoKey, digSig,
                                     self.pubKeyAlg, self.hashAlg):
+            self.setVerifies(False)
             raise BadSelfSignature(keyId)
+        self.setVerifies(True)
 
     def verifyDocument(self, cryptoKey, stream):
         """
@@ -1795,7 +1818,9 @@ class PGP_Signature(PGP_BaseKeySig):
         digSig = self.parseMPIs()
         if not self.verifySignature(digest, cryptoKey, digSig,
                                     self.pubKeyAlg, self.hashAlg):
+            self.setVerifies(False)
             raise SignatureError(keyId)
+        self.setVerifies(True)
 
     @staticmethod
     def verifySignature(sigString, cryptoKey, signature, pubKeyAlg, hashAlg):
@@ -1846,6 +1871,12 @@ class PGP_Signature(PGP_BaseKeySig):
         stream = util.ExtendedStringIO()
         self._writeBin(stream, int4ToBytes(int4))
         return stream
+
+    def setVerifies(self, flag=True):
+        self._verifies = flag
+
+    def getVerifies(self):
+        return self._verifies
 
 PacketTypeDispatcher.addPacketType(PGP_Signature)
 
@@ -1913,11 +1944,12 @@ class PGP_UserID(PGP_BasePacket):
                 continue
             yield pkt
 
-    def writeHash(self, stream):
+    def writeHash(self, stream, keyVersion):
         """Write a UserID packet in a stream, in order to be hashed.
-        Described in RFC 2440 5.2.4 computing signatures."""
-        stream.write(chr(self.signingConstant))
-        stream.write(struct.pack("!I", self.bodyLength))
+        Described in RFC 4880 5.2.4 computing signatures."""
+        if keyVersion == 4:
+            stream.write(chr(self.signingConstant))
+            stream.write(struct.pack("!I", self.bodyLength))
         self.writeBody(stream)
 
     def merge(self, other):
@@ -1941,7 +1973,7 @@ class PGP_UserID(PGP_BasePacket):
         If the key is revoked, -1 is returned"""
         # Iterate over all self signatures
         key = self.getParentPacket()
-        selfSigs = [ x for x in self.iterKeySignatures(key.getKeyFingerprint()) ]
+        selfSigs = [ x for x in self.iterKeySignatures(key.getKeyId()) ]
         if not selfSigs:
             raise PGPError("User packet with no self signature")
         revocs = []
@@ -2064,6 +2096,7 @@ class PGP_Key(PGP_BaseKeySig):
             if self.version == 3:
                 return self._keyId[0]
             return self._keyId
+        self.parse()
 
         if self.version == 3:
             # See section "Key IDs and Fingerprints" for a description of how
@@ -2134,65 +2167,8 @@ class PGP_Key(PGP_BaseKeySig):
         self.parse()
         return self.createdTimestamp
 
-    def getEndOfLife(self):
-        """Parse self signatures to find timestamp(s) of key expiration.
-        Also seek out any revocation timestamps.
-        We don't need to actually verify these signatures.
-        See verifySelfSignatures()
-        Returns bool, timestamp (is revoked, expiration)
-        """
-        parentExpire = 0
-        parentRevoked = False
-
-        if self.tag in PKT_SUB_KEYS:
-            # Look for parent key's expiration
-            parentRevoked, parentExpire = self.getMainKey().getEndOfLife()
-
-        expireTimestamp = revocTimestamp = 0
-
-        # Iterate over self signatures
-        for pkt in self.iterAllSelfSignatures():
-            if pkt.sigType in SIG_CERTS:
-                eTimestamp = cTimestamp = 0
-                for spktType, dataf in pkt.decodeHashedSubpackets():
-                    if spktType == SIG_SUBPKT_KEY_EXPIRE:
-                        eTimestamp = self.readTimestamp(dataf)
-                    elif spktType == SIG_SUBPKT_CREATION:
-                        cTimestamp = self.readTimestamp(dataf)
-                # if there's no expiration, DON'T COMPUTE this, otherwise
-                # it will appear as if the key expired the very moment
-                # it was created.
-                if eTimestamp:
-                    ts = eTimestamp + cTimestamp
-                    expireTimestamp = max(expireTimestamp, ts)
-            elif pkt.sigType in SIG_KEY_REVOCS:
-                # parse this revocation to look for the creation timestamp
-                # we're ultimately looking for the most stringent revocation
-                for spktType, dataf in pkt.decodeHashedSubpackets():
-                    if spktType == SIG_SUBPKT_CREATION:
-                        ts = self.readTimestamp(dataf)
-                        if revocTimestamp:
-                            revocTimestamp = min(expireTimestamp, ts)
-                        else:
-                            revocTimestamp = ts
-
-        # return minimum non-zero value of the three expirations
-        # unless they're ALL zero. 8-)
-        if not (revocTimestamp or expireTimestamp or parentExpire):
-            return False, 0
-
-        # make no assumptions about how big a timestamp is.
-        ts = max(revocTimestamp, expireTimestamp, parentExpire)
-        if revocTimestamp:
-            ts = min(ts, revocTimestamp)
-        if expireTimestamp:
-            ts = min(ts, expireTimestamp)
-        if parentExpire:
-            ts = min(ts, parentExpire)
-        return (revocTimestamp != 0) and (not parentRevoked), ts
-
     def iterSelfSignatures(self):
-        return self._iterSelfSignatures(self.getKeyFingerprint())
+        return self._iterSelfSignatures(self.getKeyId())
 
     def _iterSelfSignatures(self, keyId):
         """Iterate over all the self-signatures"""
@@ -2282,6 +2258,63 @@ class PGP_Key(PGP_BaseKeySig):
 
         sig.resetSignatureHash()
         sig.setParentPacket(self)
+
+    def getEndOfLife(self):
+        """Parse self signatures to find timestamp(s) of key expiration.
+        Also seek out any revocation timestamps.
+        We don't need to actually verify these signatures, but we do require
+        that they were verified previously using verifySelfSignatures().
+        Signatures that do not validate are ignored for the purposes of
+        calculating the revocation and expiration
+        Returns bool, timestamp (is revoked, expiration)
+        """
+        expireTimestamp = revocTimestamp = 0
+
+        # Key creation time
+        cTimestamp = self.createdTimestamp
+
+        # Creation time for the signature that exposed most recently a key
+        # expiration subpacket
+        sigExpCreationTimestamp = 0
+
+        # Note that in this respect we are bug-compatible with gpg. A
+        # key that does not expire has signatures with no key expiration
+        # subpackets. This means once you've set an expiration on a key and
+        # published it, you can not make it never expire.
+
+        for sig in self.iterSelfSigCertifications():
+            verifies = sig.getVerifies()
+            assert verifies is not None, "Please verify signatures first"
+            # If the sig doesn't verify, skip it
+            if not verifies:
+                continue
+            eTimestamp = sig.getKeyExpiration()
+            if eTimestamp is None:
+                continue
+            sigCreation = sig.getCreation()
+            if sigCreation <= sigExpCreationTimestamp:
+                # This signature has the same or an earlier creation than
+                # the one that supplied an expiration. Skip it. This works
+                # across different uids too
+                continue
+            if eTimestamp > 0:
+                eTimestamp += cTimestamp
+            expireTimestamp = eTimestamp
+            sigExpCreationTimestamp = sigCreation
+
+        # Now iterate over direct signatures, looking for a key revocation
+        for sig in self.iterSelfSigRevocations():
+            verifies = sig.getVerifies()
+            assert verifies is not None, "Please verify signatures first"
+            # If the sig doesn't verify, skip it
+            if not verifies:
+                continue
+            sigCreation = sig.getCreation()
+            if revocTimestamp == 0 or sigCreation < revocTimestamp:
+                revocTimestamp = sigCreation
+
+        return (revocTimestamp, expireTimestamp)
+
 
 class PGP_MainKey(PGP_Key):
     def initSubPackets(self):
@@ -2409,24 +2442,29 @@ class PGP_MainKey(PGP_Key):
         @return: (pubKeyPacket, cryptoKey)
         @raises BadSelfSignature:
         """
-        if self.version == 3:
-            raise InvalidKey("Version 3 keys not supported")
+        self.parse()
+        if self.version not in [3, 4]:
+            raise InvalidKey("Version %s keys not supported" % self.version)
         # Convert to a public key (even if it's already a public key)
         pkpkt = self.toPublicKey(minHeaderLen = 3)
-        keyId = pkpkt.getKeyFingerprint()
+        keyFpr = pkpkt.getKeyFingerprint()
+        keyId = pkpkt.getKeyId()
         pgpKey = pkpkt.makePgpKey()
         for sig in self.iterSelfSignatures():
             self.adoptSignature(sig)
-            sig.verify(pgpKey, keyId)
+            sig.verify(pgpKey, keyFpr)
         for uid in self.iterUserIds():
             verified = False
             for sig in uid.iterKeySignatures(keyId):
                 uid.adoptSignature(sig)
-                sig.verify(pgpKey, keyId)
+                try:
+                    sig.verify(pgpKey, keyFpr)
+                except BadSelfSignature:
+                    continue
                 verified = True
             if not verified:
                 # No signature. Not good, according to our standards
-                raise BadSelfSignature(keyId)
+                raise BadSelfSignature(keyFpr)
 
         return pkpkt, pgpKey
 
@@ -2539,6 +2577,25 @@ class PGP_MainKey(PGP_Key):
             return False
         self.subkeys = finalkeys
         return True
+
+    def iterSelfSigCertifications(self):
+        """Iterate over all self signature certifications"""
+        keyId = self.getKeyId()
+
+        for uid in self.uids:
+            # Uhm. We may have to ignore expirations that exist on revoked
+            # users (users with a revoked self signature - 5.2.3.3)
+            for pkt in uid.iterKeySignatures(keyId):
+                if pkt.sigType not in SIG_CERTS:
+                    continue
+                yield pkt
+
+    def iterSelfSigRevocations(self):
+        """Iterate over all self signature revocations"""
+        for sig in self.iterSelfSignatures():
+            if sig.sigType != SIG_TYPE_KEY_REVOC:
+                continue
+            yield sig
 
 class PGP_PublicAnyKey(PGP_Key):
     pubTag = None
@@ -2973,6 +3030,33 @@ class PGP_SubKey(PGP_Key):
         # Same binding sig, and no revocation
         return False
 
+    def iterSelfSigCertifications(self):
+        return [self.bindingSig]
+
+    def iterSelfSigRevocations(self):
+        if self.revocationSig:
+            return [self.revocationSig]
+        return []
+
+    def getEndOfLife(self):
+        """Parse self signatures to find timestamp(s) of key expiration.
+        Also seek out any revocation timestamps.
+        We don't need to actually verify these signatures.
+        See verifySelfSignatures()
+        Returns bool, timestamp (is revoked, expiration)
+        """
+
+        parentRevoked, parentExpire = self.getMainKey().getEndOfLife()
+
+        revoked, expire = PGP_Key.getEndOfLife(self)
+        if revoked and parentRevoked:
+            revoked = min(revoked, parentRevoked)
+        else:
+            revoked = max(revoked, parentRevoked)
+        # Subkeys don't depend on the main key's expiration date
+        return revoked, expire
+
+
 class PGP_PublicSubKey(PGP_SubKey, PGP_PublicAnyKey):
     __slots__ = []
     tag = PKT_PUBLIC_SUBKEY
@@ -3189,8 +3273,7 @@ class PublicKeyring(object):
             keys = list(keys)
         for key in keys:
             assert(isinstance(key, PGP_MainKey))
-        stream = self._openKeyring(readOnly = False)
-        keyFingerprints = addKeys(keys, stream)
+        keyFingerprints = addKeys(keys, self._keyringPath)
         self.updateTimestamps(keyFingerprints, timestamp = timestamp)
         return keyFingerprints
 
@@ -3229,7 +3312,7 @@ class PublicKeyring(object):
             pkts.append(pkt)
 
         mtime0 = os.stat(self._tsDbPath)[stat.ST_MTIME]
-        addKeyTimestampPackets(pkts, self._openTsDb(readOnly = False))
+        addKeyTimestampPackets(pkts, self._tsDbPath)
         mtime1 = os.stat(self._tsDbPath)[stat.ST_MTIME]
         if mtime0 == mtime1:
             # Cheat, and set the mtime to be a second larger
@@ -3239,46 +3322,26 @@ class PublicKeyring(object):
         # the mtime.
         self._tsDbTimestamp = None
 
-    def _openTsDb(self, readOnly = True):
-        if readOnly:
-            mode = "r"
-        else:
-            mode = "r+"
-        return util.ExtendedFile(self._tsDbPath, mode,
-                buffering = False)
-
-    def _openKeyring(self, readOnly = True):
-        if readOnly:
-            mode = "r"
-        else:
-            mode = "r+"
-        return util.ExtendedFile(self._keyringPath, mode,
-                buffering = False)
-
     def _parseTsDb(self):
         # Stat the timestamp database
-        mtime = os.stat(self._tsDbPath)[stat.ST_MTIME]
+        stream = file(self._tsDbPath)
+        streamfd = stream.fileno()
+        mtime = os.fstat(streamfd).st_mtime
         if self._tsDbTimestamp == mtime:
             # Database hasn't changed
             return
 
         allKeys = self._getAllKeys()
 
-        stream = self._openTsDb(readOnly = True)
-        fd = stream.fileno()
-        try:
-            fcntl.lockf(fd, fcntl.LOCK_SH)
-            self._tsDbTimestamp = os.stat(self._tsDbPath)[stat.ST_MTIME]
-            self._cache.clear()
-            for pkt in TimestampPacketDatabase(stream).iterTrustPackets():
-                pkt.parse()
-                mainKeyId = pkt.getKeyId()
-                ts = pkt.getRefreshTimestamp()
-                self._cache[mainKeyId] = ts
-                for sk in allKeys.get(mainKeyId, []):
-                    self._cache[sk] = ts
-        finally:
-            fcntl.lockf(fd, fcntl.LOCK_UN)
+        self._tsDbTimestamp = mtime
+        self._cache.clear()
+        for pkt in TimestampPacketDatabase(stream).iterTrustPackets():
+            pkt.parse()
+            mainKeyId = pkt.getKeyId()
+            ts = pkt.getRefreshTimestamp()
+            self._cache[mainKeyId] = ts
+            for sk in allKeys.get(mainKeyId, []):
+                self._cache[sk] = ts
 
     def getKeyTimestamp(self, keyId):
         assert(len(keyId) >= 16)
@@ -3298,10 +3361,8 @@ class PublicKeyring(object):
         @return: a key with the specified key ID
         @raise KeyNotFound: if the key was not found
         """
-        stream = self._openKeyring(readOnly = True)
-        # exportKey will do the locking for the period we read from the
-        # keyring, and will return a private file object that is not shared
-        # with other processes
+        stream = file(self._keyringPath)
+        # exportKey will return a fresh file object
         retStream = exportKey(keyId, stream)
         # Note that exportKey will export both the main key and the subkeys.
         # Because of this, we can't blindly grab the first key in the new
@@ -3313,14 +3374,9 @@ class PublicKeyring(object):
         # Return all keys and subkeys
         # We need them in order to handle subkeys too
         ret = {}
-        stream = self._openKeyring(readOnly = True)
-        fd = stream.fileno()
-        try:
-            fcntl.lockf(fd, fcntl.LOCK_SH)
-            msg = PGP_Message(stream)
-            for pk in msg.iterMainKeys():
-                fp = pk.getKeyId()
-                ret[fp] = set(x.getKeyId() for x in pk.iterSubKeys())
-            return ret
-        finally:
-            fcntl.lockf(fd, fcntl.LOCK_UN)
+        stream = file(self._keyringPath)
+        msg = PGP_Message(stream)
+        for pk in msg.iterMainKeys():
+            fp = pk.getKeyId()
+            ret[fp] = set(x.getKeyId() for x in pk.iterSubKeys())
+        return ret
