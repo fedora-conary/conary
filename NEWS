@@ -3,8 +3,6 @@ Changes in 2.0.5:
     * Conary now attempts to provide hints about flavor combinations that would
       work if it cannot find a flavor that matches your exact request 
       (CNY-1920).
-
-  o Client Changes:
     * The rollback API now raises a RollbackError instead of returning
       non-zero on errors. (CNY-1643)
 
@@ -36,6 +34,10 @@ Changes in 2.0.5:
       symlinked directory. (CNY-2455)
     * The order in which configuration files are read when a glob was
       passed to includeConfigFile is now deterministic. (CNY-2483)
+
+  o Server Changes:
+    * Roles that have the mirror flag set no longer assume anonymous
+      fallback for trove access authentication (CNY-2473)
 
 Changes in 2.0.4:
   o Bug Fixes:
