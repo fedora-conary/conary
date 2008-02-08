@@ -1,9 +1,3 @@
-Changes in @NEW@:
-    * When using the tagScript argument with the client's applyUpdateJob
-      call, the paths to group scripts to be executed are stored relative
-      to the root of the installation, instead of absolute. The tag
-      script is always supposed to be executed under chroot. (CNY-2523)
-
 Changes in 2.0.6:
   o Build Changes:
     * Java dependencies for classes that are not dependency-complete
@@ -23,13 +17,17 @@ Changes in 2.0.6:
     * When updating a group which contained a package that used to be
       byDefault False but is now byDefault True, Conary will now install
       the package. (CNY-2507)
+    * When using the tagScript argument with the client's applyUpdateJob
+      call, the paths to group scripts to be executed are stored relative
+      to the root of the installation, instead of absolute. The tag
+      script is always supposed to be executed under chroot. (CNY-2523)
 
   o Server Changes:
     * The serverName configuration option now allows glob-style
       wildcards.  (CNY-2293)
     * Slow SQL queries used to remove unused entries from the
       TroveFiles table and TroveTroves table have been rewritten to
-      make markremoved faster with repositories implemented with a 
+      make some queries faster with repositories implemented with a
       sqlite database. (CNY-2515)
 
   o Other changes:
