@@ -974,7 +974,7 @@ class LazyFileCache:
         return fd
 
     def _getFdCount(self):
-        return len(os.listdir("/proc/self/fd"))
+        return countOpenFileDescriptors()
 
     def _getCounter(self):
         ret = self._fdCounter;
@@ -1610,3 +1610,7 @@ class Timer:
         self.total = 0
         if start:
             self.start()
+
+def countOpenFileDescriptors():
+    """Return the number of open file descriptors for this process."""
+    return misc.countOpenFileDescriptors()
