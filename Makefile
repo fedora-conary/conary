@@ -14,7 +14,7 @@
 
 all: subdirs
 
-export VERSION = 2.0.5
+export VERSION = 2.0.6
 export TOPDIR = $(shell pwd)
 export DISTDIR = $(TOPDIR)/conary-$(VERSION)
 export prefix = /usr
@@ -83,7 +83,7 @@ smoketest: archive
 forcedist: $(dist_files) smoketest
 
 tag:
-	hg tag conary-$(VERSION)
+	hg tag -f conary-$(VERSION)
 
 clean: clean-subdirs default-clean
 

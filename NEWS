@@ -1,36 +1,63 @@
 Changes in @NEW@:
-  o Bug Fixes:
-    * When x86_64 is specified and a biarch package is available, conary
-      will mention the biarch as an alternative flavor instead of the x86 one.
-    * Derived packages will now work on x86_64 systems even if a biarch 
-      flavor is specified. (CNY-2494)
-    * Signatures of unexpected type on subkeys are now ignored. (CNY-2490)
-    * Updating from a package that used to be byDefault False and is now
-      byDefault True will now install the package. (CNY-2507)
-
   o Build Changes:
-    * Java dependencies for classes that are not dependency complete
+    * Handling pkg-config dependencies has been moved to conary-policy.
+      (CNP-93)
+
+  o Bug Fixes:
+    * When using the tagScript argument with the client's applyUpdateJob
+      call, the paths to group scripts to be executed are stored relative
+      to the root of the installation, instead of absolute. The tag
+      script is always supposed to be executed under chroot. (CNY-2523)
+    * When resuming the update after the execution of a critical update,
+      Conary will now use the original file replacement flags. This
+      corrects file conflict errors in a migrate when a critical update
+      was present. (CNY-2513)
+    * The lazy file cache was using /proc/self/fd as a method of
+      determining the number of open file descriptors for the current
+      process. However, under certain circumstances the directory is not
+      readable. The lazy file cache now uses a poll(2)-based technique.
+      (CNY-2536)
+
+  o Other changes:
+    * Reading metadata from RPM files now validates the size of the RPM
+      and the sha1 of the full set of metadata.
+
+Changes in 2.0.6:
+  o Build Changes:
+    * Java dependencies for classes that are not dependency-complete
       are now automatically disabled. To re-enable them, the missing
       dependencies should be added as buildRequires. (CNY-2175)
-    * Build actions that don't match anything (r.Move, r.Copy etc) will
-      now log exactly what they were trying to do. (CNY-2216)
+    * Build actions that do not match anything (r.Move, r.Copy, etc.)
+      will now log exactly what they were trying to do. (CNY-2216)
 
   o Bug Fixes:
     * A minor bug in the display of the password prompt has been fixed.
       (CNY-2497)
-    * A Slow SQL query used to remove unused entries from the
-      TroveTroves table has been rewritten to be faster.
+    * When x86_64 is specified and a biarch package is available, Conary
+      will mention the biarch as an alternative flavor instead of the x86 one.
+    * Derived packages will now work on x86_64 systems even if a biarch 
+      flavor is specified. (CNY-2494)
+    * Signatures of unexpected types on subkeys are now ignored. (CNY-2490)
+    * When updating a group which contained a package that used to be
+      byDefault False but is now byDefault True, Conary will now install
+      the package. (CNY-2507)
+    * When using the tagScript argument with the client's applyUpdateJob
+      call, the paths to group scripts to be executed are stored relative
+      to the root of the installation, instead of absolute. The tag
+      script is always supposed to be executed under chroot. (CNY-2523)
 
   o Server Changes:
-    * serverName configuration option now allows glob-style wildcards
-      (CNY-2293)
+    * The serverName configuration option now allows glob-style
+      wildcards.  (CNY-2293)
+    * Slow SQL queries used to remove unused entries from the
+      TroveFiles table and TroveTroves table have been rewritten to
+      make some queries faster with repositories implemented with a
+      sqlite database. (CNY-2515)
 
   o Other changes:
     * The file EULA_Conary.txt has been added to clarify that Conary
       is available under two licenses, and to state the conditions
       under which the two licenses apply.
-    * Reading metadata from RPM files now validates the size of the RPM
-      and the sha1 of the full set of metadata.
 
 Changes in 2.0.5:
   o Client Changes:
