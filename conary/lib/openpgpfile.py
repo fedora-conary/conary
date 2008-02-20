@@ -478,10 +478,7 @@ def addPackets(pkts, fpath, pktIdFunc, messageFactory, streamIterFunc):
 
     tmpfd, tmpfname = tempfile.mkstemp(prefix=os.path.basename(fpath),
                                        dir=os.path.dirname(fpath))
-    # XXX This is disgusting. Ideally we should be able to fdopen directly
-    # into an ExtendedFile.
-    tempf = util.ExtendedFile(tmpfname, mode = "w+", buffering = False)
-    os.close(tmpfd)
+    tempf = util.ExtendedFdopen(tmpfd)
 
     pktIds = []
 
@@ -726,20 +723,25 @@ class PGP_Message(object):
     PacketDispatcherClass = PacketTypeDispatcher
 
     def __init__(self, message, start = -1):
+        self._f = self._openStream(message)
+        self.pos = start
+
+    @classmethod
+    def _openStream(cls, message):
+        if hasattr(message, "pread"):
+            return message
         if isinstance(message, str):
             # Assume a path
-            self._f = util.ExtendedFile(message, buffering = False)
-        else:
-            # Be tolerant, accept non-Extended objects
-            if isinstance(message, file) and not hasattr(message, "pread"):
-                # Try to reopen as an ExtendedFile
-                f = util.ExtendedFile(message.name, buffering = False)
-                f.seek(message.tell())
-                message = f
-            if not hasattr(message, "pread"):
-                raise MalformedKeyRing("Not an ExtendedFile object")
-            self._f = message
-        self.pos = start
+            return util.ExtendedFile(message, buffering = False)
+        # Be tolerant, accept non-Extended objects
+        if hasattr(message, 'fileno') and not hasattr(message, "pread"):
+            # Try to reopen as an ExtendedFile. We have to dup the file
+            # descriptor, otherwise it gets closed unexpectedly when the
+            # original message object gets out of scope
+            f = util.ExtendedFdopen(os.dup(message.fileno()))
+            f.seek(message.tell())
+            return f
+        raise MalformedKeyRing("Not an ExtendedFile object")
 
     def _getPacket(self):
         pkt = self.newPacketFromStream(self._f, start = self.pos)
@@ -806,11 +808,7 @@ class PGP_Message(object):
 
     @classmethod
     def newPacketFromStream(cls, stream, start = -1):
-        if isinstance(stream, file) and not hasattr(stream, "pread"):
-            # Try to reopen as an ExtendedFile
-            f = util.ExtendedFile(stream.name, buffering = False)
-            f.seek(stream.tell())
-            stream = f
+        stream = cls._openStream(stream)
         return PGP_PacketFromStream(cls).read(stream, start = start)
 
     @classmethod
@@ -3261,20 +3259,22 @@ class PublicKeyring(object):
     def __init__(self, keyringPath, tsDbPath):
         self._keyringPath = keyringPath
         self._tsDbPath = tsDbPath
-        # Create the files if they don't exist
-        for f in [self._keyringPath, self._tsDbPath]:
-            try:
-                util.mkdirChain(os.path.dirname(f))
-                file(f, "a+")
-            except (IOError, OSError), e:
-                raise KeyringError(e.errno, e.strerror, e.filename)
         self._tsDbTimestamp = None
         self._cache = {}
 
         # For debugging purposes only
         self._timeIncrement = 1
 
+    @staticmethod
+    def _createFile(fileName):
+        try:
+            util.mkdirChain(os.path.dirname(fileName))
+            file(fileName, "a+")
+        except (IOError, OSError), e:
+            raise KeyringError(e.errno, e.strerror, e.filename)
+
     def addKeys(self, keys, timestamp = None):
+        self._createFile(self._keyringPath)
         # Expand generators
         if hasattr(keys, 'next'):
             keys = list(keys)
@@ -3301,6 +3301,7 @@ class PublicKeyring(object):
         return self.addKeys(msg.iterMainKeys(), timestamp = timestamp)
 
     def updateTimestamps(self, keyIds, timestamp = None):
+        self._createFile(self._tsDbPath)
         # Expand generators
         if hasattr(keyIds, 'next'):
             keyIds = list(keyIds)
@@ -3368,9 +3369,8 @@ class PublicKeyring(object):
         @return: a key with the specified key ID
         @raise KeyNotFound: if the key was not found
         """
-        stream = file(self._keyringPath)
         # exportKey will return a fresh file object
-        retStream = exportKey(keyId, stream)
+        retStream = exportKey(keyId, self._keyringPath)
         # Note that exportKey will export both the main key and the subkeys.
         # Because of this, we can't blindly grab the first key in the new
         # keyring.
@@ -3381,8 +3381,11 @@ class PublicKeyring(object):
         # Return all keys and subkeys
         # We need them in order to handle subkeys too
         ret = {}
-        stream = file(self._keyringPath)
-        msg = PGP_Message(stream)
+        try:
+            msg = PGP_Message(self._keyringPath)
+        except (OSError, IOError):
+            # We could not read the keyring - no keys found
+            return ret
         for pk in msg.iterMainKeys():
             fp = pk.getKeyId()
             ret[fp] = set(x.getKeyId() for x in pk.iterSubKeys())
