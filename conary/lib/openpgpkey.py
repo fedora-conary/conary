@@ -465,6 +465,10 @@ class KeyringCacheCallback(KeyCacheCallback):
 _keyCache = OpenPGPKeyFileCache()
 
 def getKeyCache():
+    """
+    @return: the OpenPGP key cache
+    @rtype: L{lib.openpgpkey.OpenPGPKeyFileCache}
+    """
     global _keyCache
     return _keyCache
 
