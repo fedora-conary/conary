@@ -1850,3 +1850,6 @@ class Timer:
 def countOpenFileDescriptors():
     """Return the number of open file descriptors for this process."""
     return misc.countOpenFileDescriptors()
+
+def convertPackageNameToClassName(pkgname):
+    return ''.join([ x.capitalize() for x in pkgname.split('-') ])
