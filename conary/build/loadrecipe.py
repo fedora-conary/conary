@@ -101,7 +101,7 @@ def setupRecipeDict(d, filename, directory=None, factory=False):
                                         'PackageFlags'))
 
     if factory:
-        localImport(d, 'conary.build.factory', 'Factory')
+        localImport(d, 'conary.build.factory', ('Factory', 'FactoryException' ))
 
     d['filename'] = filename
     if not directory:
@@ -194,7 +194,7 @@ class RecipeLoader:
 
     def _findRecipeClass(self, pkgname, basename, objDict, factory = False):
         result = None
-        for (name, obj) in objDict.iteritems():
+        for (name, obj) in objDict.items():
             if not inspect.isclass(obj):
                 continue
             # if a recipe has been marked to be ignored (for example, if
