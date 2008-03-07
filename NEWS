@@ -1,3 +1,13 @@
+Changes in @NEW@:
+  o Bug Fixes:
+    * A bug that occasionally caused a thread deadlock when multiple
+      threads access the local system Conary database concurrently has
+      been fixed. (CNY-2586)
+    * Checking out sources unpacks duplicate binary files (CNY-2543)
+    * Derived packages use the revision which was shadowed from to find
+      the version to derive from instead of the latest on the branch
+      (CNY-2577)
+
 Changes in 2.0.8:
   o Client Changes:
     * A close() method has been added to UpdateJob objects. It is
