@@ -1,5 +1,6 @@
 # Copyright (c) 2005-2007 rPath, Inc.
 #
+#
 # This program is distributed under the terms of the Common Public License,
 # version 1.0. A copy of this license should have been distributed with this
 # source file in a file called LICENSE. If it is not present, the license
