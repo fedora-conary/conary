@@ -27,6 +27,7 @@ import termios
 import threading
 import time
 from xml.sax import saxutils
+from conary.errors import ConaryError
 
 
 BUFFER=1024*4096
@@ -91,7 +92,7 @@ class Lexer(object):
         self.emit((CARRIAGE_RETURN, None))
 
     def command(self, text):
-        self.emit((COMMAND, text.split()))
+        self.emit((COMMAND, text.split(None, 1)))
 
     def close(self):
         # newline is the only state that can be left half flushed
@@ -170,7 +171,7 @@ class Lexer(object):
                             self.state = FREETEXT
             elif self.state == COMMAND:
                 if char == '\n':
-                    self.command(self.stream)
+                    self.command(self.stream.lstrip())
                     self.stream = ''
                     self.state = FREETEXT
                 else:
@@ -318,7 +319,13 @@ class XmlLogWriter(LogWriter):
         return desc
 
     @callable
-    def addRecordData(self, key, val):
+    def addRecordData(self, *args):
+        if len(args) < 2:
+            # called via lexer
+            key, val = args[0].split(None, 1)
+        else:
+            # called via xmllog:addRecordData
+            key, val = args
         if key[0].isdigit() or \
                 not re.match('^\w[a-zA-Z0-9_.-]*$', key,
                     flags = re.LOCALE | re.UNICODE):
@@ -405,19 +412,78 @@ class StreamLogWriter(LogWriter):
         if descriptor == 'environment':
             self.data.hideLog = False
 
-def startLog(path, xmlPath, withStdin = True):
+
+class SubscriptionLogWriter(LogWriter):
+    def __init__(self, path):
+        self.path = path
+        self.stream = None
+        LogWriter.__init__(self)
+        self.logging = False
+        self.current = None
+        self.rePatternList = []
+        self.r = None
+
+    @callable
+    def subscribe(self, pattern):
+        self.rePatternList.append(pattern)
+        self.r = re.compile('(%s)' %'|'.join(self.rePatternList))
+
+    @callable
+    def synchronizeMark(self, timestamp):
+        # Allow consumers to ensure that the log is complete as of
+        # output from all previous code
+        if self.current:
+            self.newline()
+        self.stream.write(timestamp)
+        self.stream.write('\n')
+        self.stream.flush()
+
+    def start(self):
+        # do not use openPath because this file needs 'a' for
+        # immediate synchronize()
+        self.stream = file(self.path, 'a')
+        self.logging = True
+
+    def freetext(self, text):
+        if self.current:
+            self.current += text
+        else:
+            self.current = text
+
+    def newline(self):
+        if self.current:
+            if self.r and self.r.match(self.current):
+                self.stream.write(self.current)
+                self.stream.write('\n')
+                # no need to flush, since we explicitly flush on the
+                # necessary synchronizeMark
+            self.current = None
+
+    carriageReturn = newline
+
+    def close(self):
+        self.stream.close()
+        self.logging = False
+
+
+
+def startLog(path, xmlPath, subscribeLogPath, withStdin = True):
     """ Start the log.  Equivalent to Logger(path).startLog() """
     plainWriter = FileLogWriter(path)
     xmlWriter = XmlLogWriter(xmlPath)
-    #lgr = Logger(withStdin = withStdin, writers = [plainWriter, xmlWriter])
     screenWriter = StreamLogWriter()
-    lgr = Logger(withStdin = withStdin, writers = [plainWriter, xmlWriter,
-            screenWriter])
+    subscriptionWriter = SubscriptionLogWriter(subscribeLogPath)
+    # touch this file to ensure that synchronize() works immediately
+    file(subscribeLogPath, 'a')
+    lgr = Logger(withStdin = withStdin,
+                 writers = [plainWriter, xmlWriter,
+                            screenWriter, subscriptionWriter],
+                 syncPath = subscribeLogPath)
     lgr.startLog()
     return lgr
 
 class Logger:
-    def __init__(self, withStdin = True, writers = []):
+    def __init__(self, withStdin = True, writers = [], syncPath = None):
         # by using a random string, we ensure that the marker used by the
         # logger class will never appear in any code, not even conary, thus
         # making the logger's code robust against tripping itself.
@@ -429,14 +495,11 @@ class Logger:
         for writer in writers:
             self.lexer.registerCallback(writer.handleToken)
         self.writers = writers
+        self.syncPath = syncPath
         self.logging = False
         self.closed = False
         self.withStdin = withStdin
         self.data = threading.local()
-
-    def registerWriter(self, writer):
-        self.writers.append(writer)
-        self.lexer.registerCallback(writer.handleToken)
 
     def command(self, cmdStr):
         self.write("\n%s %s\n" % (self.marker, cmdStr))
@@ -463,6 +526,40 @@ class Logger:
 
     def delRecordData(self, key):
         self.command('delRecordData %s %s' % key)
+
+    def subscribe(self, pattern):
+        self.command('subscribe %s' %pattern)
+
+    def synchronize(self):
+        timestamp = '%10.8f' %time.time()
+        self.command('synchronizeMark %s' %timestamp)
+        syncFile = file(self.syncPath)
+
+        def _longEnough():
+            syncFile.seek(0, 2)
+            return syncFile.tell() > 19
+
+        def _tooLong(i):
+            if i > 10000:
+                # 100 seconds is too long to wait for a pty; something's wrong
+                raise ConaryError('Log file synchronization failure')
+
+        i = 0
+        while not _longEnough():
+            _tooLong(i)
+            i += 1
+            time.sleep(0.01)
+
+        def _seekTimestamp():
+            syncFile.seek(-20, 2)
+
+        i = 0
+        _seekTimestamp()
+        while syncFile.read(19) != timestamp:
+            _tooLong(i)
+            i += 1
+            time.sleep(0.01)
+            _seekTimestamp()
 
     def __del__(self):
         if self.logging and not self.closed:
@@ -513,7 +610,7 @@ class Logger:
 
     def flush(self):
         # there's no buffer to flush, but we're trying to mimic a file-like
-        # itnerface
+        # interface
         pass
 
     def _becomeLogSlave(self, slaveFd, loggerPid, directWr):
