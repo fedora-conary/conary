@@ -247,7 +247,7 @@ class GroupRecipe(_BaseGroupRecipe):
     _recipeType = RECIPE_TYPE_GROUP
 
     depCheck = False
-    autoResolve = False
+    autoResolve = None
     imageGroup = True
     checkOnlyByDefaultDeps = True
     checkPathConflicts = True
@@ -295,6 +295,8 @@ class GroupRecipe(_BaseGroupRecipe):
         if extraMacros:
             self.macros.update(extraMacros)
 
+        if self.autoResolve is None:
+            self.autoResolve = self.imageGroup
         group = self.createGroup(self.name, depCheck = self.depCheck,
                          autoResolve = self.autoResolve,
                          checkOnlyByDefaultDeps = self.checkOnlyByDefaultDeps,
@@ -1409,7 +1411,7 @@ class GroupRecipe(_BaseGroupRecipe):
     def getGroupMap(self):
         return self.groups
 
-    def startGroup(self, name, depCheck = False, autoResolve = False,
+    def startGroup(self, name, depCheck = False, autoResolve = None,
                     byDefault = None, checkOnlyByDefaultDeps = None,
                     checkPathConflicts = None, imageGroup = False,
                     groupName = None):
@@ -1486,7 +1488,7 @@ class GroupRecipe(_BaseGroupRecipe):
         self.addNewGroup(name, byDefault = byDefault, groupName = groupName)
         self.setDefaultGroup(name)
 
-    def createGroup(self, groupName, depCheck = False, autoResolve = False,
+    def createGroup(self, groupName, depCheck = False, autoResolve = None,
                     byDefault = None, checkOnlyByDefaultDeps = None,
                     checkPathConflicts = None, imageGroup = False):
         """
@@ -1555,6 +1557,9 @@ class GroupRecipe(_BaseGroupRecipe):
 
         if checkPathConflicts is None:  
             checkPathConflicts = origGroup.checkPathConflicts
+
+        if autoResolve is None:
+            autoResolve = imageGroup
 
         newGroup = SingleGroup(groupName, depCheck, autoResolve,
                                 checkOnlyByDefaultDeps,
@@ -3199,11 +3204,15 @@ def findSourcesForGroup(repos, recipeObj, callback=None):
     flavorMap = {}
     groupList = list(recipeObj.iterGroupList())
 
+    for item in recipeObj.iterReplaceSpecs():
+        (troveSpec, refSource, requireLatest), allowNoMatch = item
+        sourceSpec = _sourceSpec(troveSpec)
+        toFind.setdefault(refSource, set()).add(sourceSpec)
+        _addFlavors(refSource, sourceSpec, troveSpec[2], flavorMap)
+
     for group in groupList:
         for (troveSpec, source, byDefault,
              refSource, components, requireLatest) in group.iterAddSpecs():
-            flavorMap.setdefault(refSource, {})
-
             sourceSpec = _sourceSpec(troveSpec, source)
             toFind.setdefault(refSource, set()).add(sourceSpec)
             _addFlavors(refSource, sourceSpec, troveSpec[2], flavorMap)
@@ -3215,8 +3224,8 @@ def findSourcesForGroup(repos, recipeObj, callback=None):
 
         for (troveSpec, ref, requireLatest), _ in group.iterReplaceSpecs():
             sourceSpec = _sourceSpec(troveSpec)
-            flavorMap.setdefault(sourceSpec, []).append(troveSpec[2])
             toFind.setdefault(ref, set()).add(sourceSpec)
+            _addFlavors(ref, sourceSpec, troveSpec[2], flavorMap)
 
     results = {}
 

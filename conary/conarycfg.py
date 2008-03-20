@@ -1,4 +1,4 @@
-# Copyright (c) 2004-2007 rPath, Inc.
+# Copyright (c) 2004-2008 rPath, Inc.
 #
 # This program is distributed under the terms of the Common Public License,
 # version 1.0. A copy of this license should have been distributed with this
@@ -467,7 +467,9 @@ CfgSearchPath = CfgLineList(CfgSearchPathItem)
 
 def _getDefaultPublicKeyrings():
     publicKeyrings = []
-    if 'HOME' in os.environ:
+    # If we are root, don't use the keyring in $HOME, since a process started
+    # under sudo will have $HOME set to the old user's (CNY-2630)
+    if os.getuid() != 0 and 'HOME' in os.environ:
         publicKeyrings.append('~/.gnupg/pubring.gpg')
     publicKeyrings.append('/etc/conary/pubring.gpg')
     return publicKeyrings

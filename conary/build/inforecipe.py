@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2005 rPath, Inc.
+# Copyright (c) 2005-2008 rPath, Inc.
 #
 # This program is distributed under the terms of the Common Public License,
 # version 1.0. A copy of this license should have been distributed with this
@@ -36,7 +36,7 @@ class UserGroupInfoRecipe(AbstractPackageRecipe):
 
     def getPackages(self):
         # we do not package up build logs for info-* packages
-        self._autoCreatedFileCount -= 1
+        self._autoCreatedFileCount -= 2
         comp = buildpackage.BuildComponent(
             'info-%s:%s' %(self.infoname, self.type), self)
         f = comp.addFile(self.infofilename, self.realfilename)
@@ -50,7 +50,7 @@ class UserGroupInfoRecipe(AbstractPackageRecipe):
     def loadPolicy(self):
         return []
 
-    def doProcess(self, bucket):
+    def doProcess(self, bucket, logFile = None):
         pass
 
     def addProvides(self, f):

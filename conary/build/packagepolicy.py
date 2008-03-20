@@ -263,7 +263,7 @@ class Config(policy.Policy):
                     self.warn("adding trailing newline to config file '%s'" % \
                             filename)
                     mode = os.lstat(fullpath)[stat.ST_MODE]
-                    oldMode = None
+                    oldmode = None
                     if mode & 0600 != 0600:
                         # need to be able to read and write the file to fix it
                         oldmode = mode
@@ -638,7 +638,7 @@ class InitialContents(policy.Policy):
 
     def updateArgs(self, *args, **keywords):
 	policy.Policy.updateArgs(self, *args, **keywords)
-        self.recipe.Config(exceptions=args)
+        self.recipe.Config(exceptions=args, allowUnusedFilters = True)
 
     def doFile(self, filename):
 	fullpath = self.macros.destdir + filename
@@ -842,7 +842,6 @@ class TagSpec(_addInfo):
 		for filename in os.listdir(directory):
 		    path = util.joinPaths(directory, filename)
 		    self.tagList.append(tags.TagFile(path, recipe.macros, True))
-        self.db = database.Database(self.recipe.cfg.root, self.recipe.cfg.dbPath)
         self.fullReqs = self.recipe._getTransitiveBuildRequiresNames()
         _addInfo.doProcess(self, recipe)
 
@@ -860,8 +859,9 @@ class TagSpec(_addInfo):
         if tag not in tags:
             self.info('%s: %s', name, path)
             tags.set(tag)
-            if tagFile and self.db:
-                for trove in self.db.iterTrovesByPath(tagFile.tagFile):
+            db = self._getDb()
+            if tagFile: 
+                for trove in db.iterTrovesByPath(tagFile.tagFile):
                     troveName = trove.getName()
                     if troveName not in self.fullReqs:
                         # XXX should be error, change after bootstrap
@@ -1012,7 +1012,8 @@ class setModes(policy.Policy):
 	    mode = self.fixmodes[path]
 	    # set explicitly, do not warn
 	    self.recipe.WarnWriteable(
-                exceptions=re.escape(path.replace('%', '%%')))
+                exceptions=re.escape(path.replace('%', '%%')),
+                allowUnusedFilters = True)
             if mode & 06000:
                 self.info('suid/sgid: %s mode 0%o', path, mode & 07777)
 	    self.recipe.autopkg.pathMap[path].inode.perms.set(mode)
@@ -1101,12 +1102,18 @@ class LinkCount(policy.Policy):
         self.excepts = set()
 
     def updateArgs(self, *args, **keywords):
-        if 'exceptions' in keywords:
-            exceptions = keywords.pop('exceptions')
+        allowUnusedFilters = keywords.pop('allowUnusedFilters', False) or \
+                self.allowUnusedFilters
+        exceptions = keywords.pop('exceptions', None)
+        if exceptions:
             if type(exceptions) is str:
                 self.excepts.add(exceptions)
+                if not allowUnusedFilters:
+                    self.unusedFilters['exceptions'].add(exceptions)
             elif type(exceptions) in (tuple, list):
-                self.excepts.update(set(exceptions))
+                self.excepts.update(exceptions)
+                if not allowUnusedFilters:
+                    self.unusedFilters['exceptions'].update(exceptions)
         # FIXME: we may want to have another keyword argument
         # that passes information down to the buildpackage
         # that causes link groups to be broken for some
@@ -1114,14 +1121,20 @@ class LinkCount(policy.Policy):
         # first whether this is useful; it may not be.
 
     def do(self):
-        filters = [filter.Filter(x, self.macros) for x in self.excepts]
+        filters = [(x, filter.Filter(x, self.macros)) for x in self.excepts]
         for component in self.recipe.autopkg.getComponents():
             for inode in component.linkGroups:
                 # ensure all in same directory, except for directories
                 # matching regexps that have been passed in
-                dirSet = set(os.path.dirname(x) + '/'
-                             for x in component.linkGroups[inode]
-                             if not [y for y in filters if y.match(x)])
+
+                allPaths = [x for x in component.linkGroups[inode]]
+                for path in allPaths[:]:
+                    for regexp, f in filters:
+                        if f.match(path):
+                            self.unusedFilters['exceptions'].discard(regexp)
+                            allPaths.remove(path)
+                dirSet = set(os.path.dirname(x) + '/' for x in allPaths)
+
                 if len(dirSet) > 1:
                     self.error('files %s are hard links across directories %s',
                                ', '.join(sorted(component.linkGroups[inode])),
@@ -1275,6 +1288,8 @@ class ByDefault(policy.Policy):
     filetree = policy.NO_FILES
 
     invariantexceptions = [':test', ':debuginfo']
+
+    allowUnusedFilters = True
 
     def doProcess(self, recipe):
         if not self.inclusions:
@@ -1717,7 +1732,6 @@ class _dependency(policy.Policy):
     """
 
     def preProcess(self):
-        self.db = None
         self.CILPolicyRE = re.compile(r'.*mono/.*/policy.*/policy.*\.config$')
         self.legalCharsRE = re.compile('[.0-9A-Za-z_+-/]')
         # interpolate macros, using canonical path form with no trailing /
@@ -1985,12 +1999,6 @@ class _dependency(policy.Policy):
             m = self.recipe.magic[contentsPath]
             contentsPath = macros.destdir + contentsPath
         return m, contentsPath[len(macros.destdir):]
-
-    def _getDb(self):
-        if self.db is None:
-            self.db = database.Database(self.recipe.cfg.root,
-                                        self.recipe.cfg.dbPath)
-        return self.db
 
     def _enforceProvidedPath(self, path, fileType='interpreter',
                              unmanagedError=False):
@@ -2305,7 +2313,6 @@ class Provides(_dependency):
         self.pythonSysPathMap = {}
         self.exceptDeps = []
 	policy.Policy.__init__(self, *args, **keywords)
-        self.db = None
         self.depCache = self.dbDepCacheClass(self._getDb())
 
     def updateArgs(self, *args, **keywords):
@@ -2951,7 +2958,6 @@ class Requires(_addInfo, _dependency):
         self.pythonSysPathMap = {}
         self.pythonModuleFinderMap = {}
         policy.Policy.__init__(self, *args, **keywords)
-        self.db = None
         self.depCache = self.dbDepCacheClass(self._getDb())
 
         ISD = deps.InstructionSetDependency
@@ -3028,9 +3034,6 @@ class Requires(_addInfo, _dependency):
         self._delPythonRequiresModuleFinder()
 
     def doFile(self, path):
-        if self.db is None:
-            self.db = database.Database(self.recipe.cfg.root,
-                    self.recipe.cfg.dbPath)
 	componentMap = self.recipe.autopkg.componentMap
 	if path not in componentMap:
 	    return
@@ -3107,11 +3110,12 @@ class Requires(_addInfo, _dependency):
         if self._isJava(m, 'requires'):
             self._addJavaRequirements(path, m, pkg)
 
+        db = self._getDb()
         if self._isPerl(path, m, f):
             perlReqs = self._getPerlReqs(path, fullpath)
             for req in perlReqs:
                 thisReq = deps.parseDep('perl: ' + req)
-                if self.db.getTrovesWithProvides([thisReq]) or \
+                if db.getTrovesWithProvides([thisReq]) or \
                         [x for x in self.recipe.autopkg.components.values() \
                             if x.provides.satisfies(thisReq)]:
                     self._addRequirement(path, req, [], pkg,
@@ -3690,8 +3694,24 @@ class _basePluggableRequires(Requires):
         # only apply to the sub-policy.
         exceptions = self.recipe._policyMap['Requires'].exceptions
         if exceptions:
-            Requires.updateArgs(self, exceptions=exceptions)
+            Requires.updateArgs(self, exceptions=exceptions,
+                    allowUnusedFilters = True)
         Requires.preProcess(self)
+
+    def reportErrors(self, *args, **kwargs):
+        return self.recipe._policyMap['Requires'].reportErrors(*args, **kwargs)
+
+    def error(self, *args, **kwargs):
+        return self.recipe._policyMap['Requires'].error(*args, **kwargs)
+
+    def warn(self, *args, **kwargs):
+        return self.recipe._policyMap['Requires'].warn(*args, **kwargs)
+
+    def info(self, *args, **kwargs):
+        return self.recipe._policyMap['Requires'].info(*args, **kwargs)
+
+    def _addClassName(self, *args, **kawrgs):
+        return self.recipe._policyMap['Requires']._addClassName(*args, **kwargs)
 
     def doFile(self, path):
         componentMap = self.recipe.autopkg.componentMap

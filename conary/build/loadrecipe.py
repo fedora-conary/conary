@@ -417,15 +417,15 @@ class RecipeLoaderFromSourceTrove(RecipeLoader):
 
         name = sourceTrove.getName().split(':')[0]
 
-        if (sourceTrove.getSourceType() and
-                    sourceTrove.getSourceType() != 'factory'):
+        if (sourceTrove.getFactory() and
+            sourceTrove.getFactory() != 'factory'):
             if not versionStr:
                 if branch:
                     versionStr = str(branch)
                 else:
                     versionStr = sourceTrove.getVersion().branch()
 
-            factoryName = 'factory-' + sourceTrove.getSourceType()
+            factoryName = 'factory-' + sourceTrove.getFactory()
             loader = RecipeLoaderFromRepository(factoryName, cfg, repos,
                                     versionStr=versionStr, labelPath=labelPath,
                                     ignoreInstalled=ignoreInstalled,
@@ -495,7 +495,7 @@ class RecipeLoaderFromSourceTrove(RecipeLoader):
                       ignoreInstalled=ignoreInstalled,
                       directory=parentDir, buildFlavor=buildFlavor,
                       db=db, overrides=overrides,
-                      factory = (sourceTrove.getSourceType() == 'factory'),
+                      factory = (sourceTrove.getFactory() == 'factory'),
                       objDict = objDict)
         finally:
             os.unlink(recipeFile)
@@ -517,7 +517,7 @@ class RecipeLoaderFromSourceTrove(RecipeLoader):
 
             return getFileFunction(repos, fileId, fileVersion, path)
 
-        files = [ x[1] for x in sourceTrv.iterFileList() ]
+        files = sorted([ x[1] for x in sourceTrv.iterFileList() ])
         factory = factoryClass(pkgname, sourceFiles = files,
                                openSourceFileFn = openSourceFile)
         recipe = factory.getRecipeClass()
@@ -989,20 +989,17 @@ def _getLoaderFromFilesystem(name, versionStr, flavor, cfg, repos, db,
 
     return loader, oldBuildFlavor
 
-def getRecipeClass(trv, branch = None, cfg = None, repos = None,
-                   ignoreInstalled = None, buildFlavor = None, db = None,
-                   overrides = None, directory = None,
-                   sourceFiles = None):
-    def getFile(repos, fileId, fileVersion, path):
-        return open(path)
+class RecipeLoaderFromSourceDirectory(RecipeLoaderFromSourceTrove):
 
-    loader = RecipeLoaderFromSourceTrove(trv,
-                                    repos, cfg, versionStr=str(branch),
-                                    ignoreInstalled=ignoreInstalled,
-                                    parentDir=directory,
-                                    buildFlavor = buildFlavor,
-                                    db = db, overrides = overrides,
-                                    getFileFunction = getFile,
-                                    branch = branch)
+    def __init__(self, trv, branch = None, cfg = None, repos = None,
+                 ignoreInstalled = None, sourceFiles = None,
+                 buildFlavor = None):
+        def getFile(repos, fileId, fileVersion, path):
+            return open(path)
 
-    return loader.getRecipe()
+        RecipeLoaderFromSourceTrove.__init__(self, trv, repos, cfg,
+                                             versionStr=str(branch),
+                                             ignoreInstalled=ignoreInstalled,
+                                             getFileFunction = getFile,
+                                             branch = branch,
+                                             buildFlavor = buildFlavor)

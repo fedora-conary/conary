@@ -1,3 +1,60 @@
+Changes in @NEW@:
+  o Build Changes:
+    * An xml formatted log has been added to :debuginfo. This is in
+      addition to the human readable log. The xml log contains the same
+      information as the human readable log, plus additional contextual
+      information useful for formatting the log data. (CNY-2487)
+    * AutoResolve defaults to True for image groups. (CNY-2291)
+    * Exceptions and inclusions to policies that don't match anything
+      will now emit an error. (CNY-2221)
+    * A new selective logging facility for policy to use to inspect
+      build output has been added. (CNY-2622)
+    * The ability to pass multiple URLs to addArchive has been added.
+      Conary will try to download the source from each URL, in order,
+      until it succeeds. (CNY-2505)
+    * Recipe actions have now the ability to suggest build requirements.
+      (CNY-935)
+
+  o Bug Fixes:
+    * Rollbacks could restore files from local rollbacks by overwriting
+      existing contents rather than replacing the file. In addition,
+      the operation was not journaled properly. (CNY-2596)
+    * A bug in finding the sources required to build all the packages for
+      a group that omitted replace() packages has been fixed.  This mainly
+      affected rmake builds of group recipes. (CNY-2605)
+    * An error in the repository that caused a malformed exception to
+      be returned to the client when a trove was missing has been
+      corrected. (CNY-2624)
+    * If launched with sudo, Conary will no longer change the owner
+      on the user's PGP keyring, and will use the proper system-wide
+      keyring. (CNY-2630)
+    * When using PostgreSQL as a repository backend, some queries
+      could be executed with poor execution plans (CNY-2639)
+    * A bug that caused a local cook (e.g., "cvc cook pkg.recipe") to
+      fail at "Copying forward metadata to newly built items..." when
+      the Conary repository for that recipe is not available has been
+      fixed. (CNY-2640)
+    * Checking out source components which used factories now preserves
+      the factory
+    * Building directly from recipe files which use factories for superclasses
+      now works (CNY-2656)
+
+  o Client changes
+    * More of the update logic is now protected by the filesystem journal,
+      and the journal now cleans up rollback state on failure (CNY-2592)
+
+Changes in 2.0.9:
+  o Bug Fixes:
+    * A bug that occasionally caused a thread deadlock when multiple
+      threads access the local system Conary database concurrently has
+      been fixed. (CNY-2586)
+    * Checking out sources unpacks duplicate binary files (CNY-2543)
+    * Derived packages use the revision which was shadowed from to find
+      the version to derive from instead of the latest on the branch
+      (CNY-2577)
+    * A bug that occurred when rMake recursed through a group recipe
+      that made use of the replace command has been fixed. (CNY-2606)
+
 Changes in 2.0.8:
   o Client Changes:
     * A close() method has been added to UpdateJob objects. It is

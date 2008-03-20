@@ -1,6 +1,6 @@
 # -*- mode: python -*-
 #
-# Copyright (c) 2004-2005 rPath, Inc.
+# Copyright (c) 2004-2008 rPath, Inc.
 #
 # This program is distributed under the terms of the Common Public License,
 # version 1.0. A copy of this license should have been distributed with this
@@ -14,8 +14,9 @@
 #
 
 from conary.deps import deps
+from conary.errors import ConaryError
 
-class UpdateError:
+class UpdateError(ConaryError):
 
     pass
 

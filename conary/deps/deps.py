@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2004-2006 rPath, Inc.
+# Copyright (c) 2004-2008 rPath, Inc.
 #
 # This program is distributed under the terms of the Common Public License,
 # version 1.0. A copy of this license should have been distributed with this
@@ -1507,7 +1507,6 @@ def getMinimalFlagChanges(dep, depToMatch):
 
 
 def getMinimalCompatibleChanges(flavor, flavorToMatch, keepArch=False):
-    getInstructionSetFlavor
     useFlags = list(flavorToMatch.iterDepsByClass(UseDependency))
     insDeps = list(flavorToMatch.iterDepsByClass(InstructionSetDependency))
     targetDeps = list(flavorToMatch.iterDepsByClass(

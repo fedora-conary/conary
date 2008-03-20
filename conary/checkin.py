@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2004-2007 rPath, Inc.
+# Copyright (c) 2004-2008 rPath, Inc.
 #
 # This program is distributed under the terms of the Common Public License,
 # version 1.0. A copy of this license should have been distributed with this
@@ -193,6 +193,34 @@ def checkout(repos, cfg, workDir, nameList, callback=None):
 
     _checkout(repos, cfg, workDir, fullList, callback)
 
+class CheckoutExploder(changeset.AbstractChangesetExploder):
+
+    def __init__(self, cs, pathMap, sourceState):
+        self.pathMap = pathMap
+        self.sourceState = sourceState
+        changeset.AbstractChangesetExploder.__init__(self, cs)
+
+    def installFile(self, trv, path, fileObj):
+        (destDir, pathId, fileId, version) = \
+                    self.pathMap[(trv.getNameVersionFlavor(), path)]
+
+        trv.iterFileList()
+        self.sourceState.addFile(pathId, path, version, fileId,
+                                 isConfig = fileObj.flags.isConfig(),
+                                 isAutoSource = fileObj.flags.isAutoSource())
+
+        if fileObj.flags.isAutoSource():
+            return False
+
+        return destDir
+
+    def restoreFile(self, trv, fileObj, contents, destdir, path):
+        fileObj.restore(contents, destdir, destdir + '/' + path,
+                        nameLookup = False)
+
+    def fileMissing(self, trv, pathId, fileId, path):
+        pass
+
 def _checkout(repos, cfg, workDirArg, trvList, callback):
     assert(len(trvList) == 1 or workDirArg is None)
     jobList = []
@@ -231,48 +259,19 @@ def _checkout(repos, cfg, workDirArg, trvList, callback):
 
     verifyAbsoluteChangesetSignatures(cs, callback)
 
-    earlyRestore = []
-    lateRestore = []
+    pathMap = {}
 
     for trvInfo, spec in itertools.izip(trvList, checkoutSpecs):
         sourceState = spec.conaryState.getSourceState()
         troveCs = cs.getNewTroveVersion(*trvInfo)
+        trv = trove.Trove(troveCs)
+        if trv.getFactory():
+            sourceState.setFactory(trv.getFactory())
 
         for (pathId, path, fileId, version) in troveCs.getNewFileList():
-            fullPath = spec.targetDir + "/" + path
+            pathMap[(trvInfo, path)] = (spec.targetDir, pathId, fileId, version)
 
-            fileStream = cs.getFileChange(None, fileId)
-            if fileStream is None:
-                # File is missing
-                continue
-
-            fileObj = files.ThawFile(fileStream, pathId)
-            sourceState.addFile(pathId, path, version, fileId,
-                                isConfig = fileObj.flags.isConfig(),
-                                isAutoSource = fileObj.flags.isAutoSource())
-
-            if fileObj.flags.isAutoSource():
-                continue
-
-            if not fileObj.hasContents:
-                fileObj.restore(None, '/', fullPath, nameLookup=False)
-            else:
-                # tracking the pathId separately from the fileObj lets
-                # us sort the list of files by pathId,fileId (which is how
-                # changesets are ordered)
-                assert(fileObj.pathId() == pathId)
-                if fileObj.flags.isConfig():
-                    earlyRestore.append((pathId, fileId, fileObj, '/', fullPath))
-                else:
-                    lateRestore.append((pathId, fileId, fileObj, '/', fullPath))
-
-    earlyRestore.sort()
-    lateRestore.sort()
-
-    for pathId, fileId, fileObj, root, target in \
-                            itertools.chain(earlyRestore, lateRestore):
-	contents = cs.getFileContents(pathId, fileId)[1]
-	fileObj.restore(contents, root, target, nameLookup=False)
+    CheckoutExploder(cs, pathMap, sourceState)
 
     for spec in checkoutSpecs:
         spec.conaryState.write(spec.targetDir + "/CONARY")
@@ -318,7 +317,7 @@ def commit(repos, cfg, message, callback=None, test=False, force=False):
     # turn off loadInstalled for committing - it ties you too closely
     # to actually being able to build what you are developing locally - often
     # not the case.
-    if (not state.getSourceType()) or state.getSourceType() == 'factory':
+    if (not state.getFactory()) or state.getFactory() == 'factory':
         if not [ x[1] for x in state.iterFileList()
                                         if x[1].endswith('.recipe') ]:
             log.error("recipe not in CONARY state file, please run cvc add")
@@ -328,10 +327,11 @@ def commit(repos, cfg, message, callback=None, test=False, force=False):
 
     try:
         use.allowUnknownFlags(True)
-        recipeClass = loadrecipe.getRecipeClass(state, cfg = cfg, repos = repos,
-                                                branch = state.getBranch(),
-                                                ignoreInstalled = True,
-                                                sourceFiles = allPaths)
+        recipeClass = loadrecipe.RecipeLoaderFromSourceDirectory(state,
+                            cfg = cfg, repos = repos,
+                            branch = state.getBranch(),
+                            ignoreInstalled = True,
+                            sourceFiles = allPaths).getRecipe()
     finally:
         use.allowUnknownFlags(False)
 
@@ -1382,9 +1382,10 @@ def merge(cfg, repos, versionSpec=None, callback=None):
 
     if os.path.exists(state.getRecipeFileName()):
         use.allowUnknownFlags(True)
-        recipeClass = loadrecipe.getRecipeClass(state, cfg = cfg, repos = repos,
-                                                branch = state.getBranch(),
-                                                ignoreInstalled = True)
+        recipeClass = loadrecipe.RecipeLoaderFromSourceDirectory(state,
+                                cfg = cfg, repos = repos,
+                                branch = state.getBranch(),
+                                ignoreInstalled = True).getRecipe()
     else:
         recipeClass = None.__class__
 
@@ -1689,7 +1690,7 @@ def removeFile(filename, repos=None):
     conaryState.write("CONARY")
 
 def newTrove(repos, cfg, name, dir = None, template = None, buildBranch=None,
-             sourceType = None):
+             factory = None):
     parts = name.split('=', 1)
     if len(parts) == 1:
         label = cfg.buildLabel
@@ -1705,10 +1706,10 @@ def newTrove(repos, cfg, name, dir = None, template = None, buildBranch=None,
         raise errors.CvcError('%s is not a valid package name', name)
     component = "%s:source" % name
 
-    if sourceType == 'factory' and not name.startswith('factory-'):
+    if factory == 'factory' and not name.startswith('factory-'):
         raise errors.CvcError('The name of factory troves must begin with '
                               '"factory-"')
-    elif sourceType != 'factory' and name.startswith('factory-'):
+    elif factory != 'factory' and name.startswith('factory-'):
         raise errors.CvcError('Only factory troves may use "factory-" in '
                               'their name')
 
@@ -1719,7 +1720,7 @@ def newTrove(repos, cfg, name, dir = None, template = None, buildBranch=None,
     else:
         branch = buildBranch
     sourceState = SourceState(component, versions.NewVersion(), branch)
-    sourceState.setSourceType(sourceType)
+    sourceState.setFactory(factory)
     conaryState = ConaryState(cfg.context, sourceState)
 
     # see if this package exists on our build label
@@ -1992,9 +1993,10 @@ def refresh(repos, cfg, refreshPatterns=[], callback=None):
         srcPkg = repos.getTrove(troveName, state.getVersion(), deps.deps.Flavor())
 
     use.allowUnknownFlags(True)
-    recipeClass = loadrecipe.getRecipeClass(state, cfg = cfg, repos = repos,
-                                            branch = state.getBranch(),
-                                            ignoreInstalled = True)
+    recipeClass = loadrecipe.RecipeLoaderFromSourceDirectory(state,
+                                    cfg = cfg, repos = repos,
+                                    branch = state.getBranch(),
+                                    ignoreInstalled = True).getRecipe()
 
     # fetch all the sources
 
