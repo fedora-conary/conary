@@ -1118,9 +1118,13 @@ def _cookPackageObject(repos, cfg, recipeClass, sourceVersion, prep=True,
                 # is finished
             else:
                 raise
-        logFile.pushDescriptor('cook')
-        logBuildEnvironment(logFile, sourceVersion, policyTroves,
-                                recipeObj.macros, cfg)
+        try:
+            logFile.pushDescriptor('cook')
+            logBuildEnvironment(logFile, sourceVersion, policyTroves,
+                                    recipeObj.macros, cfg)
+        except:
+            logFile.close()
+            raise
     try:
         logBuild and logFile.pushDescriptor('build')
         bldInfo.begin()
@@ -1139,6 +1143,7 @@ def _cookPackageObject(repos, cfg, recipeClass, sourceVersion, prep=True,
 
         # if we're only extracting or downloading, continue to the next recipe class.
         if prep or downloadOnly:
+            logBuild and logFile.close()
             return recipeObj
 
         cwd = os.getcwd()
@@ -1151,6 +1156,7 @@ def _cookPackageObject(repos, cfg, recipeClass, sourceVersion, prep=True,
                           recipeObj.resumeList[-1][1] != False:
                 log.info('Finished Building %s Lines %s, Not Running Policy', 
                                                        recipeClass.name, resume)
+                logBuild and logFile.close()
                 return
             log.info('Processing %s', recipeClass.name)
             logBuild and logFile.pushDescriptor('policy')
@@ -1181,6 +1187,7 @@ def _cookPackageObject(repos, cfg, recipeClass, sourceVersion, prep=True,
             # no components in packages, or no explicit files in components
             log.error('No files were found to add to package %s'
                       %recipeClass.name)
+            logBuild and logFile.close()
             return
 
     except Exception, msg:
@@ -1196,10 +1203,12 @@ def _cookPackageObject(repos, cfg, recipeClass, sourceVersion, prep=True,
             debugger.post_mortem(sys.exc_info()[2])
         raise
 
-    if logBuild and recipeObj._autoCreatedFileCount:
-        logBuild and logFile.popDescriptor('build')
+    if logBuild:
+        logFile.popDescriptor('build')
         logFile.popDescriptor('cook')
         logFile.close()
+
+    if logBuild and recipeObj._autoCreatedFileCount:
         if os.path.exists(logPath):
             os.unlink(logPath)
         if os.path.exists(xmlLogPath):

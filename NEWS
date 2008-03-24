@@ -51,6 +51,8 @@ Changes in @NEW@:
       foreign repositories. (CNY-2544)
     * An issue related to the build logger not properly setting the
       terminal has been fixed. (CNY-2647)
+    * Allow perl dependencies with periods in them to be parsed from
+      the command line. (CNY-2667)
 
   o Client changes
     * More of the update logic is now protected by the filesystem journal,

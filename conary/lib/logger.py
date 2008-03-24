@@ -536,8 +536,8 @@ class Logger:
         self.command("directLog %s" % escapeMessage(msg))
 
     def command(self, cmdStr):
-        # Writing to standard error will make the output go through the tty,
-        # which is exactly what want
+        # Writing to stdout will make the output go through the tty,
+        # which is exactly what we want
         sys.stdout.write("\n%s %s\n" % (self.marker, cmdStr))
 
     def write(self, *msgs):
@@ -559,13 +559,15 @@ class Logger:
                 raise RuntimeError('Log Descriptor does not match expected '
                         'value: empty stack while expecting %s' %
                             (descriptor, ))
-            if descriptor != descriptorStack[-1]:
+            stackTop = descriptorStack[-1]
+            if descriptor != stackTop:
                 raise RuntimeError('Log Descriptor does not match expected '
                     'value: stack contained %s but reference value was %s' %
-                            (descriptorStack[-1], descriptor))
+                            (stackTop, descriptor))
+            descriptorStack.pop()
 
             self.command("popDescriptor %s" % descriptor)
-            return descriptorStack.pop()
+            return stackTop
 
         self.command("popDescriptor")
         return None
@@ -802,20 +804,8 @@ class _ChildLogger:
                         # due to a SIGWINCH signal.  Raise any other error
                         raise
                 else:
-                    # avoid writing foo\rbar\rblah to log
-                    outputList = output.split('\r\n')
+                    lexer.write(output)
 
-                    if unLogged:
-                        outputList[0] = unLogged + outputList[0]
-                        unLogged = ''
-                    outputList = [x.rsplit('\r', 1)[-1] for x in outputList
-                                  if not x.endswith('\r')]
-                    if outputList:
-                        # if output didn't end with \n, save last line for later
-                        unLogged = outputList[-1]
-                        if unLogged:
-                            outputList[-1] = ''
-                        lexer.write('\n'.join(outputList))
             if stdin in read:
                 # read input from stdin, and pass to 
                 # pseudo tty 
