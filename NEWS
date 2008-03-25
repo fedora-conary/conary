@@ -61,6 +61,8 @@ Changes in @NEW@:
       library. This fixes a regression introduced in the Conary 2
       codebase, where only the selector part of the URL would be
       returned. (CNY-2517)
+    * A source of circular references which could cause unpredictable
+      memory usage has been removed. (CNY-2674)
 
   o Client changes
     * More of the update logic is now protected by the filesystem journal,
