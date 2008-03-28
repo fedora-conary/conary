@@ -32,7 +32,7 @@ import traceback
 from conary import (callbacks, conaryclient, constants, files, trove, versions,
                     updatecmd)
 from conary.build import buildinfo, buildpackage, lookaside, policy, use
-from conary.build import recipe, grouprecipe, loadrecipe
+from conary.build import recipe, grouprecipe, loadrecipe, packagerecipe
 from conary.build import errors as builderrors
 from conary.build.nextversion import nextVersion
 from conary.conarycfg import selectSignatureKey
@@ -472,6 +472,23 @@ def cookObject(repos, cfg, recipeClass, sourceVersion,
             log.error('Error setting build flags from flavor %s: %s' % (
                                             buildFlavor, msg))
             sys.exit(1)
+
+        if type == recipe.RECIPE_TYPE_FACTORY:
+
+            class FactoryRecipe(packagerecipe.AbstractPackageRecipe):
+
+                name = recipeClass.name
+                version = recipeClass.version
+                _sourcePath = recipeClass._sourcePath
+                abstractBaseClass = True
+                _originalFactoryClass = recipeClass
+                _trove = recipeClass._trove
+
+                def setup(r):
+                    pass
+
+            recipeClass = FactoryRecipe
+            type = recipeClass.getType()
 
         if type in (recipe.RECIPE_TYPE_INFO,
                       recipe.RECIPE_TYPE_PACKAGE):
@@ -1118,9 +1135,13 @@ def _cookPackageObject(repos, cfg, recipeClass, sourceVersion, prep=True,
                 # is finished
             else:
                 raise
-        logFile.pushDescriptor('cook')
-        logBuildEnvironment(logFile, sourceVersion, policyTroves,
-                                recipeObj.macros, cfg)
+        try:
+            logFile.pushDescriptor('cook')
+            logBuildEnvironment(logFile, sourceVersion, policyTroves,
+                                    recipeObj.macros, cfg)
+        except:
+            logFile.close()
+            raise
     try:
         logBuild and logFile.pushDescriptor('build')
         bldInfo.begin()
@@ -1139,6 +1160,7 @@ def _cookPackageObject(repos, cfg, recipeClass, sourceVersion, prep=True,
 
         # if we're only extracting or downloading, continue to the next recipe class.
         if prep or downloadOnly:
+            logBuild and logFile.close()
             return recipeObj
 
         cwd = os.getcwd()
@@ -1151,6 +1173,7 @@ def _cookPackageObject(repos, cfg, recipeClass, sourceVersion, prep=True,
                           recipeObj.resumeList[-1][1] != False:
                 log.info('Finished Building %s Lines %s, Not Running Policy', 
                                                        recipeClass.name, resume)
+                logBuild and logFile.close()
                 return
             log.info('Processing %s', recipeClass.name)
             logBuild and logFile.pushDescriptor('policy')
@@ -1181,6 +1204,7 @@ def _cookPackageObject(repos, cfg, recipeClass, sourceVersion, prep=True,
             # no components in packages, or no explicit files in components
             log.error('No files were found to add to package %s'
                       %recipeClass.name)
+            logBuild and logFile.close()
             return
 
     except Exception, msg:
@@ -1196,10 +1220,12 @@ def _cookPackageObject(repos, cfg, recipeClass, sourceVersion, prep=True,
             debugger.post_mortem(sys.exc_info()[2])
         raise
 
-    if logBuild and recipeObj._autoCreatedFileCount:
-        logBuild and logFile.popDescriptor('build')
+    if logBuild:
+        logFile.popDescriptor('build')
         logFile.popDescriptor('cook')
         logFile.close()
+
+    if logBuild and recipeObj._autoCreatedFileCount:
         if os.path.exists(logPath):
             os.unlink(logPath)
         if os.path.exists(xmlLogPath):

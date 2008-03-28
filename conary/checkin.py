@@ -195,17 +195,17 @@ def checkout(repos, cfg, workDir, nameList, callback=None):
 
 class CheckoutExploder(changeset.AbstractChangesetExploder):
 
-    def __init__(self, cs, pathMap, sourceState):
+    def __init__(self, cs, pathMap, sourceStateMap):
         self.pathMap = pathMap
-        self.sourceState = sourceState
+        self.sourceStateMap = sourceStateMap
         changeset.AbstractChangesetExploder.__init__(self, cs)
 
     def installFile(self, trv, path, fileObj):
         (destDir, pathId, fileId, version) = \
                     self.pathMap[(trv.getNameVersionFlavor(), path)]
 
-        trv.iterFileList()
-        self.sourceState.addFile(pathId, path, version, fileId,
+        self.sourceStateMap[trv.getNameVersionFlavor()].addFile(pathId, path, 
+                                 version, fileId,
                                  isConfig = fileObj.flags.isConfig(),
                                  isAutoSource = fileObj.flags.isAutoSource())
 
@@ -260,18 +260,20 @@ def _checkout(repos, cfg, workDirArg, trvList, callback):
     verifyAbsoluteChangesetSignatures(cs, callback)
 
     pathMap = {}
+    sourceStateMap = {}
 
     for trvInfo, spec in itertools.izip(trvList, checkoutSpecs):
         sourceState = spec.conaryState.getSourceState()
         troveCs = cs.getNewTroveVersion(*trvInfo)
         trv = trove.Trove(troveCs)
+        sourceStateMap[trv.getNameVersionFlavor()] = sourceState
         if trv.getFactory():
             sourceState.setFactory(trv.getFactory())
 
         for (pathId, path, fileId, version) in troveCs.getNewFileList():
             pathMap[(trvInfo, path)] = (spec.targetDir, pathId, fileId, version)
 
-    CheckoutExploder(cs, pathMap, sourceState)
+    CheckoutExploder(cs, pathMap, sourceStateMap)
 
     for spec in checkoutSpecs:
         spec.conaryState.write(spec.targetDir + "/CONARY")
@@ -2167,3 +2169,17 @@ def localAutoSourceChanges(oldTrove, (changeSet, ((isDifferent, newState),))):
     changeSet.newTrove(d)
 
     return (changeSet, ((isDifferent, newState),))
+
+def factory(newFactory = None):
+    conaryState = ConaryStateFromFile("CONARY")
+    state = conaryState.getSourceState()
+
+    if newFactory is None:
+        if state.getFactory():
+            print state.getFactory()
+        else:
+            print "(none)"
+    else:
+        state.setFactory(newFactory)
+        conaryState.write("CONARY")
+

@@ -502,10 +502,15 @@ class AbstractPackageRecipe(Recipe):
 
     def _setLogFile(self, logFile):
         self._logFile = logFile
+        for pattern in self._subscribedPatterns:
+            logFile.subscribe(pattern)
+        self._subscribedPatterns = None
 
     def subscribeLogs(self, pattern):
         if self._logFile:
             self._logFile.subscribe(pattern)
+        else:
+            self._subscribedPatterns.append(pattern)
 
     def synchronizeLogs(self):
         if self._logFile:
@@ -768,6 +773,9 @@ class AbstractPackageRecipe(Recipe):
     def regexp(self, expression):
         return action.Regexp(expression)
 
+    def setupAbstractBaseClass(r):
+        r.addSource(r.name + '.recipe', dest = str(r.cfg.baseClassDir) + '/')
+
     def _addTroveScript(self, troveNames, scriptContents, scriptType,
                         fromClass = None):
         scriptTypeMap = dict((y[2], x) for (x, y) in
@@ -808,6 +816,7 @@ class AbstractPackageRecipe(Recipe):
         # Mapping from trove name to scripts
         self._scriptsMap = {}
         self._subscribeLogPath = None
+        self._subscribedPatterns = []
         self._logFile = None
 
         # allow for architecture not to be set -- this could happen
@@ -919,9 +928,6 @@ class PackageRecipe(AbstractPackageRecipe):
         for name, item in build.__dict__.items():
             if inspect.isclass(item) and issubclass(item, action.Action):
                 self._addBuildAction(name, item)
-
-    def setupAbstractBaseClass(r):
-        r.addSource(r.name + '.recipe', dest = str(r.cfg.baseClassDir) + '/')
 
 # need this because we have non-empty buildRequires in PackageRecipe
 _addRecipeToCopy(PackageRecipe)
