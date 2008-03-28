@@ -3,6 +3,10 @@ Changes in @NEW@:
     * Added 'factory' command to cvc for displaying and changing the factory
       of the currently checked out recipe (CNY-2690)
 
+  o Bug Fixes:
+    * A bug that caused a traceback when r.MakeDevices() is called
+      with a path that contains 'lib' has been fixed. (CNY-2692)
+
 Changes in 2.0.10:
   o Build Changes:
     * An xml formatted log has been added to :debuginfo. This is in
