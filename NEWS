@@ -1,7 +1,13 @@
 Changes in @NEW@:
+  o Build Changes:
+    * Added 'factory' command to cvc for displaying and changing the factory
+      of the currently checked out recipe (CNY-2690)
+
   o Bug Fixes:
     * A regression introduced by the build requirements suggestions for
       recipes using r.MakePathsInstall has been fixed. (CNY-2697)
+    * A bug that caused a traceback when r.MakeDevices() is called
+      with a path that contains 'lib' has been fixed. (CNY-2692)
 
 Changes in 2.0.10:
   o Build Changes:
