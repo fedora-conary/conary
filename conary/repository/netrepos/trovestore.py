@@ -733,9 +733,8 @@ class TroveStore:
             FROM tmpInstanceId
             JOIN TroveFiles using(instanceId)
             JOIN FileStreams using(streamId)
+            JOIN FilePaths ON TroveFiles.filePathId = FilePaths.filePathId
             JOIN Versions ON TroveFiles.versionId = Versions.versionId
-            JOIN FilePaths ON
-                TroveFiles.filePathId = FilePaths.filePathId
             ORDER BY tmpInstanceId.idx
             """ % (streamSel,))
             troveFilesCursor = util.PeekIterator(troveFilesCursor)
