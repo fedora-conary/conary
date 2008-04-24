@@ -1,4 +1,12 @@
 Changes in @NEW@:
+  o Bug Fixes:
+    * More optimizations for the pathId lookup query times for some
+      package builds. (CNY-2742)
+  o Client Changes:
+    * PGP Keyring location is no longer determined using $HOME, which
+      is unreliable; a getpwuid(3) lookup is used instead. (CNY-2722)
+    * The number of retries for providing a passphrase when signing
+      troves changed from 3 to 5. (CNY-2709)
   o Code Changes:
     * Some incompatibilities with python2.5 have been removed.
 
@@ -38,6 +46,8 @@ Changes in 2.0.12:
       conary 1.2.x has been fixed. (CNY-2731)
     * In rare cases, some output could corrupt logging data during
       builds.  This has been fixed. (CNY-2734)
+    * MySQL performance when inserting troves with large numbers of
+      files has been fixed. (CNY-2737)
 
   o Repository Changes:
     * The addUser() xmlrpc call no longer automatically creates a

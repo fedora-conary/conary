@@ -690,6 +690,10 @@ class Metadata(streams.OrderedStreamCollection):
     def addItem(self, item):
         self.addStream(1, item)
 
+    def addItems(self, items):
+        for item in items:
+            self.addItem(item)
+
     def __iter__(self):
         for item in self.getStreams(1):
             yield item
@@ -712,17 +716,21 @@ class Metadata(streams.OrderedStreamCollection):
         keys = MetadataItem._keys
         for item in self.getStreams(1):
             language = item.language()
-            if language not in items:
-                items[language] = MetadataItem()
-            newItem = items[language]
+            newItem = items.setdefault(language, MetadataItem())
             for key in item.keys():
                 if key in skipSet:
                     continue
                 values = getattr(item, key)()
+                newItemStream = getattr(newItem, key)
+                if isinstance(newItemStream, list):
+                    # We have to clear the old list before adding new elements
+                    # to it, otherwise we end up with a union of the lists,
+                    # which is not what we want
+                    del newItemStream[:]
                 if not isinstance(values, (list, tuple)):
                     values = [values]
                 for value in values:
-                    getattr(newItem, key).set(value)
+                    newItemStream.set(value)
         return items.values()
 
     def verifyDigitalSignatures(self, label=None):
@@ -1291,10 +1299,28 @@ class Trove(streams.StreamSet):
         return self.troveInfo.metadata.flatten()
 
     def copyMetadata(self, trv, skipSet=None):
-        items = trv.troveInfo.metadata.flatten(skipSet=skipSet)
+        """
+        Copy metadata from a different trove
+        @param trv: Trove object from which metadata items will be copied
+        @type trv: Trove
+        @param skipSet: Items that will not be copied
+        @type skipSet: iterable
+        """
+        return self.copyMetadataFromMetadata(trv.troveInfo.metadata,
+                                             skipSet=skipSet)
+
+    def copyMetadataFromMetadata(self, metadata, skipSet=None):
+        """
+        Copy metadata from a different metadata object
+        @param metadata: Metadata object from which metadata items will be
+        copied
+        @type metadata: Metadata
+        @param skipSet: Items that will not be copied
+        @type skipSet: iterable
+        """
+        items = metadata.flatten(skipSet=skipSet)
         self.troveInfo.metadata = Metadata()
-        for item in items:
-            self.troveInfo.metadata.addItem(item)
+        self.troveInfo.metadata.addItems(items)
 
     def getFactory(self):
         return self.troveInfo.factory()
