@@ -30,7 +30,7 @@ class MainHandler(object):
             for command in class_.commandList:
                 self._registerCommand(command)
 
-    def _registerCommand(self, commandClass):
+    def registerCommand(self, commandClass):
         supportedCommands = self._supportedCommands
         inst = commandClass()
         inst.setMainHandler(self)
@@ -39,13 +39,17 @@ class MainHandler(object):
         else:
             for cmdName in commandClass.commands:
                 supportedCommands[cmdName] = inst
+    # this method is public; add private version for bw compat.
+    _registerCommand = registerCommand
 
-    def _unregisterCommand(self, commandClass):
+    def unregisterCommand(self, commandClass):
         if isinstance(commandClass.commands, str):
             del self._supportedCommands[commandClass.commands]
         else:
             for cmdName in commandClass.commands:
                 del self._supportedCommands[cmdName]
+    # this method is public; add private version for bw compat.
+    _unregisterCommand = unregisterCommand
 
     def _getPreCommandOptions(self, argv, cfg):
         """Allow the user to specify generic flags before they specify the
@@ -61,6 +65,7 @@ class MainHandler(object):
                                                     argv=argv[1:],
                                                     interspersedArgs=False,
                                                     **kwargs)
+        thisCommand.processConfigOptions(cfg, cfgMap, argSet)
         return argSet, [argv[0]] + otherArgs
 
     def usage(self, rc = 1, showAll = False):
@@ -100,7 +105,7 @@ class MainHandler(object):
                                      command.help)
         return rc
 
-    def getConfigFile(self, argv, ignoreErrors=False):
+    def getConfigFile(self, argv):
         """
             Find the appropriate config file
         """
@@ -109,9 +114,9 @@ class MainHandler(object):
                                  ' main handler')
         if '--skip-default-config' in argv:
             argv.remove('--skip-default-config')
-            ccfg = self.configClass(readConfigFiles=False, ignoreErrors=False)
+            ccfg = self.configClass(readConfigFiles=False)
         else:
-            ccfg = self.configClass(readConfigFiles=True, ignoreErrors=False)
+            ccfg = self.configClass(readConfigFiles=True)
         return ccfg
 
     def getParser(self, command):
@@ -153,17 +158,23 @@ class MainHandler(object):
                     description=description)
 
     def getCommand(self, argv, cfg):
+        if len(argv) == 1:
+            # no command specified
+            return None
+
         commandName = argv[1]
         if commandName not in self._supportedCommands:
             rc = self.usage()
             raise errors.ParseError("%s: unknown command: '%s'" % (self.name, commandName))
         return self._supportedCommands[commandName]
 
-    def main(self, argv=sys.argv, debuggerException=Exception,
+    def main(self, argv=None, debuggerException=Exception,
              cfg=None, **kw):
         """
             Process argv and execute commands as specified.
         """
+        if argv is None:
+            argv=sys.argv
         from conary import versions
         supportedCommands = self._supportedCommands
 
@@ -182,13 +193,10 @@ class MainHandler(object):
             self.usage()
             print >>sys.stderr, e
             sys.exit(e.val)
-
-        if len(argv) == 1:
-            # no command specified
-            return self.usage()
-
-        commandName = argv[1]
         thisCommand = self.getCommand(argv, cfg)
+        if thisCommand is None:
+            return self.usage()
+        commandName = argv[1]
         params, cfgMap = thisCommand.prepare()
         kwargs = self._getParserFlags(thisCommand)
 
