@@ -12,15 +12,15 @@
 # full details.
 #
 
-import base64
-import itertools
-import fnmatch
 import os
 import re
 import sys
-import tempfile
 import time
 import types
+import base64
+import fnmatch
+import tempfile
+import itertools
 
 from conary import files, trove, versions, streams
 from conary.conarycfg import CfgEntitlement, CfgProxy, CfgRepoMap, CfgUserInfo
@@ -1367,14 +1367,25 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
 
         return r[pkgName].keys()[0]
 
+    def _checkTrovePermission(self, authToken, n, v, f):
+        hasList = self._lookupTroves(authToken, 
+                                     [(n, self.fromVersion(v),
+                                       self.fromFlavor(f))])
+        present, hasAccess = hasList[0]
+        if not present:
+            raise errors.TroveNotFound
+        return hasAccess
+
+    def _checkPermissions(self, authToken, chgSetList):
+        trvList = self._lookupTroves(authToken,
+                                     [(x[0], x[2][0], x[2][1])
+                                      for x in chgSetList])
+        for isPresent, hasAccess in trvList:
+            if isPresent and not hasAccess:
+                raise errors.InsufficientPermission
+
     def _cvtJobEntry(self, authToken, jobEntry):
         (name, (old, oldFlavor), (new, newFlavor), absolute) = jobEntry
-
-        newVer = self.toVersion(new)
-
-        if not self.auth.check(authToken, write = False, trove = name,
-                               label = newVer.branch().label()):
-            raise errors.InsufficientPermission
 
         if old == 0:
             l = (name, (None, None),
@@ -1392,12 +1403,16 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
         # requested in chgSetList.  Also returns a list of extra
         # troves needed and files needed.
         cs = changeset.ReadOnlyChangeSet()
+        self._checkPermissions(authToken, chgSetList)
         l = [ self._cvtJobEntry(authToken, x) for x in chgSetList ]
+        authCheckFn = lambda n, v, f: \
+                      self._checkTrovePermission(authToken, n, v, f)
         ret = self.repos.createChangeSet(l,
                                          recurse = recurse,
                                          withFiles = withFiles,
                                          withFileContents = withFileContents,
-                                         excludeAutoSource = excludeAutoSource)
+                                         excludeAutoSource = excludeAutoSource,
+                                         authCheck = authCheckFn)
         (newCs, trovesNeeded, filesNeeded, removedTroves) = ret
         cs.merge(newCs)
 
@@ -1507,10 +1522,10 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
             recurse, withFiles, withFileContents))
 
         authCheckFn = lambda n, v, f: \
-                self.auth.check(authToken, write = False,
-                                       trove = n, label = v.trailingLabel())
+                      self._checkTrovePermission(authToken, n, v, f)
         # Big try-except to clean up files
         try:
+            self._checkPermissions(authToken, chgSetList)
             chgSetList = [ self._cvtJobEntry(authToken, x) for x in chgSetList ]
 
             otherDetails, size = self._createChangeSet(retpath, chgSetList,
@@ -2029,49 +2044,53 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
         roleIds = self.auth.getAuthRoles(cu, authToken)
 
         prefixQuery = ""
-        if filePrefixes:
-            schema.resetTable(cu, 'tmpFilePrefixes')
-            cu.executemany("INSERT INTO tmpFilePrefixes (prefix) VALUES (?)",
-                           ( f + '%' for f in filePrefixes ),
-                           start_transaction=False)
-            self.db.analyze("tmpFilePrefixes")
-            prefixQuery = """JOIN tmpFilePrefixes ON
-            FilePaths.path LIKE tmpFilePrefixes.prefix """
-
+        # if we're asked for all files with a '/' prefix, don't bother
+        # "optimizing" since no records will be filtered out
+        if filePrefixes and not ('/' in filePrefixes):
+            # if we have file prefixes, we build a list of filePathIds
+            # that match them
+            schema.resetTable(cu, "tmpItems")
+            cu.executemany("insert into tmpItems (item) values (?)",
+                           filePrefixes, start_transaction=False)
+            self.db.analyze("tmpItems")
+            schema.resetTable(cu, "tmpId")
+            # save a list of valid dirnames that correspond to the prefixes being asked for
+            cu.execute("""insert into tmpId (id)
+            select p.dirnameId from tmpItems
+            join Dirnames as d on tmpItems.item = d.dirname
+            join Prefixes as p on d.dirnameId = p.prefixId """)
+            self.db.analyze("tmpId")
+            prefixQuery = """join tmpId on fp.dirnameId = tmpId.id """
+        schema.resetTable(cu, "tmpPathIdLookup")
         query = """
-        SELECT DISTINCT
-            FilePaths.pathId, FilePaths.path, Versions.version,
-            FileStreams.fileId, Nodes.finalTimestamp
-        FROM Instances
-        JOIN Nodes ON
-            Instances.itemid = Nodes.itemId AND
-            Instances.versionId = Nodes.versionId
-        JOIN Branches using (branchId)
-        JOIN Items ON
-            Nodes.sourceItemId = Items.itemId
-        JOIN UserGroupInstancesCache as ugi ON
-            Instances.instanceId = ugi.instanceId
-        JOIN TroveFiles ON
-            Instances.instanceId = TroveFiles.instanceId
-        JOIN Versions ON
-            TroveFiles.versionId = Versions.versionId
-        JOIN FileStreams ON
-            TroveFiles.streamId = FileStreams.streamId
-        JOIN FilePaths ON
-            TroveFiles.filePathId = FilePaths.filePathId
-        %s
-        WHERE
-            Items.item = ? AND
-            Branches.branch = ? AND
-            ugi.userGroupId in (%s)
-        ORDER BY
-            Nodes.finalTimestamp DESC
-        """ % (prefixQuery, ",".join("%d" % x for x in roleIds))
-
+        insert into tmpPathIdLookup (versionId, filePathId, streamId, finalTimestamp)
+        select distinct
+            tf.versionId, tf.filePathId, tf.streamId, Nodes.finalTimestamp
+        from UserGroupInstancesCache as ugi
+        join Instances using (instanceId)
+        join Nodes on Instances.itemId = Nodes.itemId and Instances.versionId = Nodes.versionId
+        join Items on Nodes.sourceItemId = Items.itemId
+        join TroveFiles as tf on Instances.instanceId = tf.instanceId
+        where Items.item = ?
+          and Nodes.branchId = ( select branchId from Branches where branch = ? )
+          and ugi.userGroupId in (%s) """ % (",".join("%d" % x for x in roleIds), )
         cu.execute(query, (sourceName, branch))
+        self.db.analyze("tmpPathIdLookup")
+        # now decode the results to human-readable strings
+        cu.execute("""
+        select fp.pathId, d.dirname, b.basename, v.version, fs.fileId, tpil.finalTimestamp
+        from tmpPathIdLookup as tpil
+        join Versions as v on tpil.versionId = v.versionId
+        join FilePaths as fp on tpil.filePathId = fp.filePathId
+        join FileStreams as fs on tpil.streamId = fs.streamId
+        join Dirnames as d on fp.dirnameId = d.dirnameId
+        join Basenames as b on fp.basenameId = b.basenameId
+        %s
+        order by tpil.finalTimestamp desc
+        """ % (prefixQuery,))
         ids = {}
-        for (pathId, path, version, fileId, timeStamp) in cu:
-            encodedPath = self.fromPath(path)
+        for (pathId, dirname, basename, version, fileId, timeStamp) in cu:
+            encodedPath = self.fromPath( os.path.join(dirname, basename) )
             currVal = ids.get(encodedPath, None)
             newVal = (cu.frombinary(pathId), version, cu.frombinary(fileId))
             if currVal is None:
@@ -2086,15 +2105,15 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
                     for k,v in ids.iteritems()])
         return ids
 
-    @accessReadOnly
-    def hasTroves(self, authToken, clientVersion, troveList, hidden = False):
-        # returns False for troves the user doesn't have permission to view
-        self.log(2, troveList)
+    def _lookupTroves(self, authToken, troveList, hidden = False):
+        # given a troveList of (n, v, f) returns a sequence of tuples:
+        # (True, False) = trove present, no access
+        # (True, True) = trove present, access
+        # (False, False) = trove not present
         cu = self.db.cursor()
         roleIds = self.auth.getAuthRoles(cu, authToken)
-        if not roleIds:
-            return results
-        results = [ False ] * len(troveList)
+        results = [ (False, False) ] * len(troveList)
+
         schema.resetTable(cu, "tmpNVF")
         def _iterTroveList(troveList):
             for i, item in enumerate(troveList):
@@ -2109,10 +2128,14 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
         else:
             hiddenClause = ""
 
-        results = [ False ] * len(troveList)
-
+        # for each n,v,f return the index and if any UGIC entry
+        # gives access to the trove.  If MAX(CASE...) GROUP BY idx
+        # is too awful we could always return all rows and calculate
+        # on the client side.
         query = """
-        SELECT idx
+        SELECT idx, MAX(CASE WHEN (ugi.userGroupId in (%s)
+                                   AND (Instances.isPresent = ? %s))
+                             THEN 1 ELSE 0 END)
         FROM tmpNVF
         JOIN Items ON
             tmpNVF.name = Items.item
@@ -2127,13 +2150,21 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
             Instances.flavorId = Flavors.flavorId
         JOIN UserGroupInstancesCache as ugi ON
             Instances.instanceId = ugi.instanceId
-        WHERE ugi.userGroupId in (%s)
-        AND (Instances.isPresent = ? %s) """ % (
+        GROUP BY idx
+            """ % (
             ",".join("%d" % x for x in roleIds), hiddenClause)
         cu.execute(query, instances.INSTANCE_PRESENT_NORMAL)
-        for (row,) in cu:
-            results[row] = True
+        for row in cu:
+            # idx, has access
+            results[row[0]] = (True, bool(row[1]))
         return results
+
+    @accessReadOnly
+    def hasTroves(self, authToken, clientVersion, troveList, hidden = False):
+        # returns False for troves the user doesn't have permission to view
+        self.log(2, troveList)
+        return [ x[1] for x in self._lookupTroves(authToken, troveList,
+                                                  hidden=hidden) ]
 
     @accessReadOnly
     def getTrovesByPaths(self, authToken, clientVersion, pathList, label,
@@ -2146,15 +2177,21 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
 
         schema.resetTable(cu, 'tmpPath')
         for row, path in enumerate(pathList):
-            cu.execute("INSERT INTO tmpPath (row, path) VALUES (?, ?)",
-                       (row, path), start_transaction=False)
+            dirname, basename = os.path.split(path)
+            cu.execute("INSERT INTO tmpPath (row, dirname, basename) VALUES (?, ?, ?)",
+                       (row, dirname, basename), start_transaction=False)
         self.db.analyze("tmpPath")
 
         query = """
-        SELECT tmpPath.row, Items.item, Versions.version, Flavors.flavor,
+        SELECT userQ.row, Items.item, Versions.version, Flavors.flavor,
             Nodes.timeStamps
-        FROM tmpPath
-        JOIN FilePaths using(path)
+        FROM ( select tmpPath.row as row, filePathId as filePathId
+               from FilePaths
+               join Dirnames on FilePaths.dirnameId = Dirnames.dirnameId
+               join Basenames on FilePaths.basenameId = Basenames.basenameId
+               join tmpPath on
+                   tmpPath.dirname = Dirnames.dirname and
+                   tmpPath.basename = Basenames.basename ) as userQ
         JOIN TroveFiles using(filePathId)
         JOIN Instances using(instanceId)
         JOIN Nodes on
@@ -2839,8 +2876,21 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
             lim = 1000 # for safety and efficiency
 
         # To avoid using a LIMIT value too low on the big query below,
-        # we need to find out how many distinct permissions will
-        # likely grant access to a trove for this user
+        # we need to find out how many roles might grant access to a
+        # trove for this user
+        cu.execute("""
+        SELECT COUNT(*) AS rolesWithMirrorAccess
+        FROM UserGroups
+        WHERE UserGroups.canMirror = 1
+          AND UserGroups.userGroupId in (%s)
+        """ % (",".join("%d" % x for x in roleIds),))
+        roleCount = cu.fetchall()[0][0]
+        if roleCount == 0:
+	    raise errors.InsufficientPermission
+        if roleCount is None:
+            roleCount = 1
+
+        # Next look at the permissions that could grant access
         cu.execute("""
         SELECT COUNT(*) AS perms
         FROM Permissions
@@ -2849,12 +2899,15 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
           AND UserGroups.userGroupId in (%s)
         """ % (",".join("%d" % x for x in roleIds),))
         permCount = cu.fetchall()[0][0]
-        if permCount == 0:
-	    raise errors.InsufficientPermission
         if permCount is None:
             permCount = 1
 
-        # multiply LIMIT by permCount so that after duplicate
+        # take a guess at the total number of access paths for
+        # a trove - the number of roles that have the mirror
+        # flag set + the number of permissions contained by those
+        # roles
+        accessPathCount = roleCount + permCount
+        # multiply LIMIT by accessPathCount so that after duplicate
         # elimination we are sure to return at least 'lim' troves
         # back to the client
         query = """
@@ -2881,7 +2934,7 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
         LIMIT %d
         """ % ( instances.INSTANCE_PRESENT_NORMAL,
                 ",".join("%d" % x for x in roleIds),
-                lim * permCount)
+                lim * accessPathCount)
         cu.execute(query, mark)
         self.log(4, "executing query", query, mark)
         ret = []

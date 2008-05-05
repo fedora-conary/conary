@@ -99,6 +99,49 @@ class TroveTupleList(streams.StreamCollection):
     def iter(self):
         return ( x[1] for x in self.iterAll() )
 
+class SearchPathItem(TroveTuple):
+    _SEARCH_PATH_LABEL  = 10
+    streamDict = TroveTuple.streamDict.copy()
+    streamDict[_SEARCH_PATH_LABEL] =  (SMALL, streams.StringStream, 'label'  )
+
+    def __cmp__(self, other):
+        first = self.name()
+        second = other.name()
+
+        if first == second:
+            first = self.freeze()
+            second = other.freeze()
+
+        return cmp(first, second)
+
+    def get(self):
+        if self.label():
+            return versions.Label(self.label())
+        else:
+            return (self.name(),
+                    self.version(),
+                    self.flavor())
+
+    def __hash__(self):
+        return hash((self.name(), self.version(), self.flavor(), self.label()))
+
+class SearchPath(TroveTupleList):
+    streamDict = { 1 : SearchPathItem }
+
+    def add(self, item):
+        dep = SearchPathItem()
+        if isinstance(item, versions.Label):
+            dep.label.set(str(item))
+        else:
+            name, version, flavor = item
+            dep.name.set(name)
+            dep.version.set(version)
+            dep.flavor.set(flavor)
+        self.addStream(1, dep)
+
+    def iter(self):
+        return ( x[1].get() for x in self.iterAll() )
+
 class OptionalFlavorStream(streams.FlavorsStream):
 
     def freeze(self, skipSet = None):
@@ -647,6 +690,10 @@ class Metadata(streams.OrderedStreamCollection):
     def addItem(self, item):
         self.addStream(1, item)
 
+    def addItems(self, items):
+        for item in items:
+            self.addItem(item)
+
     def __iter__(self):
         for item in self.getStreams(1):
             yield item
@@ -669,17 +716,21 @@ class Metadata(streams.OrderedStreamCollection):
         keys = MetadataItem._keys
         for item in self.getStreams(1):
             language = item.language()
-            if language not in items:
-                items[language] = MetadataItem()
-            newItem = items[language]
+            newItem = items.setdefault(language, MetadataItem())
             for key in item.keys():
                 if key in skipSet:
                     continue
                 values = getattr(item, key)()
+                newItemStream = getattr(newItem, key)
+                if isinstance(newItemStream, list):
+                    # We have to clear the old list before adding new elements
+                    # to it, otherwise we end up with a union of the lists,
+                    # which is not what we want
+                    del newItemStream[:]
                 if not isinstance(values, (list, tuple)):
                     values = [values]
                 for value in values:
-                    getattr(newItem, key).set(value)
+                    newItemStream.set(value)
         return items.values()
 
     def verifyDigitalSignatures(self, label=None):
@@ -725,7 +776,8 @@ _TROVEINFO_TAG_BUILD_FLAVOR   = 20
 _TROVEINFO_TAG_COPIED_FROM    = 21
 _TROVEINFO_TAG_IMAGE_GROUP    = 22
 _TROVEINFO_TAG_FACTORY        = 23
-_TROVEINFO_TAG_LAST           = 23
+_TROVEINFO_TAG_SEARCH_PATH    = 24
+_TROVEINFO_TAG_LAST           = 24
 
 def _getTroveInfoSigExclusions(streamDict):
     return [ streamDef[2] for tag, streamDef in streamDict.items()
@@ -817,6 +869,7 @@ class TroveInfo(streams.StreamSet):
         _TROVEINFO_TAG_COPIED_FROM   : (DYNAMIC, TroveCopiedFrom,    'troveCopiedFrom' ),
         _TROVEINFO_TAG_IMAGE_GROUP   : (DYNAMIC, streams.ByteStream, 'imageGroup' ),
         _TROVEINFO_TAG_FACTORY       : (DYNAMIC, streams.StringStream, 'factory' ),
+        _TROVEINFO_TAG_SEARCH_PATH   : (DYNAMIC, SearchPath,          'searchPath'),
     }
 
     v0SignatureExclusions = _getTroveInfoSigExclusions(streamDict)
@@ -1246,10 +1299,28 @@ class Trove(streams.StreamSet):
         return self.troveInfo.metadata.flatten()
 
     def copyMetadata(self, trv, skipSet=None):
-        items = trv.troveInfo.metadata.flatten(skipSet=skipSet)
+        """
+        Copy metadata from a different trove
+        @param trv: Trove object from which metadata items will be copied
+        @type trv: Trove
+        @param skipSet: Items that will not be copied
+        @type skipSet: iterable
+        """
+        return self.copyMetadataFromMetadata(trv.troveInfo.metadata,
+                                             skipSet=skipSet)
+
+    def copyMetadataFromMetadata(self, metadata, skipSet=None):
+        """
+        Copy metadata from a different metadata object
+        @param metadata: Metadata object from which metadata items will be
+        copied
+        @type metadata: Metadata
+        @param skipSet: Items that will not be copied
+        @type skipSet: iterable
+        """
+        items = metadata.flatten(skipSet=skipSet)
         self.troveInfo.metadata = Metadata()
-        for item in items:
-            self.troveInfo.metadata.addItem(item)
+        self.troveInfo.metadata.addItems(items)
 
     def getFactory(self):
         return self.troveInfo.factory()
@@ -2496,6 +2567,13 @@ class Trove(streams.StreamSet):
 
     def getLabelPath(self):
         return [ versions.Label(x) for x in self.troveInfo.labelPath ]
+
+    def setSearchPath(self, searchPath):
+        for item in searchPath:
+            self.troveInfo.searchPath.add(item)
+
+    def getSearchPath(self):
+        return list(self.troveInfo.searchPath.iter())
 
     def setBuildRequirements(self, itemList):
         for (name, ver, flavor) in itemList:

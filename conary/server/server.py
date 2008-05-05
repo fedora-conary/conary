@@ -1,4 +1,4 @@
-#!/usr/bin/python2.4
+#!/usr/bin/python
 # -*- mode: python -*-
 #
 # Copyright (c) 2004-2008 rPath, Inc.
@@ -504,11 +504,11 @@ def addUser(netRepos, userName, admin = False, mirror = False):
             roleName = "WriteAll"
     if roleName.lower() not in roles:
         netRepos.auth.addRole(roleName)
+        # group, trovePattern, label, write
         netRepos.auth.addAcl(roleName, None, None, write = write)
         netRepos.auth.setMirror(roleName, mirror)
         netRepos.auth.setAdmin(roleName, admin)
     netRepos.auth.addUser(userName, pw1)
-    # user/group, trovePattern, label, write
     netRepos.auth.addRoleMember(roleName, userName)
 
 def getServer(argv = sys.argv, reqClass = HttpRequests):

@@ -1,31 +1,102 @@
 Changes in @NEW@:
+  o Bug Fixes:
+    * An incompatibility of the db2db migration script with the latest
+      repository schema has been corrected. (CNY-2774)
+
+Changes in 2.0.14:
+  o Bug Fixes:
+    * A bug causing python-setuptools to incorrectly appear to be an
+      excessive build requirement has been fixed. (CNY-2738)
+    * A bug in which python-setuptools was sometimes incorrectly not
+      recognized as being needed in buildRequires has been fixed. (CNY-2772)
+    * A regression has been fixed that caused rMake to abort when recursing
+      through a group recipe that added troves with full versions. (CNY-2768)
+    * When reporting possibly excessive buildRequires, not mentioning
+      buildRequires at all in the recipe caused Conary to report the
+      immediate superclass's buildRequires as the recipe's buildRequires.
+      This bug has been resolved. (CNY-2769)
+    * A bug that caused the --context flag to not be recognized when
+      specified before a command has been fixed. (CNY-2770)
+    * A bug that caused buildRequires calculation in TagSpec to be slow has
+      been fixed. (CNY-2773)
+
+Changes in 2.0.13:
+  o Build Changes:
+    * When cooked, factories can now package additional files in their
+     :recipe component. (CNY-2748)
+    * Moved VersionConflicts to pluggable policy and removed default
+      exceptions. (CNY-2716)
+
+  o Client Changes:
+    * PGP Keyring location is no longer determined using $HOME, which
+      is unreliable; a getpwuid(3) lookup is used instead. (CNY-2722)
+    * The number of retries for providing a passphrase when signing
+      troves changed from 3 to 5. (CNY-2709)
+
+  o Code Changes:
+    * Some incompatibilities with python2.5 have been removed.
+
+  o Bug Fixes:
+    * More optimizations for the pathId lookup query times for some
+      package builds. (CNY-2742)
+    * A bug that caused an InsufficientPermission error when a user
+      only has repository access permissions added by trove calls
+      getNewTroveList() has been fixed. (CNY-2755)
+    * A bug that caused a request to add access to a trove for a role
+      to be ignored if the same trove was used previously to grant
+      access to a different role has been fixed. (CNY-2758)
+    * A bug that caused an InsufficientPermission error when a user
+      requests a changeset to which the user has been granted access
+      with addTroveAccess has been fixed. (CNY-2760)
+    * The XML writer in xmldata.py is now encoding using UTF-8.
+      (CNY-2756)
+
+Changes in 2.0.12:
   o Build Changes:
     * Conary now warns about some possibly unused build requirements.
       This requires conary-policy 1.0.16 or later. (CNY-2232)
     * Suggested additions to buildRequires lists are now separately
       encoded in the XML build log. (CNY-2621)
-    * Loaded recipe modules are no longer tracked in sys.modules
+    * Loaded recipe modules are no longer tracked in sys.modules (RPL-2409)
     * The source components needed to build everything in a group can
       now be found when the group uses searchPaths. (CNY-2710)
+    * The SubscriptionLogWriter (CNY-2622) sometimes caused builds
+      to fail.  This issue has been resolved. (CNY-2717)
+    * Group builds now store the searchPath used with the built troves in
+      the repository. (CNY-2721)
 
   o Client Changes:
     * Conary will now re-read /etc/resolv.conf if an error occurs when
       resolving a hostname. (CNY-2703)
-    * Conary now caches the result of ip lookups and uses the cached
+    * Conary now caches the result of IP lookups and uses the cached
       results if an IP address lookup fails during an update. (CNY-2260)
     * Migrate now preserves local installs only of groups and kernels.
       Before, all manually-installed components and troves that were
       referenced by the group being migrated would be updated instead
       of erased. (CNY-2569)
+    * An API (the createSourceTrove() method of client objects) has
+      been added which creates source troves without using the
+      conary.checkin module. (CNY-2498)
 
   o Bug Fixes:
-    * The internal function _ensureReadableRollbackStatus now collects the
-      necessary state it needs to succed within itself instead of relying
-      on that state having been previously collected. (CNY-2711)
+    * The internal function _ensureReadableRollbackStatus now directly
+      ensures that it collects the necessary state it needs to succeed
+      instead of relying on that state having been previously collected.
+      (CNY-2711)
+    * Conary repository migration from repository databases created by
+      conary 1.2.x has been fixed. (CNY-2731)
+    * In rare cases, some output could corrupt logging data during
+      builds.  This has been fixed. (CNY-2734)
+    * MySQL performance when inserting troves with large numbers of
+      files has been fixed. (CNY-2737)
 
-  o API changes:
-    * The addUser() xmlrpc call does not auto-create a matching role 
-      anymore (CNY-2604)
+  o Repository Changes:
+    * The addUser() xmlrpc call no longer automatically creates a
+      matching role. (CNY-2604)
+
+  o Server Changes
+    * The repository code and repository schema have been updated to
+      allow for faster processing and lookup of file pathIds (CNY-2468)
 
 Changes in 2.0.11:
   o Build Changes:

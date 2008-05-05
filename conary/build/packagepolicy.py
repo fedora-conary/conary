@@ -32,7 +32,10 @@ from conary.deps import deps
 from conary.lib import elf, magic, util, pydeps, fixedglob, graph
 from conary.local import database
 
-from elementtree import ElementTree
+try:
+    from elementtree import ElementTree
+except ImportError:
+    ElementTree = None
 
 
 # Helper class
@@ -834,6 +837,7 @@ class TagSpec(_addInfo):
     )
     def doProcess(self, recipe):
 	self.tagList = []
+        self.buildReqsComputedForTags = set()
         self.suggestBuildRequires = set()
 	# read the system and %(destdir)s tag databases
 	for directory in (recipe.macros.destdir+'/etc/conary/tags/',
@@ -859,8 +863,9 @@ class TagSpec(_addInfo):
         if tag not in tags:
             self.info('%s: %s', name, path)
             tags.set(tag)
-            db = self._getDb()
-            if tagFile: 
+            if tagFile and tag not in self.buildReqsComputedForTags:
+                self.buildReqsComputedForTags.add(tag)
+                db = self._getDb()
                 for trove in db.iterTrovesByPath(tagFile.tagFile):
                     troveName = trove.getName()
                     if troveName not in self.fullReqs:
@@ -2622,6 +2627,8 @@ class Provides(_dependency):
                 deps.Dependency(name, [(ver, deps.FLAG_SENSE_REQUIRED)]))
 
     def _addCILPolicyProvides(self, path, pkg, macros):
+        if ElementTree is None:
+            return
         try:
             keys = {'urn': '{urn:schemas-microsoft-com:asm.v1}'}
             fullpath = macros.destdir + path
@@ -3271,7 +3278,8 @@ class Requires(_addInfo, _dependency):
 
             # generate site-packages list for destdir
             # (look in python base directory first)
-            pythonDir = os.path.dirname(sys.modules['os'].__file__)
+            pythonDir = os.popen("""python -c 'import os,sys; print sys.modules["os"].__file__'""").read().strip()
+
             sys.path = [destdir + pythonDir]
             sys.prefix = destdir + sys.prefix
             sys.exec_prefix = destdir + sys.exec_prefix
@@ -3854,9 +3862,60 @@ class Flavor(policy.Policy):
 
 class reportExcessBuildRequires(policy.Policy):
     """
-    This policy is used to report together all suggestions for
-    possible items to remove from the C{buildRequires} list.
-    Do not call it directly; it is for internal use only.
+    NAME
+    ====
+
+    B{C{r.reportExcessBuildRequires()}} - suggest items to remove from C{buildRequires} list
+
+    SYNOPSIS
+    ========
+
+    - C{r.reportExcessBuildRequires('required:component')}
+    - C{r.reportExcessBuildRequires(['list:of', 'required:components'])}
+
+    DESCRIPTION
+    ===========
+
+    The C{r.reportExcessBuildRequires()} policy is used to report
+    together all suggestions for possible items to remove from the
+    C{buildRequires} list.
+
+    The suggestions provided by this policy are build requirements
+    listed in the recipe's C{buildRequires} list for which Conary
+    has not specifically discovered a need.  Build requirement
+    discovery is not perfect, which means that even though this
+    policy prints a warning that a build requirement might not be
+    necessary, Conary does not know that it is definitely not needed.
+    These are only hints.  If you are not sure whether a component
+    should be removed from the C{buildRequires} list, it is safer
+    to leave it in the list.  This is because an extra component
+    in the C{buildRequires} list is very unlikely to cause trouble,
+    but a truly missing component causes failure (by definition).
+
+    Because dependencies on C{:runtime} components are the least
+    likely dependencies to be discovered automatically, this policy
+    currently does not recommend removing any C{:runtime} components.
+
+    EXAMPLES
+    ========
+
+    This policy is normally called only internally by other Conary
+    policies.  However, a recipe can report build requirements
+    that are known by the recipe maintainer to be required but
+    which Conary does not discover automatically by passing a
+    list of these components.  For example, if this policy
+    says that C{foo:devel} and C{blah:perl} are possible extra
+    build requirements, but you know that they are required in
+    order to correctly build the included software, you can
+    turn off the warnings like this:
+
+    C{r.reportExcessBuildRequires(['foo:devel', 'blah:perl'])}
+
+    This will tell the C{reportExcessBuildRequires} policy that
+    C{foo:devel} and C{blah:perl} are known to be required to
+    build the package.
+
+    No regular expressions are honored.
     """
     bucket = policy.ERROR_REPORTING
     processUnmodified = True

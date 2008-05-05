@@ -311,7 +311,9 @@ class GroupRecipe(_BaseGroupRecipe):
         """
         return findSourcesForGroup(repos, self, callback)
 
-    def _getSearchSource(self, ref=None):
+    def _getSearchSource(self, ref=None, troveSource=None):
+        if troveSource is None:
+            troveSource = self.troveSource
         if ref is None:
             if isinstance(self.defaultSource, (list, tuple)):
                 return searchsource.createSearchSourceStack(self.searchSource,
@@ -321,7 +323,7 @@ class GroupRecipe(_BaseGroupRecipe):
                 return searchsource.createSearchSourceStack(None,
                                                 [self.getLabelPath()],
                                                 self.getSearchFlavor(),
-                                                troveSource=self.troveSource)
+                                                troveSource=troveSource)
         elif isinstance(ref, (tuple, list)):
             source = searchsource.createSearchSourceStack(searchSource,
                                                       item, searchFlavor)
@@ -1399,6 +1401,9 @@ class GroupRecipe(_BaseGroupRecipe):
     def getLabelPath(self):
         return self.labelPath
 
+    def getSearchPath(self):
+        return self._getSearchSource().getSearchPath()
+
     def getResolveTroveSpecs(self):
         return self.resolveTroveSpecs
 
@@ -2199,7 +2204,7 @@ def buildGroups(recipeObj, cfg, repos, callback, troveCache=None):
     replaceSpecs = dict(recipeObj.iterReplaceSpecs())
     resolveSpecs = recipeObj.getResolveTroveSpecs()
     log.info('Getting initial set of troves for'
-             ' building all %s groups' % (len(recipeObj.iterGroupList())))
+            ' building all %s groups' % (len(list(recipeObj.iterGroupList()))))
     defaultSource = recipeObj._getSearchSource()
 
     troveMap = findTrovesForGroups(recipeObj.searchSource,
@@ -3191,7 +3196,7 @@ def findSourcesForGroup(repos, recipeObj, callback=None):
         revisionSpec = ''
         if versionSpec:
             if '/' in versionSpec:
-                revisionSpec = versionSpec.split('/')
+                revisionSpec = versionSpec.split('/')[-1]
             elif '@' in versionSpec or ':' in versionSpec:
                 revisionSpec = ''
             else:
