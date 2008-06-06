@@ -15,6 +15,8 @@
 filter_files =	\
 	test.py \
 	debuginfo.py \
+	groupinfo.py \
+	userinfo.py
 
 
 dist_files = Makefile $(filter_files)

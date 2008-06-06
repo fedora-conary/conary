@@ -1,5 +1,35 @@
 Changes in @NEW@:
   o Code Changes:
+    * magic has been extended to identify tar archives. (CNY-2825)
+
+  o Bug Fixes:
+    * Derived packages created from an unmodified shadow now choose
+      the correct binary from which to derive. (CNY-2776)
+    * A bug that caused conary to traceback when formating strings in the
+      syslog logger has been fixed. (CNY-2689)
+    * A workaround for a bug in the standard python library that can
+      prevent the display of extended debugging information has been
+      added.
+    * Unmodified shadows will be recognized as already present when
+      promoting them to their parent branch.  Previously they would be 
+      re-promoted unnecessarily. (CNY-2837)
+    * conary update --test no longer executes the tagscripts associated 
+      with the update. (CNY-2800)
+    * Multi-stage rollbacks correctly execute the post-rollback script
+      after all affected troves have been rolled back, instead of between
+      stages. (CNY-2829)
+
+  o Build Changes:
+    * Info recipe actions (r.User, r.Group, and r.SupplementalGroup) are
+      now available in package recipes. (CNY-2723)
+    * Python packages now use %(libdir)s instead of %(prefix)s/lib for pure
+      Python libraries.  This is an artifact left behind from fixing CNY-2110
+      and CNP-121.
+    * A bug causing log output to be lost if conary's log module was
+      imported in a recipe has been fixed. (CNY-2813)
+
+Changes in 2.0.15:
+  o Code Changes:
     * We've started using a @publicApi decorator to tag methods which
       are part of the public conary API. (CNY-2367)
     * xmldata.py is no longer part of the Conary library. (CNY-2765)

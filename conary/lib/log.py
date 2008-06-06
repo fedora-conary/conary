@@ -47,15 +47,19 @@ class SysLog:
         if not self.f:
             self.open()
 
-        msg = str % args
+        # Only attempt to do substitution if args is specified.
+        if args:
+            msg = str % args
+        else:
+            msg = str
+
         self.f.write(time.strftime("[%Y %b %d %H:%M:%S] ") + self.indent)
         self.f.write(msg)
         self.f.write("\n")
         self.f.flush()
 
     def command(self):
-        self(("version %s: " + " ".join(sys.argv[1:])) % 
-                                                constants.version)
+        self(("version %s: " % constants.version) + ' '.join(sys.argv[1:]))
         self.indent = "  "
 
     def commandComplete(self):
@@ -215,11 +219,17 @@ if not globals().has_key("logger"):
     # level
     logging.setLoggerClass(ConaryLogger)
     logger = logging.getLogger(LOGGER_CONARY)
-    hdlr = ErrorCheckingHandler(sys.stderr)
-    formatter = logging.Formatter('%(message)s')
-    hdlr.setFormatter(formatter)
-    logger.addHandler(hdlr)
-    logger.setLevel(logging.WARNING)
+    # conary's module importer resets globals() so we need an extra check to
+    # ensure we don't alter the logLevel or handler settings.
+    # the setLoggerClass above is stored as a global in the logging module,
+    # so it's safe to be left where it is.
+    if not hasattr(logger, '_loaded'):
+        hdlr = ErrorCheckingHandler(sys.stderr)
+        formatter = logging.Formatter('%(message)s')
+        hdlr.setFormatter(formatter)
+        logger.addHandler(hdlr)
+        logger.setLevel(logging.WARNING)
+        logger._loaded = True
 
 if not globals().has_key('fmtLogger'):
     fmtLogger = logging.getLogger(LOGGER_CONARY_FORMATTED)

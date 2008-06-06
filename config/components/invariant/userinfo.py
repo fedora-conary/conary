@@ -11,12 +11,4 @@
 # or fitness for a particular purpose. See the Common Public License for
 # full details.
 #
-
-# conary imports
-from conary.build import build
-
-UserGroupBuildAction = build._UserGroupBuildAction
-User = build.User
-Group = build.Group
-SupplementalGroup = build.SupplementalGroup
-UserGroupError = build.UserGroupError
+filters = ('user', ('%(userinfodir)s/',))

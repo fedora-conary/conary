@@ -18,6 +18,8 @@ import stat
 import string
 import xml.dom.minidom
 import zipfile
+import gzip as gzip_module
+import bz2
 
 from conary import rpmhelper
 from conary.lib import elf
@@ -27,16 +29,12 @@ from conary.lib import util
 class Magic(object):
     __slots__ = ['path', 'basedir', 'contents', 'name']
     # The file type is a generic string for a specific file type
-    _fileType = None
     def __init__(self, path, basedir):
 	self.path = path
 	self.basedir = basedir
-	self.contents = {}
+        if not hasattr(self, 'contents'):
+            self.contents = {}
 	self.name = self.__class__.__name__
-
-    @classmethod
-    def getFileType(cls):
-        return cls._fileType
 
 
 class ELF(Magic):
@@ -72,9 +70,12 @@ class ar(ELF):
         # We do still want to be able to distinguish between them via magic,
         # thus the two classes.
 
+class tar(Magic):
+    def __init__(self, path, basedir = '', buffer = ''):
+        Magic.__init__(self, path, basedir)
+        self.contents['GNU'] = (buffer[257:265] == 'ustar  \0')
 
 class gzip(Magic):
-    _fileType = 'gzip'
     def __init__(self, path, basedir='', buffer=''):
 	Magic.__init__(self, path, basedir)
 	if buffer[3] == '\x08':
@@ -84,12 +85,20 @@ class gzip(Magic):
 	else:
 	    self.contents['compression'] = '1'
 
+class tar_gz(gzip, tar):
+    def __init__(self, path, basedir = '', gzipBuffer = '', tarBuffer = ''):
+        gzip.__init__(self, path, basedir = basedir, buffer = gzipBuffer)
+        tar.__init__(self, path, basedir = basedir, buffer = tarBuffer)
 
 class bzip(Magic):
     def __init__(self, path, basedir='', buffer=''):
 	Magic.__init__(self, path, basedir)
 	self.contents['compression'] = buffer[3]
 
+class tar_bz2(bzip, tar):
+    def __init__(self, path, basedir = '', bzipBuffer = '', tarBuffer = ''):
+        bzip.__init__(self, path, basedir = basedir, buffer = bzipBuffer)
+        tar.__init__(self, path, basedir = basedir, buffer = tarBuffer)
 
 class changeset(Magic):
     def __init__(self, path, basedir='', buffer=''):
@@ -97,7 +106,6 @@ class changeset(Magic):
 
 
 class jar(Magic):
-    _fileType = "jar"
     def __init__(self, path, basedir='', zipFileObj = None, fileList = []):
 	Magic.__init__(self, path, basedir)
         self.contents['files'] = filesMap = {}
@@ -124,7 +132,6 @@ class jar(Magic):
 
 class WAR(Magic):
     _xmlMetadataFile = "WEB-INF/web.xml"
-    _fileType = "war"
     def __init__(self, path, basedir='', zipFileObj = None, fileList = []):
         Magic.__init__(self, path, basedir)
         if zipFileObj is None:
@@ -154,7 +161,6 @@ class WAR(Magic):
 
 class EAR(WAR):
     _xmlMetadataFile = "META-INF/application.xml"
-    _fileType = "war"
 
 class ZIP(Magic):
     def __init__(self, path, basedir='', zipFileObj = None, fileList = []):
@@ -194,7 +200,6 @@ class CIL(Magic):
 	Magic.__init__(self, path, basedir)
 
 class RPM(Magic):
-    _fileType = 'rpm'
     _tagMap = [
         ("name",    rpmhelper.NAME, str),
         ("version", rpmhelper.VERSION, str),
@@ -233,6 +238,8 @@ def _javaMagic(b):
         return True
     return False
 
+def _tarMagic(b):
+    return len(b) > 262 and b[257:262]
 
 def magic(path, basedir=''):
     """
@@ -263,9 +270,23 @@ def magic(path, basedir=''):
     elif len(b) > 7 and b[0:7] == "!<arch>":
 	return ar(path, basedir, b)
     elif len(b) > 2 and b[0] == '\x1f' and b[1] == '\x8b':
-	return gzip(path, basedir, b)
+        try:
+            uncompressedBuffer = gzip_module.GzipFile(n).read(4096)
+            if _tarMagic(uncompressedBuffer):
+                return tar_gz(path, basedir, b, uncompressedBuffer)
+        except IOError:
+            # gzip raises IOError instead of any module specific errors
+            pass
+        return gzip(path, basedir, b)
     elif len(b) > 3 and b[0:3] == "BZh":
-	return bzip(path, basedir, b)
+        try:
+            uncompressedBuffer = bz2.BZ2File(n).read(4096)
+            if _tarMagic(uncompressedBuffer):
+                return tar_bz2(path, basedir, b, uncompressedBuffer)
+        except IOError:
+            # bz2 raises IOError instead of any module specific errors
+            pass
+        return bzip(path, basedir, b)
     elif len(b) > 4 and b[0:4] == "\xEA\x3F\x81\xBB":
 	return changeset(path, basedir, b)
     elif len(b) > 4 and b[0:4] == "PK\x03\x04":
@@ -308,6 +329,8 @@ def magic(path, basedir=''):
         return CIL(path, basedir, b)
     elif (len(b) > 4 and b[:4] == "\xed\xab\xee\xdb"):
         return RPM(path, basedir)
+    elif _tarMagic(b):
+        return tar(path, basedir, b)
 
     return None
 
