@@ -1,4 +1,22 @@
 Changes in @NEW@:
+  o Protocol Changes:
+    * The addRoleMember() and getRoleMembers() calls are now exposed
+      via XMLRPC. (CNY-2862)
+
+  o Build Changes:
+    * When the configure script run by r.Configure() or r.ManualConfigure()
+      fails, "command not found" messages are highlighted, and possible
+      missing buildRequires based on those messages are sought in the
+      repository. (CNY-2708)
+    * All missing buildRequires found by noticing programs used in source
+      actions, build actions, and policies are reported immediately as well
+      as summarized at the end of the build, to make it clearer why each
+      requirement has been suggested. (CNY-2858)
+    * The r.addPatch() method now takes an optional patchName keyword
+      argument, which is the name of the patch program to use to apply
+      the patch. (CNY-2858)
+
+Changes in 2.0.17:
   o Build Changes:
     * Recipes loaded based on the autoLoadRecipe configuration directive
       are now ordered based on the loadedTroves list in the packages
@@ -15,6 +33,9 @@ Changes in @NEW@:
       (CNY-2757)
     * Specifying checkDeps and resolveDeps no longer causes an extra
       dependency check when building a group
+    * Checking out a source trove without a buildLabel set, but with
+      a version specified, no longer gives a confusing warning about
+      the buildLabel being unset. (CNY-2783)
 
   o Bug Fixes:
     * A bug that caused a traceback when rolling back the installation
@@ -82,6 +103,9 @@ Changes in 2.0.15:
     * sys.argv is not defined under mod_python; importing cvc.py should
       no longer fail as a result of using sys.argv as a default argument
       to main(). (CNY-2786)
+    * kernel:runtime is no longer included as a critical update when
+      updating conary, because we no longer use abi dependencies to order
+      updates.  (CNY-2787)
     * repository code handles correctly the removal of groups that
       include troves from other repositories. (CNY-2802)
     * When using sqlite, some temporary tables used the invalid column

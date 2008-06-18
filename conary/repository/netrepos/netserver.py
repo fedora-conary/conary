@@ -45,7 +45,7 @@ from conary.errors import InvalidRegex
 # one in the list is the lowest protocol version we support and th
 # last one is the current server protocol version. Remember that range stops
 # at MAX - 1
-SERVER_VERSIONS = range(36, 62 + 1)
+SERVER_VERSIONS = range(36, 63 + 1)
 
 # We need to provide transitions from VALUE to KEY, we cache them as we go
 
@@ -358,6 +358,21 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
     @deprecatedPermissionCall
     def updateAccessGroupMembers(self, authToken, clientVersion, groupName, members):
         pass
+
+    @accessReadWrite
+    def addRoleMember(self, authToken, clientVersion, role, username):
+        if not self.auth.authCheck(authToken, admin = True):
+            raise errors.InsufficientPermission
+        self.log(2, authToken[0], 'addRoleMember')
+        self.auth.addRoleMember(role, username)
+        return True
+
+    @accessReadOnly
+    def getRoleMembers(self, authToken, clientVersion, role):
+        if not self.auth.authCheck(authToken, admin = True):
+            raise errors.InsufficientPermission
+        self.log(2, authToken[0], 'getRoleMembers')
+        return self.auth.getRoleMembers(role)
 
     @accessReadWrite
     def updateRoleMembers(self, authToken, clientVersion, role, members):
