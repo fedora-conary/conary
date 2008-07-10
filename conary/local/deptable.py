@@ -169,7 +169,7 @@ class DependencyWorkTables:
                 for (depName, flags) in zip(dep.getName(), dep.getFlags()):
                     toInsert.append((troveNum, multiplier * len(depList),
                                      1 + len(flags), isProvides, classId,
-                                     depName, NO_FLAG_MAGIC, False))
+                                     depName, NO_FLAG_MAGIC, 0))
                     if flags:
                         for (flag, sense) in flags:
                             # conary 0.12.0 had mangled flags; this check
@@ -179,7 +179,7 @@ class DependencyWorkTables:
                             toInsert.append((troveNum,
                                              multiplier * len(depList),
                                              1 + len(flags), isProvides,
-                                             classId, depName, flag, False))
+                                             classId, depName, flag, 0))
 
                 if not isProvides:
                     depList.append((troveNum, classId, dep))
