@@ -303,9 +303,10 @@ class addArchive(_Source):
     DESCRIPTION
     ===========
 
-    The C{r.addArchive()} class adds a source code archive consisting of an
-    optionally compressed tar, cpio, xpi or zip archive, or binary/source RPM,
-    and unpacks it to the proper directory.
+    The C{r.addArchive()} class adds a source code archive consisting
+    of an optionally compressed tar, cpio, xpi or zip archive,
+    binary/source RPM, or binary dpkg .deb, and unpacks it to the
+    proper directory.
 
     If the specified I{archivename} is only a URL in the form of
     C{http://www.site.org/}, C{r.addArchive} will automatically attempt
@@ -523,6 +524,14 @@ class addArchive(_Source):
 
             actionPathBuildRequires = []
             # Question: can magic() ever get these wrong?!
+            if f.endswith('deb'):
+                # this isn't actually used, see below where the
+                # unpack command is formed for .deb files.  We want to
+                # use the normal tar processing so we can preserve
+                # ownership
+                _uncompress = ''
+                # binutils is needed for ar
+                actionPathBuildRequires.extend(['ar', 'gzip'])
             if isinstance(m, magic.bzip) or f.endswith("bz2"):
                 _uncompress = "bzip2 -d -c"
                 actionPathBuildRequires.append('bzip2')
@@ -560,7 +569,12 @@ class addArchive(_Source):
                 raise SourceError, "unknown archive format: " + f
 
             self._addActionPathBuildRequires(actionPathBuildRequires)
-            cmd = "%s < '%s' | %s" % (_uncompress, f, _unpack)
+            if f.endswith('.deb'):
+                # special handling for .deb files - need to put
+                # the .deb file on the command line
+                cmd = "ar p '%s' data.tar.gz | gzip -d -c | %s" %(f, _unpack)
+            else:
+                cmd = "%s < '%s' | %s" % (_uncompress, f, _unpack)
             fObj = os.popen(cmd)
             s = fObj.read()
             output = ""

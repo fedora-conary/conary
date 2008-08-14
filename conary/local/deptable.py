@@ -231,7 +231,7 @@ class DependencyWorkTables:
         # a positive depNum which matches the depNum from the Requires table.
         self.cu.execute("DELETE FROM TmpRequires WHERE instanceId > 0")
         self.cu.execute("""
-        INSERT INTO TmpRequires
+        INSERT INTO TmpRequires (instanceId, depId, depNum, depCount)
         SELECT DISTINCT
             Requires.instanceId, Requires.depId,
             Requires.depNum, Requires.depCount
@@ -657,7 +657,8 @@ class DependencyChecker:
                 %(flag)s AS flag
             FROM %(requires)s
             JOIN %(provides)s ON
-                %(requires)s.depId = %(provides)s.depId
+                %(requires)s.depId = %(provides)s.depId AND
+                %(requires)s.satisfied = 0
             """ % substTable
 
             if restrictor:
@@ -990,8 +991,11 @@ class DependencyChecker:
         self.workTables.merge()
         self.workTables.mergeRemoves()
 
-    def _check(self, findOrdering = False, linkedJobs = None,
+    def _check(self, linkedJobs = None,
               criticalJobs = None, finalJobs = None, createGraph = False):
+        # we can't create the graph if we're not finding the ordering
+        assert(not createGraph or self.findOrdering)
+
         # dependencies which could have been resolved by something in
         # RemovedIds, but instead weren't resolved at all are considered
         # "unresolvable" dependencies. (they could be resolved by something
@@ -1028,7 +1032,8 @@ class DependencyChecker:
 
         if linkedJobs is None:
             linkedJobs = set()
-        if findOrdering:
+
+        if createGraph or self.findOrdering:
             changeSetList, criticalUpdates = self._findOrdering(result,
                                                brokenByErase, satisfied,
                                                linkedJobSets = linkedJobs,
@@ -1037,38 +1042,49 @@ class DependencyChecker:
         else:
             changeSetList = []
             criticalUpdates = []
+
         if createGraph:
-            depGraph = self._createDepGraph(result, brokenByErase, satisfied,
-                                            linkedJobSets=linkedJobs,
-                                            criticalJobs=criticalJobs,
-                                            finalJobs=finalJobs)
+            depGraph = self.g
         else:
             depGraph = None
 
         brokenByErase = set(brokenByErase)
-        satisfied = set(satisfied)
+        self.satisfied.update(set(satisfied))
 
         unsatisfiedList, unresolveableList = \
-                self._gatherDependencyErrors(satisfied, brokenByErase,
+                self._gatherDependencyErrors(self.satisfied, brokenByErase,
                                                 unresolveable,
                                                 wasIn)
+
+        # We store the edges in self.g for the next try; don't resolve the
+        # same things over and over. It's a shame we do this even if all the
+        if not unsatisfiedList and not unresolveableList:
+            # Everything was satisfied. No reason to be careful about updating
+            # the satisfied list.
+            self.cu.execute("update tmprequires set satisfied=1")
+        else:
+            for (depId, depNum, reqInstanceId,
+                 reqNodeIdx, provInstId, provNodeIdx) in result:
+                if not provInstId: continue
+                self.cu.execute("update tmprequires set satisfied=1 where "
+                        "depId = ? and instanceId = ?",
+                        depId, reqInstanceId)
 
         return (unsatisfiedList, unresolveableList, changeSetList, depGraph,
                 criticalUpdates)
 
-    def check(self, findOrdering = False, linkedJobs = None,
+    def check(self, linkedJobs = None,
               criticalJobs = None, finalJobs = None):
         (unsatisfiedList, unresolveableList, changeSetList, depGraph,
          criticalUpdates) = \
-                self._check(findOrdering=findOrdering, linkedJobs=linkedJobs,
+                self._check(linkedJobs=linkedJobs,
                             createGraph=False, criticalJobs=criticalJobs,
                             finalJobs=finalJobs)
         return unsatisfiedList, unresolveableList, changeSetList, criticalUpdates
 
     def createDepGraph(self, linkedJobs=None):
         unsatisfiedList, unresolveableList, changeSetList, depGraph, criticalUpdates = \
-                self._check(findOrdering=False, linkedJobs=linkedJobs,
-                            createGraph=True)
+                self._check(linkedJobs=linkedJobs, createGraph=True)
 
         externalDepGraph = graph.DirectedGraph()
         for nodeId in depGraph.iterNodes():
@@ -1089,7 +1105,7 @@ class DependencyChecker:
     def __del__(self):
         self.done()
 
-    def __init__(self, db, troveSource):
+    def __init__(self, db, troveSource, findOrdering = True):
         self.g = graph.DirectedGraph()
         # adding None to the front prevents us from using nodeId's of 0, which
         # would be a problem since we use negative nodeIds in the SQL
@@ -1103,6 +1119,8 @@ class DependencyChecker:
         self.db = db
         self.cu = self.db.cursor()
         self.troveSource = troveSource
+        self.findOrdering = findOrdering
+        self.satisfied = set()
         self.workTables = DependencyWorkTables(self.db, self.cu,
                                                removeTables = True)
 

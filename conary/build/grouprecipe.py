@@ -3035,10 +3035,12 @@ def resolveGroupDependencies(group, cache, cfg, repos, labelPath, flavor,
     oldRepos = client.getRepos()
     client.setRepos(TroveCacheWrapper(cache))
     try:
-        updJob, suggMap = client.updateChangeSet(troves, recurse = False,
-                                                 resolveDeps = True,
-                                                 test = True,
-                                                 checkPathConflicts=False,
+        updJob = client.newUpdateJob()
+        suggMap = client.prepareUpdateJob(updJob, troves, recurse = False,
+                                          resolveDeps = True,
+                                          test = True,
+                                          checkPathConflicts=False,
+                                          split = False,
                                  resolveSource=resolveSource.getResolveMethod())
     finally:
         client.setRepos(oldRepos)
@@ -3102,7 +3104,8 @@ def checkGroupDependencies(group, cfg, cache, callback):
 
     client = conaryclient.ConaryClient(cfg)
 
-    checker = client.db.getDepStateClass(TroveCacheWrapper(cache))
+    checker = client.db.getDepStateClass(TroveCacheWrapper(cache),
+                                         findOrdering = False)
     failedDeps = checker.depCheck(jobSet)[0]
     callback.done()
     return failedDeps

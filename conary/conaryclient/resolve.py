@@ -45,8 +45,8 @@ class DependencySolver(object):
             @type uJob: local.database.UpdateJob
             @param jobSet: jobs that are to be applied
             @type jobSet: list of job tuples
-            @param split: if True, find an ordering for the jobs in 
-            jobSet plus any resolved jobs. 
+            @param split: if True, find an ordering for the jobs in
+            jobSet plus any resolved jobs.
             @type split: bool
             @param resolveDeps: If True, try to resolve any dependency problems
             by modifying the given job.
@@ -71,11 +71,11 @@ class DependencySolver(object):
 
         ineligible = set()
 
-        check = self.db.getDepStateClass(uJob.getTroveSource())
+        check = self.db.getDepStateClass(uJob.getTroveSource(),
+                                         findOrdering = split)
 
         (depList, cannotResolve, changeSetList, keepList, ineligible,
          criticalUpdates) = self.checkDeps(uJob, jobSet, troveSource,
-                                       findOrdering = split,
                                        resolveDeps = resolveDeps,
                                        ineligible=ineligible,
                                        keepRequired = keepRequired,
@@ -116,7 +116,6 @@ class DependencySolver(object):
             (depList, cannotResolve, changeSetList, newKeepList,
              ineligible, criticalUpdates) =  self.checkDeps(uJob, jobSet,
                                        uJob.getTroveSource(),
-                                       findOrdering = True,
                                        resolveDeps = True,
                                        ineligible = ineligible,
                                        keepRequired = keepRequired,
@@ -172,7 +171,7 @@ class DependencySolver(object):
         jobSet.update(newJob)
         return True
 
-    def checkDeps(self, uJob, jobSet, trvSrc, findOrdering,
+    def checkDeps(self, uJob, jobSet, trvSrc,
                   resolveDeps, ineligible, keepRequired = True,
                   criticalUpdateInfo = None, check = None):
         """
@@ -193,7 +192,6 @@ class DependencySolver(object):
                                                          criticalUpdateInfo)
             (depList, cannotResolve, changeSetList, criticalUpdates) = \
                             check.depCheck(jobSet,
-                                           findOrdering = findOrdering,
                                            linkedJobs = linkedJobs,
                                            criticalJobs = criticalJobs,
                                            finalJobs = finalJobs,
@@ -350,8 +348,7 @@ class DependencySolver(object):
             check.setTroveSource(uJob.getTroveSource())
 
             (depList, newCannotResolve, changeSetList, criticalUpdates) = \
-                    check.depCheck(jobSet | newJobSet, findOrdering = False,
-                                   criticalJobs=[])
+                    check.depCheck(jobSet | newJobSet, criticalJobs=[])
             check.done()
 
             if cannotResolve != newCannotResolve:
