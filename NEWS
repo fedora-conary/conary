@@ -7,6 +7,8 @@ Changes in @NEW@:
       Additionally, a bug that could cause permissions to be assigned
       to files with similar paths as those created by addArchive has
       been fixed. (CNY-2953)
+    * Promote in 2.0.24 could traceback instead of printing an error message
+      if no troves were present to clone.
 
   o Build Changes:
     * Cross-compiling packages that include perl modules can now
@@ -22,6 +24,14 @@ Changes in @NEW@:
       Conary now sets LD_LIBRARY_PATH. (CNY-2959)
     * ComponentRequires now handles :cil, :java, :perl, :python, and :ruby
       components in the same manner it handles :lib. (CNY-2935)
+    * The r.addArchive() method can now extract file contents from
+      dpkg .deb files when the data is bzip2-compressed. (CNY-2967)
+    * Promote now uses hasTroves to check to check the completeness of a
+      promote instead of fetching group troves for improved performance.
+
+  o Client Changes:
+    * Shim commitChangeSet() and getFileContents() calls now fall back to
+      network access properly
 
   o Internal Changes:
     * Reimplemented dependency freezing in C
