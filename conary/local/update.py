@@ -1156,21 +1156,17 @@ class FilesystemJob:
             # for removal in the local changeset and considered only "changed"
             # from the repository's point of view.
 
-            if not headChanges:
+            if headChanges is None:
                 fileOnSystem = fsTrove.hasFile(pathId)
 
-	    if not fileOnSystem:
-		# the file was removed from the local system; we're not
-		# putting it back
-                self.userRemoval(replaced = False, *(newTroveInfo + (pathId,)))
-		continue
-
-            if headChanges:
+            if (not headChanges) and fileOnSystem:
+                (fsPath, fsFileId, fsVersion) = fsTrove.getFile(pathId)
+            else:
                 fsPath = headPath
                 fsFileId = headFileId
                 fsVersion = headFileVersion
-            else:
-                (fsPath, fsFileId, fsVersion) = fsTrove.getFile(pathId)
+                if fsPath is None:
+                    fsPath = baseTrove.getFile(pathId)[0]
 
 	    contentsOkay = True         # do we have valid contents
 
@@ -1178,10 +1174,6 @@ class FilesystemJob:
             pathOkay, finalPath = self._pathMerge(pathId, headPath, fsTrove,
                                                   fsPath, baseTrove,
                                                   rootFixup, flags)
-
-            # final path is the path to use w/o the root
-            # real path is the path to use w/ the root
-	    realPath = os.path.normpath(rootFixup + finalPath)
 
 	    # headFileVersion is None for renames, but in that case there
             # is nothing left to do for this file
@@ -1211,6 +1203,30 @@ class FilesystemJob:
 
             headFile = self._mergeFile(baseFile, headFileId, headChanges,
                                        pathId)
+
+            # final path is the path to use w/o the root
+            # real path is the path to use w/ the root
+	    realPath = os.path.normpath(rootFixup + finalPath)
+
+            # FIXME we should be able to inspect headChanges directly
+            # to see if we need to go into the if statement which follows
+            # this rather then having to look up the file from the old
+            # trove for every file which has changed
+            if not fileOnSystem:
+                if (headFile.flags.isTransient() and
+                        headFile.contents.sha1() != baseFile.contents.sha1()):
+                    # a transient file has been removed locally, but contents
+                    # changed upstream. restore the new version of the file to
+                    # the filesystem. using baseFile here tricks the code below
+                    # into thinking the file was never removed. since it needs
+                    # updating anyway, it works out.
+                    fsFile = baseFile
+                else:
+                    # the file was removed from the local system; we're not
+                    # putting it back
+                    self.userRemoval(replaced = False,
+                                     *(newTroveInfo + (pathId,)))
+                    continue
 
             # XXX is this correct?  all the other addFiles use
             # the headFileId, not the fsFileId
@@ -1245,11 +1261,8 @@ class FilesystemJob:
             else:
                 fsTrove.addFile(pathId, finalPath, fsVersion, fsFileId)
 
-            # FIXME we should be able to inspect headChanges directly
-            # to see if we need to go into the if statement which follows
-            # this rather then having to look up the file from the old
-            # trove for every file which has changed
-            fsFile = files.FileFromFilesystem(rootFixup + fsPath, pathId)
+            if fileOnSystem:
+                fsFile = files.FileFromFilesystem(rootFixup + fsPath, pathId)
 
             # link groups come from the database; they aren't inferred from
             # the filesystem
@@ -1724,8 +1737,8 @@ def _localChanges(repos, changeSet, curTrove, srcTrove, newVersion, root, flags,
     @type srcTrove: trove.Trove
     @param newVersion: version to use for the newly created trove
     @type newVersion: versions.NewVersion
-    @param root: root directory the files are in (ignored for sources, which
-    are assumed to be in the current directory)
+    @param root: root directory the files are in. may be empty "." or a
+    directory for source troves
     @type root: str
     @param flags: boolean flags for this operation
     @type flags: UpdateFlags
@@ -1741,6 +1754,7 @@ def _localChanges(repos, changeSet, curTrove, srcTrove, newVersion, root, flags,
             file contents can be used even when the old and new versions
             of that file are on different repositories.
     """
+    assert(root)
 
     newTrove = curTrove.copy()
     newTrove.changeVersion(newVersion)
@@ -1806,8 +1820,8 @@ def _localChanges(repos, changeSet, curTrove, srcTrove, newVersion, root, flags,
                     realPath = info
                     isAutoSource = True
             else:
-                realPath = os.getcwd() + "/" + path
                 isAutoSource = False
+                realPath = root + "/" + path
         else:
 	    realPath = root + path
 
@@ -1910,7 +1924,7 @@ def _localChanges(repos, changeSet, curTrove, srcTrove, newVersion, root, flags,
                     realPath = curTrove.pathMap[path]
                     isAutoSource = True
             else:
-                realPath = os.getcwd() + "/" + path
+                realPath = root + "/" + path
                 isAutoSource = False
 
             if not isinstance(version, versions.NewVersion):
@@ -1973,7 +1987,7 @@ def _localChanges(repos, changeSet, curTrove, srcTrove, newVersion, root, flags,
 
     return (foundDifference, newTrove)
 
-def buildLocalChanges(repos, pkgList, root = "", withFileContents=True,
+def buildLocalChanges(repos, pkgList, root = ".", withFileContents=True,
                       forceSha1 = False, ignoreTransient=False,
                       ignoreAutoSource = False, updateContainers = False,
                       crossRepositoryDeltas = True, allowMissingFiles = False,
@@ -1990,8 +2004,8 @@ def buildLocalChanges(repos, pkgList, root = "", withFileContents=True,
     @param pkgList: Specifies which pacakage to work on, and is a list
     of (curTrove, srcTrove, newVersion, flags) tuples as defined in the parameter
     list for _localChanges()
-    @param root: root directory the files are in (ignored for sources, which
-    are assumed to be in the current directory)
+    @param root: root directory the files are in. may be empty for sources,
+    in which case files are assumed to be in the current directory)
     @type root: str
     @param forceSha1: disallows the use of inode information to avoid
                       checking the sha1 of the file if the inode information 
