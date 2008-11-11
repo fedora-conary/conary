@@ -4,6 +4,8 @@ Changes in @NEW@:
       providing a revision now requires the --revision argument, to
       differentiate revisions from files. (CNY-2384)
     * Added --build-log and --show-file parameters to conary rq. (CNY-2584)
+    * Group, Fileset, and Redirect recipes now check and record build 
+      requirements. (CNY-3016)
 
   o Client Changes:
     * Support for obtaining changeset fingerprints has been added to
@@ -38,6 +40,9 @@ Changes in @NEW@:
       multiple repositories through the same url has been fixed. (CNY-3027)
     * A bug that caused conary to segfault while creating changesets under
       python 2.6 has been fixed. (CNY-3033)
+    * An API method nologUpdateSrc has been added, which raises exceptions
+      instead of returning None to indicate failure as the old updateSrc method
+      did.  (CNY-3035)
 
 Changes in 2.0.28:
   o New Features:
