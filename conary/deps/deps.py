@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2004-2008 rPath, Inc.
+# Copyright (c) 2004-2009 rPath, Inc.
 #
 # This program is distributed under the terms of the Common Public License,
 # version 1.0. A copy of this license should have been distributed with this
@@ -1640,7 +1640,7 @@ def getShortFlavorDescriptors(flavors):
             if majorArch:
                 veryShortFlavor.addDep(InstructionSetDependency,
                                         Dependency(majorArch))
-            descriptors[flavor] = (str(veryShortFlavor),)
+            descriptors[flavor] = tuple(str(veryShortFlavor).split(','))
     if len(set(descriptors.values())) == len(set(descriptors)):
         return dict((x[0], '-'.join(x[1])) for x in descriptors.iteritems())
 

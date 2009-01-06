@@ -1,3 +1,16 @@
+# Copyright (c) 2008-2009 rPath, Inc.
+#
+# This program is distributed under the terms of the Common Public License,
+# version 1.0. A copy of this license should have been distributed with this
+# source file in a file called LICENSE. If it is not present, the license
+# is always available at http://www.rpath.com/permanent/licenses/CPL-1.0.
+#
+# This program is distributed in the hope that it will be useful, but
+# without any warranty; without even the implied warranty of merchantability
+# or fitness for a particular purpose. See the Common Public License for
+# full details.
+#
+
 import inspect
 import sys
 
@@ -135,17 +148,14 @@ class MainHandler(object):
         return self._getUsageByClass(commandClass, commandName)
 
     def _getUsageByClass(self, commandClass, commandName=None):
-        if self.name:
-            progName = self.name
-        else:
-            progName = argv[0]
+        assert self.name, 'You must define the "name" attribute for class "%s"' % self.__class__.__name__
         if not commandName:
             if hasattr(commandClass, 'name'):
                 commandName = commandClass.name
             else:
                 commandName = commandClass.commands[0]
 
-        commandUsage = '%s %s %s' % (progName, commandName,
+        commandUsage = '%s %s %s' % (self.name, commandName,
                                      commandClass.paramHelp)
         return commandUsage
 
