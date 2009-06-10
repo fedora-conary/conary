@@ -29,6 +29,7 @@ Changes in @NEW@:
       the contents stayed the same.
     * The ccs2tar script uses tarfile.open() in a way that is compatible
       with both python 2.4 and 2.6 (CNY-3160)
+    * Brace expansion produces results similar to bash. (CNY-3158)
 
   o Internal Changes:
     * Update handling now looks for preerase trove scripts in the local
