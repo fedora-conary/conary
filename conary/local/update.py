@@ -1889,7 +1889,7 @@ def _localChanges(repos, changeSet, curTrove, srcTrove, newVersion, root, flags,
 		newCont = filecontents.FromFilesystem(realPath)
 
 		if srcFile.hasContents:
-                    if needAbsolute:
+                    if needAbsolute or not f.flags.isConfig():
                         changeSet.addFileContents(pathId, newFileId,
                                           changeset.ChangedFileTypes.file,
                                           newCont, f.flags.isConfig())
