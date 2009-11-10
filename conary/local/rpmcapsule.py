@@ -18,6 +18,7 @@ from conary import files
 from conary.lib import util
 from conary.local.capsules import SingleCapsuleOperation
 from conary.local import errors
+from conary.repository import filecontents
 
 def rpmkey(hdr):
     return "%s-%s-%s.%s" % ( hdr['name'], hdr['version'],
@@ -244,11 +245,12 @@ class RpmCapsuleOperation(SingleCapsuleOperation):
                 elif flags.replaceManagedFiles:
                     # The files are different. Bail unless we're supposed to
                     # replace managed files.
-                    existingFile = files.FileFromFilesystem(path, pathId)
+                    existingFile = files.FileFromFilesystem(absolutePath,
+                                                            pathId)
                     for info in existingOwners:
                         self.fsJob.userRemoval(
                             fileObj = existingFile,
-                            content = filecontents.FromFilesystem(headRealPath),
+                            content = filecontents.FromFilesystem(absolutePath),
                             *info[0:4])
                     mayRestore = True
             elif flags.replaceUnmanagedFiles:
@@ -281,3 +283,19 @@ class RpmCapsuleOperation(SingleCapsuleOperation):
                                 "restoring %s from RPM",
                                 restoreFile = False,
                                 fileId = fileId)
+
+    def remove(self, trv):
+        SingleCapsuleOperation.remove(self, trv)
+
+        # make sure everything was erased which should have been; RPM's
+        # shared file handling means it may not erase things which we think
+        # ought to be
+        for trv in self.removes:
+            for pathId, path, fileId, version in trv.iterFileList():
+                fullPath = self.root + path
+                if not os.path.exists(fullPath):
+                    continue
+                fileObj = files.FileFromFilesystem(fullPath, pathId)
+                self.fsJob._remove(fileObj, path, fullPath,
+                                   'removing rpm owned file %s',
+                                   ignoreMissing = True)
