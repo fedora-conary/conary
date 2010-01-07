@@ -386,31 +386,34 @@ class RPMRequires(policy.Policy):
                 cnyProv = comp[1].provides
                 if rReqs.hasDepClass(deps.RpmDependencies):
                     soDeps = deps.DependencySet()
-                    for d in list(cnyReqs.iterDepsByClass(\
-                            deps.SonameDependencies))+list(\
-                        cnyProv.iterDepsByClass(deps.SonameDependencies)):
-                        l = d.name.split('/')
-                        dmod = deps.Dependency(l[1])
-                        dmod.flags = d.flags
-                        soDeps.addDep(deps.SonameDependencies,dmod)
+                    soDeps.addDeps(deps.SonameDependencies,list(cnyReqs.iterDepsByClass(deps.SonameDependencies))+ \
+                                      list(cnyProv.iterDepsByClass(deps.SonameDependencies)))
 
                     for r in list(rReqs.iterDepsByClass(deps.RpmDependencies)):
-                        if '[' in r.name:
-                            reMatch = self.rpmStringRe.match(r.name)
-                            if reMatch and reMatch.groups():
-                                rpmClass = reMatch.group(1)
-                                rpmFlags = reMatch.group(2).strip()
-                            if rpmClass == 'perl' and rpmFlags:
-                                ds = deps.DependencySet()
-                                dep = deps.Dependency(rpmFlags)
-                                ds.addDep(deps.PerlDependencies, dep)
-                                if cnyReqs.satisfies(ds) or \
-                                        cnyProv.satisfies(ds):
-                                    culledReqs.addDep(
-                                        deps.RpmDependencies,r)
-                        if '.so' in r.name:
+                        reMatch = self.rpmStringRe.match(r.name)
+                        if reMatch and reMatch.groups():
+                            rpmFile = reMatch.group(1)
+                            rpmFlags = reMatch.group(2).strip()
+                        else:
+                            rpmFile = r.name
+                            rpmFlags = ''
+                        if rpmFile == 'perl' and rpmFlags:
                             ds = deps.DependencySet()
-                            dep = deps.Dependency(r.name)
+                            dep = deps.Dependency(rpmFlags)
+                            dep.flags = r.flags
+                            ds.addDep(deps.PerlDependencies, dep)
+                            if cnyReqs.satisfies(ds) or \
+                                    cnyProv.satisfies(ds):
+                                culledReqs.addDep(
+                                    deps.RpmDependencies,r)
+                        elif '.so' in rpmFile:
+                            ds = deps.DependencySet()
+                            if rpmFlags == '64bit':
+                                elfPrefix = 'ELF64/'
+                            else:
+                                elfPrefix = 'ELF32/'
+                            dep = deps.Dependency(elfPrefix + rpmFile)
+                            dep.flags = r.flags
                             ds.addDep(deps.SonameDependencies, dep)
                             if soDeps.satisfies(ds):
                                 culledReqs.addDep(deps.RpmDependencies,r)
