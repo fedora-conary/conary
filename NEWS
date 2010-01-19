@@ -1,5 +1,4 @@
 Changes in @NEW@:
-
   o New Features:
     * Added --diff option to verify command to display local changes as
       a git-formatted diff
@@ -8,6 +7,14 @@ Changes in @NEW@:
     * Optimized StreamCollection diff and __eq__ operations to use frozen
       data if available
     * Merged internals of localcs/verify implementation into new classes
+
+  o Bug Fixes:
+    * A bug in the getChangeSetFingerprints call that resulted in
+      fingerprints different from those calculated by Conary proxies has
+      been corrected.
+    * Conary proxies will no longer cache changesets that were truncated
+      in transit. Additionally, clients will produce a more useful error
+      message if they download a truncated changeset. (CNY-3140)
 
 Changes in 2.1.5:
   o Bug Fixes:
