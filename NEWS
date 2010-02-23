@@ -21,6 +21,11 @@ Changes in @NEW@:
     * Added file flags to allow conary to override file contents and attributes
       for capsule-based files (such as from RPM).
 
+  o Bug Fixes:
+    * Java requirements for classes depending on other classes for which
+     provides have been dropped no longer propagate as trove or file
+     requirements. (CNY-3362)
+
 Changes in 2.1.9:
   o Bug Fixes:
     * The NO_PROXY environment variable no longer applies to conary
