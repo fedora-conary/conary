@@ -1,5 +1,12 @@
 Changes in @NEW@:
   o New Features:
+
+  o Bug Fixes:
+
+  o Internal Changes:
+
+Changes in 2.1.15:
+  o New Features:
     * Recipes that have a class member list named 'pathIdSearchBranches' will
       search the branches defined in the list for pathIds to reuse while 
       cooking. (CNY-3398)
@@ -17,8 +24,11 @@ Changes in @NEW@:
       wrap fopen64 or freopen64. (CNY-3405)
     * Previously, user and password information for the http/https proxy
       were visible in a traceback if a network exception occured. (RBL-5191)
-
-  o Internal Changes:
+    * Split out info packages from jobs even when RPM capsules are
+      used (CNY-3387)
+    * Modified lookaside cache file structure to include URL parameters, 
+      fragments and ports to better generate a unique file path for a given 
+      URL (CNY-3408)
 
 Changes in 2.1.14:
   o Bug Fixes:
