@@ -12,6 +12,8 @@
 # full details.
 #
 
+SUBDIRS = epdb_embedded
+
 python_files=$(wildcard *.py)
 python_modules=elf.so misc.so cstreams.so SHA256_nonstandard.so
 wrapper_libs=filename_wrapper.so
@@ -30,14 +32,20 @@ elif [ -d /usr/include/libelf-lgpl ]; then \
     echo "-I/usr/include/libelf-lgpl -lelf-lgpl"; \
 elif [ -d ${SYSROOT}/usr/include/libelf-lgpl ]; then \
     echo "-I${SYSROOT}/usr/include/libelf-lgpl -lelf-lgpl"; \
+elif [ -d /usr/include/libelf ] && grep 'GNU Library General Public' /usr/include/libelf/libelf.h >/dev/null; then\
+    echo "-I/usr/include/libelf -lelf"; \
+elif [ -d ${SYSROOT}/usr/include/libelf ] && grep 'GNU Library General Public' ${SYSROOT}/usr/include/libelf/libelf.h >/dev/null; then\
+    echo "-I${SYSROOT}/usr/include/libelf -lelf"; \
 else \
-    echo -lelf; \
+    echo 'No appropriate libelf found' >&2 ;\
 fi)
 
 
-all: $(python_modules) $(wrapper_libs)
+all: default-subdirs $(python_modules) $(wrapper_libs)
 
 elf.o: elf.c
+	@if [ -z "$(libelf)" ] ; then \
+	    echo 'Stopping build due to missing libelf' ; exit 1 ; fi
 	$(CC) $(CFLAGS) $(libelf) -c -o $@ $^
 
 elf.so: $(elfmodule_objs)
@@ -61,13 +69,13 @@ filename_wrapper.so: filename_wrapper.c
 	$(CC) -Wall -fPIC -rdynamic -c filename_wrapper.c
 	$(CC) $(LDFLAGS) -shared -rdynamic -o filename_wrapper.so filename_wrapper.o -lc -ldl
 
-install: pyfiles-install
+install: all install-subdirs pyfiles-install
 	mkdir -p $(DESTDIR)$(sitedir)/$(DIR)
 	install -m 755 $(python_modules) $(DESTDIR)$(sitedir)/$(DIR)
 	mkdir -p $(DESTDIR)$(conarylibdir)
 	install -m 755 $(wrapper_libs) $(DESTDIR)$(conarylibdir)/
 
-clean: default-clean
+clean: clean-subdirs default-clean
 
 dist: default-dist
 
