@@ -98,9 +98,10 @@ def loadMacros(paths):
 class _sourceHelper:
     def __init__(self, theclass, recipe):
         self.theclass = theclass
-	self.recipe = recipe
+        self.recipe = recipe
     def __call__(self, *args, **keywords):
         self.recipe._sources.append(self.theclass(self.recipe, *args, **keywords))
+        self.recipe.populateLcache()
 
 class Recipe(object):
     """Virtual base class for all Recipes"""
@@ -145,7 +146,7 @@ class Recipe(object):
         self._capsulePackageMap = {}
         self._capsuleDataMap = {}
         self._capsules = {}
-        self._lcachePopState = None
+        self._lcstate = None
 
         # Metadata is a hash keyed on a trove name and with a list of
         # per-trove-name MetadataItem like objects (well, dictionaries)
@@ -179,10 +180,13 @@ class Recipe(object):
                 if className in ['Recipe', 'AbstractPackageRecipe',
                                  'SourcePackageRecipe',
                                  'BaseRequiresRecipe',
-                                 'GroupRecipe', '_GroupRecipe', 'RedirectRecipe',
+                                 'GroupRecipe', '_GroupRecipe',
+                                 'RedirectRecipe',
                                  'AbstractDerivedPackageRecipe',
-                                 'DerivedPackageRecipe', 'FilesetRecipe',
-                                 '_BaseGroupRecipe']:
+                                 'DerivedPackageRecipe',
+                                 'AbstractDerivedCapsuleRecipe',
+                                 'DerivedCapsuleRecipe',
+                                 'FilesetRecipe', '_BaseGroupRecipe']:
                     continue
                 setattr(self, itemName, self._wrapMethod(className, item))
                 self.unusedMethods.add((className, item.__name__))
@@ -385,19 +389,22 @@ class Recipe(object):
         """
         class lcachePopulationState:
             """Used to track the state of the lcache to enable it to be
-            populated on demand efficiently"""
+            efficiently populated on-demand"""
             classes=None
             sourcePaths={}
-            fetchedPaths=set()
+            completedActions = set()
+            pathMap = {}
 
-        repos = self.laReposCache.repos
-        if not self._lcachePopState:
-            cstate = lcachePopulationState()
+        if not self.laReposCache.repos:
+            return
 
-            recipeClass = self.__class__
+        if not self._lcstate:
+            repos = self.laReposCache.repos
+            self._lcstate = lcachePopulationState()
 
             # build a list containing this recipe class and any ancestor class
             # from which it descends
+            recipeClass = self.__class__
             classes = [ recipeClass ]
             bases = list(recipeClass.__bases__)
             while bases:
@@ -408,14 +415,48 @@ class Recipe(object):
             # reverse the class list, this way the files will be found in the
             # youngest descendant first
             classes.reverse()
-            cstate.classes = classes
-            self._lcachePopState = cstate
+            self._lcstate.classes = classes
+
+            for rclass in self._lcstate.classes:
+                if not rclass._trove:
+                    continue
+                srcName = rclass._trove.getName()
+                srcVersion = rclass._trove.getVersion()
+                # CNY-31: walk over the files in the trove we found upstream
+                # (which we may have modified to remove the non-autosourced
+                # files.
+                # Also, if an autosource file is marked as needing to be
+                # refreshed in the Conary state file, the lookaside cache has
+                # to win, so don't populate it with the repository file)
+                fileList = []
+                for pathId, path, fileId, version in \
+                        rclass._trove.iterFileList():
+
+                    assert(path[0] != "/")
+                    # we might need to retrieve this source file
+                    # to enable a build, so we need to find the
+                    # sha1 hash of it since that's how it's indexed
+                    # in the file store
+                    if isinstance(version, versions.NewVersion):
+                        # don't try and look up things on the NewVersion label!
+                        continue
+                    fileList.append((pathId, path, fileId, version))
+
+                fileObjs = repos.getFileVersions([ (x[0],x[2],x[3])
+                                              for x in fileList])
+                for i in range(len(fileList)):
+                    fileObj = fileObjs[i]
+                    if isinstance(fileObj, files.RegularFile):
+                        (pathId, path, fileId, version) = fileList[i]
+                        self._lcstate.pathMap[path] = (srcName, srcVersion,
+                            pathId, path, fileId, version, fileObj)
 
         # populate the repository source lookaside cache from the :source
         # components
-        sourcePaths = self._lcachePopState.sourcePaths
-        actions = self.getSourcePathList()
+        sourcePaths = self._lcstate.sourcePaths
+        actions = set(self.getSourcePathList())-self._lcstate.completedActions
         for a in actions:
+            self._lcstate.completedActions.add(a)
             ps = a.getPathAndSuffix()
             if ps[0].find('://') != -1: # we have an autosourced file
                 # use guess name if it is provided
@@ -425,56 +466,39 @@ class Recipe(object):
             else:
                 sourcePaths[ ps[0] ] = ps
 
-        fetchedPaths = self._lcachePopState.fetchedPaths
-        for rclass in self._lcachePopState.classes:
-            if not rclass._trove:
-                continue
-            srcName = rclass._trove.getName()
-            srcVersion = rclass._trove.getVersion()
-            # CNY-31: walk over the files in the trove we found upstream
-            # (which we may have modified to remove the non-autosourced files
-            # Also, if an autosource file is marked as needing to be refreshed
-            # in the Conary state file, the lookaside cache has to win, so
-            # don't populate it with the repository file)
-            for pathId, path, fileId, version in rclass._trove.iterFileList():
-                # don't fetch things that we've already fetched
-                if path in fetchedPaths:
+        pathMap = self._lcstate.pathMap
+        delList = []
+        for path in pathMap:
+            fullPath = None
+            if path in sourcePaths:
+                fullPath = lookaside.laUrl(
+                    sourcePaths[path][0]).filePath()
+            elif path.find("/") == -1: # we might have a guessed name
+                for k in sourcePaths:
+                    if k and path.startswith(k) and sourcePaths[k][2]:
+                        for sk in sourcePaths[k][2]:
+                            if path.endswith(sk) and \
+                                    len(k) + len(sk) == len(path)-1:
+                                fullUrl = sourcePaths[k][0]+k+'.'+sk
+                                fullPath = \
+                                    lookaside.laUrl(fullUrl).filePath()
+
+            (srcName, srcVersion, pathId, path, fileId, version, fileObj) = \
+                pathMap[path]
+            if not fullPath:
+                if fileObj.flags.isAutoSource():
                     continue
+                else:
+                    fullPath = path
+            self.laReposCache.addFileHash(fullPath, srcName,
+                srcVersion, pathId, path, fileId, version,
+                fileObj.contents.sha1(), fileObj.inode.perms())
+            delList.append(path)
 
-                assert(path[0] != "/")
-                # we might need to retrieve this source file
-                # to enable a build, so we need to find the
-                # sha1 hash of it since that's how it's indexed
-                # in the file store
-                if isinstance(version, versions.NewVersion):
-                    # don't try and look up things on the NewVersion label!
-                    continue
-
-                fileObj = repos.getFileVersion(pathId, fileId, version)
-                if isinstance(fileObj, files.RegularFile):
-                    # it only makes sense to fetch regular files, skip
-                    # anything that isn't
-                    fullPath =''
-                    if path in sourcePaths:
-                        fullPath = lookaside.laUrl(
-                            sourcePaths[path][0]).filePath()
-                    elif path.find("/") == -1: # we might have a guessed name
-                        for k in sourcePaths:
-                            if k and path.startswith(k) and sourcePaths[k][2]:
-                                for sk in sourcePaths[k][2]:
-                                    if path.endswith(sk) and \
-                                            len(k) + len(sk) == len(path)-1:
-                                        fullUrl = sourcePaths[k][0]+k+'.'+sk
-                                        fullPath = \
-                                            lookaside.laUrl(fullUrl).filePath()
-                    if not fullPath:
-                        fullPath = path
-
-                    self.laReposCache.addFileHash(srcName, srcVersion, pathId,
-                        fullPath, fileId, version, fileObj.contents.sha1(),
-                        fileObj.inode.perms())
-                    assert(path not in fetchedPaths)
-                    fetchedPaths.add(path)
+        for path in delList:
+            if path in sourcePaths:
+                del sourcePaths[path]
+            del pathMap[path]
 
     def sourceMap(self, path):
         if os.path.exists(path):
@@ -595,7 +619,7 @@ class Recipe(object):
         else:
             kw = {}
 
-        inRepos, f = self.fileFinder.fetch(sourceName, 
+        inRepos, f = self.fileFinder.fetch(sourceName,
                                            refreshFilter=refreshFilter,
                                            allowNone=True, **kw)
         return f
@@ -683,7 +707,7 @@ class Recipe(object):
             return reqMap, missingReqs
 
 
-	db = database.Database(cfg.root, cfg.dbPath)
+        db = database.Database(cfg.root, cfg.dbPath)
 
 
         if self.needsCrossFlags() and self.crossRequires:
@@ -753,8 +777,8 @@ class Recipe(object):
                 return True
             return trove.getName() in targets
 
-	db = database.Database(self.cfg.root, self.cfg.dbPath)
-        
+        db = database.Database(self.cfg.root, self.cfg.dbPath)
+
         reqList =  [ req for req in self.getBuildRequirementTroves(db)
                      if isTroveTarget(req) ]
         reqNames = set(req.getName() for req in reqList)
@@ -792,7 +816,7 @@ class Recipe(object):
         buildReqs = self.getBuildRequirementTroves(db)
         buildReqs = set((x.getName(), x.getVersion(), x.getFlavor())
                         for x in buildReqs)
-        packageReqs = [ x for x in self.buildReqMap.itervalues() 
+        packageReqs = [ x for x in self.buildReqMap.itervalues()
                         if trove.troveIsCollection(x.getName()) ]
         for package in packageReqs:
             childPackages = [ x for x in package.iterTroveList(strongRefs=True,
@@ -811,7 +835,7 @@ class Recipe(object):
             for trv in db.getTroves(list(troveList), withFiles=False):
                 required = deps.DependencySet()
                 oldRequired = trv.getRequires()
-                [ required.addDep(*x) for x in oldRequired.iterDeps() 
+                [ required.addDep(*x) for x in oldRequired.iterDeps()
                   if x[0] != deps.AbiDependency ]
                 depSetList.append(required)
             seen.update(troveList)
@@ -821,7 +845,7 @@ class Recipe(object):
                 for depSols in depSetSols:
                     bestChoices = []
                     # if any solution for a dep is satisfied by the installFlavor
-                    # path, then choose the solutions that are satisfied as 
+                    # path, then choose the solutions that are satisfied as
                     # early as possible on the flavor path.  Otherwise return
                     # all solutions.
                     for flavor in flavorPath:
@@ -935,7 +959,8 @@ class Recipe(object):
         self._capsulePackageMap[capsulePath] = capsulePackage
 
     def _getCapsulePackage(self, capsulePath):
-        '''returns the capsule package:component associated with a capsule path'''
+        '''returns the capsule package:component associated with a capsule
+        path'''
         return self._capsulePackageMap.get(capsulePath)
 
     def _getCapsule(self, capsulePackage):
@@ -952,7 +977,8 @@ class Recipe(object):
         '''
         for filePath, capsuleList in self._capsulePathMap.iteritems():
             for capsulePath in capsuleList:
-                yield filePath, capsulePath, self._getCapsulePackage(capsulePath)
+                yield filePath, capsulePath, \
+                    self._getCapsulePackage(capsulePath)
 
     def _iterCapsulePathData(self):
         '''

@@ -20,22 +20,24 @@ from conary.local import journal
 
 class CapsuleOperation(object):
 
-    def __init__(self, root, db, changeSet, callback, fsJob):
+    def __init__(self, root, db, changeSet, callback, fsJob,
+                 skipCapsuleOps = False):
         self.root = root
         self.db = db
         self.changeSet = changeSet
         self.fsJob = fsJob
         self.callback = callback
         self.errors = []
+        self.skipCapsuleOps = skipCapsuleOps
 
-    def apply(self, fileDict, justDatabase = False):
-        raise NotImplementedException
+    def apply(self, fileDict, justDatabase = False, noScripts = False):
+        raise NotImplementedError
 
     def install(self, troveCs):
-        raise NotImplementedException
+        raise NotImplementedError
 
     def remove(self, trove):
-        raise NotImplementedException
+        raise NotImplementedError
 
     def getErrors(self):
         return self.errors
@@ -62,21 +64,21 @@ class SingleCapsuleOperation(CapsuleOperation):
         CapsuleOperation.__init__(self, *args, **kwargs)
         self.installs = []
         self.removes = []
-        self.preserveList = []
+        self.preserveSet = set()
 
     def _filesNeeded(self):
         return [ x[1] for x in self.installs ]
 
     def preservePath(self, path):
-        self.preserveList.append(path)
+        self.preserveSet.add(path)
 
-    def doApply(self, justDatabase = False):
+    def doApply(self, justDatabase = False, noScripts = False):
         raise NotImplementedError
 
-    def apply(self, fileDict, justDatabase = False):
-        if not justDatabase and self.preserveList:
+    def apply(self, fileDict, justDatabase = False, noScripts = False):
+        if not justDatabase and self.preserveSet:
             capsuleJournal = ConaryOwnedJournal(self.root)
-            for path in self.preserveList:
+            for path in self.preserveSet:
                 fullPath = self.root + path
                 capsuleJournal.backup(fullPath, skipDirs = True)
                 if not util.removeIfExists(fullPath):
@@ -85,7 +87,7 @@ class SingleCapsuleOperation(CapsuleOperation):
             capsuleJournal = None
 
         try:
-            self.doApply(fileDict, justDatabase = justDatabase)
+            self.doApply(fileDict, justDatabase = justDatabase, noScripts = noScripts)
         finally:
             if capsuleJournal:
                 capsuleJournal.revert()
@@ -140,7 +142,7 @@ class MetaCapsuleOperations(CapsuleOperation):
         CapsuleOperation.__init__(self, root, *args, **kwargs)
         self.capsuleClasses = {}
 
-    def apply(self, justDatabase = False):
+    def apply(self, justDatabase = False, noScripts = False):
         fileDict = {}
         for kind, obj in sorted(self.capsuleClasses.items()):
             fileDict.update(
@@ -162,7 +164,7 @@ class MetaCapsuleOperations(CapsuleOperation):
                 fileDict[(pathId, fileId)] = tmpname
 
             for kind, obj in sorted(self.capsuleClasses.items()):
-                obj.apply(fileDict, justDatabase = justDatabase)
+                obj.apply(fileDict, justDatabase = justDatabase, noScripts = noScripts)
         finally:
             for tmpPath in fileDict.values():
                 try:
@@ -196,6 +198,9 @@ class MetaCapsuleOperations(CapsuleOperation):
             # as a conary
             return False
 
+        if self.skipCapsuleOps:
+            return True
+
         capsule = self.getCapsule(capsuleInfo.type())
         capsule.install(flags, troveCs)
 
@@ -205,6 +210,9 @@ class MetaCapsuleOperations(CapsuleOperation):
         cType = trove.troveInfo.capsule.type()
         if not cType:
             return False
+
+        if self.skipCapsuleOps:
+            return True
 
         capsule = self.getCapsule(cType)
         capsule.remove(trove)

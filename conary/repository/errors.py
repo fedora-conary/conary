@@ -21,7 +21,7 @@ from conary.trove import TroveError
 from conary.lib import sha1helper
 from conary.lib.openpgpfile import KeyNotFound, BadSelfSignature
 from conary.lib.openpgpfile import IncompatibleKey
-from conary import versions
+from conary import trove, versions
 
 RepositoryError = conary.errors.RepositoryError
 
@@ -143,7 +143,7 @@ SourceItem conflict detected for node %s=%s: %s cannot change to %s
 This can happen when there is a version collision in the repository.
 Try to update the version number of the troves being comitted and retry.
 """ % (self.name, self.version, self.oldSourceItem, self.newSourceItem)
-        
+
 class TroveMissing(RepositoryError, InternalConaryError):
     troveType = "trove"
 
@@ -184,25 +184,25 @@ class TroveMissing(RepositoryError, InternalConaryError):
                        (self.version, self.troveType, self.troveName)
             return "version %s of %s %s does not exist" % \
                 (self.version.asString(), self.troveType, self.troveName)
-	else:
-	    return "%s %s does not exist" % (self.troveType, self.troveName)
+        else:
+            return "%s %s does not exist" % (self.troveType, self.troveName)
 
     def __init__(self, troveName, version = None):
-	"""
-	Initializes a TroveMissing exception.
+        """
+        Initializes a TroveMissing exception.
 
-	@param troveName: trove which could not be found
-	@type troveName: str
-	@param version: version of the trove which does not exist
-	@type version: versions.Version, VFS string or [versions.Version]
-	"""
-	self.troveName = troveName
-	self.version = version
-        if troveName.startswith('group-'):
+        @param troveName: trove which could not be found
+        @type troveName: str
+        @param version: version of the trove which does not exist
+        @type version: versions.Version, VFS string or [versions.Version]
+        """
+        self.troveName = troveName
+        self.version = version
+        if trove.troveIsGroup(troveName):
             self.type = 'group'
-        elif troveName.startswith('fileset-'):
+        elif trove.troveIsFileSet(troveName):
             self.type = 'fileset'
-        elif troveName.find(':') != -1:
+        elif trove.troveIsComponent(troveName):
             self.type = 'component'
         else:
             self.type = 'package'
@@ -210,9 +210,9 @@ class TroveMissing(RepositoryError, InternalConaryError):
 class UnknownException(RepositoryError, InternalConaryError):
 
     def __init__(self, eName, eArgs):
-	self.eName = eName
-	self.eArgs = eArgs
-	RepositoryError.__init__(self, "UnknownException: %s %s" % (self.eName, self.eArgs))
+        self.eName = eName
+        self.eArgs = eArgs
+        RepositoryError.__init__(self, "UnknownException: %s %s" % (self.eName, self.eArgs))
 
 class UserAlreadyExists(RepositoryError):
     pass
@@ -284,7 +284,7 @@ class TroveSchemaError(RepositoryError):
         self.nvf = (name, version, flavor)
         self.troveSchema = troveSchema
         self.supportedSchema = supportedSchema
-        RepositoryError.__init__(self, self._error % (name, version, flavor, 
+        RepositoryError.__init__(self, self._error % (name, version, flavor,
                                                  troveSchema, supportedSchema))
 
 class TroveAccessError(RepositoryError):
@@ -303,7 +303,7 @@ class TroveAccessError(RepositoryError):
         self.name = name
         self.version = version
         RepositoryError.__init__(self, self._error % (name, version))
-    
+
 class PermissionAlreadyExists(RepositoryError):
     pass
 
@@ -337,7 +337,7 @@ class GetFileContentsError(RepositoryError):
     def __init__(self, fileId, fileVer):
         self.fileId = fileId
         self.fileVer = fileVer
-        RepositoryError.__init__(self, self.error % 
+        RepositoryError.__init__(self, self.error %
                 (sha1helper.sha1ToString(fileId), fileVer))
 
 class FileContentsNotFound(GetFileContentsError):

@@ -22,7 +22,7 @@ from conary import conaryclient, files
 from conary.conaryclient import cmdline
 from conary.deps import deps
 from conary.lib import dirset, log, sha1helper, util
-from conary.local import defaultmap, update
+from conary.local import update
 from conary.repository import changeset, filecontents, trovesource
 from conary import errors
 
@@ -86,7 +86,7 @@ class _FindLocalChanges(object):
         except OSError, err:
             if err.errno == 13:
                 log.warning("Permission denied creating local changeset for"
-                            " %s " % str([ x[0].getName() for x in l ]))
+                            " %s " % str([ x[0].getName() for x in troveList ]))
             return
 
         trovesChanged = []
@@ -108,12 +108,23 @@ class _FindLocalChanges(object):
             self._handleChangeSet(trovesChanged, cs)
 
     def _handleChangeSet(self, trovesChanged, cs):
+        class NonPristineDatabaseWrapper(object):
+            def __getattr__(self, n):
+                return getattr(self.db, n)
+
+            def getTroves(self, *args, **kwargs):
+                kwargs['pristine'] = False
+                return self.db.getTroves(*args, **kwargs)
+
+            def __init__(self, db):
+                self.db = db
+
         if self.display == DISPLAY_DIFF:
             for x in cs.gitDiff(self.diffTroveSource):
                 sys.stdout.write(x)
         elif self.display == DISPLAY_CS:
             troveSpecs = [ '%s=%s[%s]' % x for x in trovesChanged ]
-            showchangeset.displayChangeSet(self.db, cs, troveSpecs,
+            showchangeset.displayChangeSet(NonPristineDatabaseWrapper(self.db), cs, troveSpecs,
                                            self.cfg, ls=True,
                                            showChanges=True, asJob=True)
 
@@ -137,12 +148,9 @@ class _FindLocalChanges(object):
                                        withFileObjects = True,
                                        *troveInfo)
 
-            if self.allMachineChanges:
-                origTrv = self.db.getTrove(pristine = True,
-                                           withFileObjects = True,
-                                           *thisTrv.getNameVersionFlavor())
-            else:
-                origTrv = thisTrv
+            self.db.getTrove(pristine = True,
+                             withFileObjects = True,
+                             *thisTrv.getNameVersionFlavor())
 
             ver = thisTrv.getVersion().createShadow(versions.LocalLabel())
             verifyList.append((thisTrv, thisTrv, ver, update.UpdateFlags()))
@@ -337,11 +345,12 @@ class DiffObject(_FindLocalChanges):
             else:
                 newFiles = NEW_FILES_OWNED_DIR
 
-        verifier = _FindLocalChanges.__init__(self, db, cfg,
-                        display=display,
-                        forceHashCheck=forceHashCheck,
-                        changeSetPath=changesetPath,
-                        asDiff=asDiff, repos=repos, newFiles=newFiles)
+        _FindLocalChanges.__init__(self, db, cfg,
+                                   display=display,
+                                   forceHashCheck=forceHashCheck,
+                                   changeSetPath=changesetPath,
+                                   asDiff=asDiff, repos=repos,
+                                   newFiles=newFiles)
         self.run(troveNameList, all=all)
 
 class verify(DiffObject):
@@ -360,9 +369,9 @@ class verify(DiffObject):
 class LocalChangeSetCommand(_FindLocalChanges):
 
     def __init__(self, db, cfg, item, changeSetPath = None):
-        changeObj = _FindLocalChanges.__init__(self, db, cfg,
-                                               display=DISPLAY_NONE,
-                                               allMachineChanges=True)
+        _FindLocalChanges.__init__(self, db, cfg,
+                                   display=DISPLAY_NONE,
+                                   allMachineChanges=True)
         cs = self.run([item])
 
         if not [ x for x in cs.iterNewTroveList() ]:

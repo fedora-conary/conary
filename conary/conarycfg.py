@@ -128,6 +128,12 @@ class UserInformation(ServerGlobList):
             item = (item[0], (item[1], item[2]))
         ServerGlobList.insert(self, pos, item)
 
+    def __reduce__(self):
+        # This is needed to make cPickle work because __iter__ returns 3-tuples
+        # which cPickle appends directly to the list using internal list code
+        # instead of our append().
+        return (type(self), (list(self),))
+
     def __init__(self, initVal = None):
         ServerGlobList.__init__(self)
         if initVal is not None:
@@ -147,7 +153,7 @@ class CfgUserInfoItem(CfgType):
 
     def format(self, val, displayOptions=None):
         serverGlob, user, password = val
-        if password is None: 
+        if password is None:
             return '%s %s' % (serverGlob, user)
         elif displayOptions.get('hidePasswords'):
             return '%s %s <password>' % (serverGlob, user)
@@ -239,7 +245,7 @@ class CfgRepoMapEntry(CfgType):
             user, server = match.groups()
             raise ParseError, ('repositoryMap entries should not contain '
                                'user names and passwords; use '
-                               '"user %s %s <password>" instead' % 
+                               '"user %s %s <password>" instead' %
                                (server, user))
 
         return (val[0], val[1])
@@ -410,7 +416,7 @@ class CfgLabelList(list):
                 secondIdx = i
 
         if firstIdx is None or secondIdx is None:
-            return None 
+            return None
 
         return cmp(firstIdx, secondIdx)
 
@@ -479,6 +485,7 @@ class CfgSearchPathItem(CfgType):
         return item
 CfgSearchPath = CfgLineList(CfgSearchPathItem)
 
+
 def _getDefaultPublicKeyrings():
     publicKeyrings = []
     # If we are root, don't use the keyring in $HOME, since a process started
@@ -501,8 +508,8 @@ def _getDefaultPublicKeyrings():
 class ConaryContext(ConfigSection):
     """ Conary uses context to let the value of particular config parameters
         be set based on a keyword that can be set at the command line.
-        Configuartion values that are set in a context are overridden 
-        by the values in the context that have been set.  Values that are 
+        Configuartion values that are set in a context are overridden
+        by the values in the context that have been set.  Values that are
         unset in the context do not override the default config values.
     """
     archDirs              =  (CfgPathList, ('/etc/conary/arch',
@@ -521,7 +528,7 @@ class ConaryContext(ConfigSection):
                                             '~/.conary/components'))
     configComponent       =  (CfgBool, True)
     contact               =  None
-    context		  =  None
+    context               =  None
     dbPath                =  '/var/lib/conarydb'
     debugExceptions       =  (CfgBool, False)
     debugRecipeExceptions =  (CfgBool, False)
@@ -552,8 +559,8 @@ class ConaryContext(ConfigSection):
                                             '/etc/conary/distro/mirrors',
                                             '/etc/conary/mirrors',))
     name                  =  None
-    quiet		  =  CfgBool
-    pinTroves		  =  CfgRegExpList
+    quiet                 =  CfgBool
+    pinTroves             =  CfgRegExpList
     policyDirs            =  (CfgPathList, ('/usr/lib/conary/policy',
                                             '/usr/lib/conary/distro/policy',
                                             '/etc/conary/policy',
@@ -606,7 +613,7 @@ class ConaryContext(ConfigSection):
                                             '/media', '/initrd' ))
 
     def _resetSigMap(self):
-        self.signatureKeyMap = []
+        self.resetToDefault('signatureKeyMap')
 
     def __init__(self, *args, **kw):
         ConfigSection.__init__(self, *args, **kw)
@@ -614,11 +621,11 @@ class ConaryContext(ConfigSection):
 
     def _writeKey(self, out, cfgItem, value, options):
         if cfgItem.isDefault():
-            return 
+            return
         ConfigSection._writeKey(self, out, cfgItem, value, options)
 
 class ConaryConfiguration(SectionedConfigFile):
-    # this allows a new section to be created on the fly with the type 
+    # this allows a new section to be created on the fly with the type
     # ConaryContext
     _allowNewSections     = True
     _defaultSectionType   =  ConaryContext
@@ -629,21 +636,21 @@ class ConaryConfiguration(SectionedConfigFile):
         """
         Initialize a ConaryConfiguration object
 
-        @param readConfigFiles: If True, read /etc/conaryrc and entitlements 
+        @param readConfigFiles: If True, read /etc/conaryrc and entitlements
         files
         @type readConfigFiles: bool
 
         @param ignoreErrors: If True, ParseError exceptions will not be raised
         @type ignoreErrors: bool
 
-        @param readProxyValuesFirst: If True, parse local config files for 
+        @param readProxyValuesFirst: If True, parse local config files for
         proxy settings and apply them before further configuration.
-        @type readProxyValuesFirst: bool  
+        @type readProxyValuesFirst: bool
 
         @raises ParseError: Raised if configuration syntax is invalid and
         ignoreErrors is False.
         """
-	SectionedConfigFile.__init__(self)
+        SectionedConfigFile.__init__(self)
         self._ignoreErrors = ignoreErrors
 
         for info in ConaryContext._getConfigOptions():
@@ -673,7 +680,6 @@ class ConaryConfiguration(SectionedConfigFile):
         if not os.path.isdir(self.entitlementDirectory):
             return
 
-        warn = False
         try:
             files = os.listdir(self.entitlementDirectory)
         except OSError:
@@ -691,11 +697,11 @@ class ConaryConfiguration(SectionedConfigFile):
                 return
 
     def readFiles(self):
-	self.read("/etc/conaryrc", exception=False)
-	if os.environ.has_key("HOME"):
-	    self.read(os.environ["HOME"] + "/" + ".conaryrc", exception=False)
-	self.read("conaryrc", exception=False)
-  
+        self.read("/etc/conaryrc", exception=False)
+        if os.environ.has_key("HOME"):
+            self.read(os.environ["HOME"] + "/" + ".conaryrc", exception=False)
+        self.read("conaryrc", exception=False)
+
     def setContext(self, name):
         """ Copy the config values from the context named name (if any)
             into the main config file.  Returns False if not such config
@@ -746,11 +752,11 @@ class ConaryConfiguration(SectionedConfigFile):
         found in /etc/conary/arch (archDirs) and /etc/conary/use
 
         @raises RuntimeError: Raised if use flags conflict in
-        a way which cannot be reconciled 
+        a way which cannot be reconciled
         (see L{deps.DependencyClass.MergeFlags})
 
         """
-        self.flavorConfig = flavorcfg.FlavorConfig(self.useDirs, 
+        self.flavorConfig = flavorcfg.FlavorConfig(self.useDirs,
                                                    self.archDirs)
         if self.flavor == []:
             self.flavor = [deps.Flavor()]
@@ -759,7 +765,7 @@ class ConaryConfiguration(SectionedConfigFile):
 
         newFlavors = []
         hasIns = False
-        
+
         # if any flavor has an instruction set, don't merge
         for flavor in self.flavor:
             if deps.DEP_CLASS_IS in flavor.getDepClasses():
@@ -779,12 +785,12 @@ class ConaryConfiguration(SectionedConfigFile):
             self.flavor = newFlavors
 
         # buildFlavor is installFlavor + overrides
-        self.buildFlavor = deps.overrideFlavor(self.flavor[0], 
+        self.buildFlavor = deps.overrideFlavor(self.flavor[0],
                                                     self.buildFlavor)
         if self.isDefault('flavorPreferences'):
             self.flavorPreferences = arch.getFlavorPreferencesFromFlavor(
                                                                 self.flavor[0])
-	self.flavorConfig.populateBuildFlags()
+        self.flavorConfig.populateBuildFlags()
 
 def selectSignatureKey(cfg, label):
     if not cfg.signatureKeyMap:
@@ -874,7 +880,6 @@ def loadEntitlementFromString(xmlContent, *args, **kw):
             p.parse(xmlContent)
 
         try:
-            entServer = p.get('server', None)
             entClass = p.get('class', None)
             entKey = p['key']
         except KeyError:
@@ -909,7 +914,7 @@ def loadEntitlementFromProgram(fullPath, serverName):
                 os.close(nullFd)
 
                 # both error and stderr are redirected  - the entitlement
-                # should be on stdout, and error info should be 
+                # should be on stdout, and error info should be
                 # on stderr.
                 os.dup2(writeFd, 1)
                 os.dup2(stdErrWrite, 2)
@@ -917,7 +922,7 @@ def loadEntitlementFromProgram(fullPath, serverName):
                 os.close(stdErrWrite)
                 util.massCloseFileDescriptors(3, 252)
                 os.execl(fullPath, fullPath, serverName)
-            except Exception, err:
+            except Exception:
                 traceback.print_exc(sys.stderr)
         finally:
             os._exit(1)
@@ -976,7 +981,6 @@ def loadEntitlement(dirName, serverName):
 
     fullPath = os.path.join(dirName, serverName)
 
-    p = EntitlementParser()
     if not os.access(fullPath, os.R_OK):
         return None
 

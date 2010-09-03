@@ -11,25 +11,21 @@
 # or fitness for a particular purpose. See the Common Public License for
 # full details.
 
-import itertools
 import os
 import pickle
 
 #conary imports
 from conary import conarycfg, errors, metadata, rollbacks, trove
-from conary.conaryclient import clone, resolve, update, filetypes, callbacks, mirror
+from conary.conaryclient import clone, cmdline, password, resolve, update
 from conary.lib import log, util, openpgpkey, api
 from conary.local import database
 from conary.repository.netclient import NetworkRepositoryClient
-from conary.repository import trovesource
 from conary.repository import searchsource
 from conary.repository import resolvemethod
 
 # mixins for ConaryClient
 from conary.conaryclient.branch import ClientBranch
-from conary.conaryclient import cmdline
 from conary.conaryclient.clone import ClientClone
-from conary.conaryclient import password
 from conary.conaryclient.update import ClientUpdate
 from conary.conaryclient.newtrove import ClientNewTrove
 
@@ -50,7 +46,7 @@ ChangeSetFromFile = update.changeset.ChangeSetFromFile
 class TroveNotFound(Exception):
     def __init__(self, troveName):
         self.troveName = troveName
-        
+
     def __str__(self):
         return "trove not found: %s" % self.troveName
 
@@ -95,7 +91,7 @@ class ConaryClient(ClientClone, ClientBranch, ClientUpdate, ClientNewTrove):
         if not resolverClass:
             resolverClass = resolve.DependencySolver
 
-        self.resolver = resolverClass(self, cfg, self.repos, self.db)
+        self.resolver = resolverClass(self, cfg, self.db)
 
         # Set up the callbacks for the PGP key cache
         keyCache = openpgpkey.getKeyCache()
@@ -166,7 +162,7 @@ class ConaryClient(ClientClone, ClientBranch, ClientUpdate, ClientNewTrove):
                 cacheFp = open(cacheFile, "r")
                 cache = pickle.load(cacheFp)
                 cacheFp.close()
-            except IOError, EOFError:
+            except (IOError, EOFError):
                 if cacheOnly:
                     return {}
             else:
@@ -216,8 +212,8 @@ class ConaryClient(ClientClone, ClientBranch, ClientUpdate, ClientNewTrove):
 
         return md
 
-    def _createChangeSetList(self, csList, recurse = True, 
-                             skipNotByDefault = False, 
+    def _createChangeSetList(self, csList, recurse = True,
+                             skipNotByDefault = False,
                              excludeList = conarycfg.RegularExpressionList(),
                              callback = None):
         primaryList = []
@@ -235,7 +231,7 @@ class ConaryClient(ClientClone, ClientBranch, ClientUpdate, ClientNewTrove):
             else:
                 primaryList.append((name, oldVersion, oldFlavor))
 
-        cs = self.repos.createChangeSet(headerList, recurse = recurse, 
+        cs = self.repos.createChangeSet(headerList, recurse = recurse,
                                         withFiles = False, callback = callback)
 
         finalList = set()
@@ -287,7 +283,7 @@ class ConaryClient(ClientClone, ClientBranch, ClientUpdate, ClientNewTrove):
 
         finalList = list(finalList)
 
-        # recreate primaryList without erase-only troves for the primary trove 
+        # recreate primaryList without erase-only troves for the primary trove
         # list
         primaryList = [ (x[0], x[2][0], x[2][1]) for x in csList
                         if x[2][0] is not None ]
@@ -295,8 +291,8 @@ class ConaryClient(ClientClone, ClientBranch, ClientUpdate, ClientNewTrove):
         return (finalList, primaryList)
 
     @api.publicApi
-    def createChangeSet(self, csList, recurse = True, 
-                        skipNotByDefault = True, 
+    def createChangeSet(self, csList, recurse = True,
+                        skipNotByDefault = True,
                         excludeList = conarycfg.RegularExpressionList(),
                         callback = None, withFiles = False,
                         withFileContents = False):
@@ -307,18 +303,18 @@ class ConaryClient(ClientClone, ClientBranch, ClientUpdate, ClientNewTrove):
         """
         if self.repos is None:
             raise errors.RepositoryError("Repository not available")
-        (fullCsList, primaryList) = self._createChangeSetList(csList, 
-                recurse = recurse, skipNotByDefault = skipNotByDefault, 
+        (fullCsList, primaryList) = self._createChangeSetList(csList,
+                recurse = recurse, skipNotByDefault = skipNotByDefault,
                 excludeList = excludeList, callback = callback)
 
         return self.repos.createChangeSet(fullCsList, recurse = False,
                                        primaryTroveList = primaryList,
-                                       callback = callback, 
+                                       callback = callback,
                                        withFiles = withFiles,
                                        withFileContents = withFileContents)
 
-    def createChangeSetFile(self, path, csList, recurse = True, 
-                            skipNotByDefault = True, 
+    def createChangeSetFile(self, path, csList, recurse = True,
+                            skipNotByDefault = True,
                             excludeList = conarycfg.RegularExpressionList(),
                             callback = None):
         """
@@ -335,7 +331,7 @@ class ConaryClient(ClientClone, ClientBranch, ClientUpdate, ClientNewTrove):
         doesn't do anything if recurse is False)
         @type skipNotByDefault: boolean
         @param excludeList: List of regular expressions which are matched
-        against recursively included trove names. Troves which match any 
+        against recursively included trove names. Troves which match any
         of the expressions are left out of the change set (this list
         is meaningless if recurse is False).
         @param callback: Callback object
@@ -344,8 +340,8 @@ class ConaryClient(ClientClone, ClientBranch, ClientUpdate, ClientNewTrove):
 
         if self.repos is None:
             raise errors.RepositoryError("Repository not available")
-        (fullCsList, primaryList) = self._createChangeSetList(csList, 
-                recurse = recurse, skipNotByDefault = skipNotByDefault, 
+        (fullCsList, primaryList) = self._createChangeSetList(csList,
+                recurse = recurse, skipNotByDefault = skipNotByDefault,
                 excludeList = excludeList, callback = callback)
 
         self.repos.createChangeSetFile(fullCsList, path, recurse = False,
@@ -354,7 +350,7 @@ class ConaryClient(ClientClone, ClientBranch, ClientUpdate, ClientNewTrove):
 
     def checkWriteableRoot(self):
         """
-        Prepares the installation root for trove updates and change 
+        Prepares the installation root for trove updates and change
         set applications.
         """
         if not os.path.exists(self.cfg.root):
@@ -383,7 +379,7 @@ class ConaryClient(ClientClone, ClientBranch, ClientUpdate, ClientNewTrove):
         returns url to a conary changeset for updating the local client to
         @param version: a conary client version object, L{versions.Version}
         @param flavor: a conary client flavor object, L{deps.deps.Flavor}
-        """        
+        """
         if self.repos is None:
             raise errors.RepositoryError("Repository not available")
         return self.repos.getConaryUrl(version, flavor)
@@ -424,7 +420,7 @@ class ConaryClient(ClientClone, ClientBranch, ClientUpdate, ClientNewTrove):
         if self.cfg.searchPath:
             return searchsource.createSearchSourceStackFromStrings(
                                                          searchSource,
-                                                         self.cfg.searchPath, 
+                                                         self.cfg.searchPath,
                                                          flavor,
                                                          db=self.db)
         else:
@@ -441,7 +437,7 @@ class ConaryClient(ClientClone, ClientBranch, ClientUpdate, ClientNewTrove):
     def applyRollback(self, rollbackSpec, replaceFiles = None,
             callback = None, tagScript = None, justDatabase = None,
             transactionCounter = None, showInfoOnly = False,
-            abortOnError = False):
+            abortOnError = False, noScripts = False):
         """
         Apply a rollback.
 
@@ -464,6 +460,9 @@ class ConaryClient(ClientClone, ClientBranch, ClientUpdate, ClientNewTrove):
         @param justDatabase: Change only the database, do not revert the
         filesystem.
         @type justDatabase: bool
+
+        @param noScripts: Do not run trove scripts, including rpm scripts.
+        @type noScripts: bool
 
         @param transactionCounter: The Conary database contains a counter that
         gets incremented with every change. This argument is the counter's value
@@ -498,6 +497,7 @@ class ConaryClient(ClientClone, ClientBranch, ClientUpdate, ClientNewTrove):
         # to document the keyword arguments.
         d = dict(tagScript = tagScript,
             justDatabase = justDatabase,
+            noScripts = noScripts,
             transactionCounter = transactionCounter,
             callback = callback,
             replaceFiles = replaceFiles,
@@ -526,7 +526,7 @@ def getClient(context=None, environ=None, searchCurrentDir=False, cfg=None):
         This means it checks for the explicit "context" variable passed in
         manually.  It follows by checking the eviron dict
         (defaults to os.environ) for the CONARY_CONTEXT variable.  It then
-        falls back to the CONARY file and looks for a context set there.  
+        falls back to the CONARY file and looks for a context set there.
         Finally, if these checks fail to find a context, it will look at the
         context specified in the cfg variable.
 

@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2009 rPath, Inc.
+# Copyright (c) 2009, 2010 rPath, Inc.
 #
 # This program is distributed under the terms of the Common Public License,
 # version 1.0. A copy of this license should have been distributed with this
@@ -15,9 +15,9 @@
 import itertools, rpm, os, pwd, stat, tempfile
 
 from conary import files, trove
-from conary.lib import util
+from conary.lib import util, log
 from conary.local.capsules import SingleCapsuleOperation
-from conary.local import errors, update
+from conary.local import errors
 from conary.repository import filecontents
 
 def rpmkey(hdr):
@@ -33,6 +33,7 @@ class Callback:
         self.logFd = logFd
         self.lastAmount = 0
         self.rootFd = os.open("/", os.O_RDONLY)
+        self.unpackFailures = []
 
     def flushRpmLog(self):
         s = os.read(self.logFd, 50000)
@@ -50,6 +51,7 @@ class Callback:
         # the chroot and the cwd.
         thisRoot = os.open("/", os.O_RDONLY)
         thisDir = os.open(".", os.O_RDONLY)
+        concats = []
 
         try:
             os.fchdir(self.rootFd)
@@ -60,7 +62,14 @@ class Callback:
                 if not line:
                     continue
 
-                if line.startswith('error:'):
+                # this passwd/group stuff is for CNY-3428. Basically group
+                # info packages can create users before Red Hat's setup
+                # package is installed. this fixes things up.
+                if '/etc/passwd.rpmnew' in line:
+                    concats.append( ('/etc/passwd', '/etc/passwd.rpmnew') )
+                elif '/etc/group.rpmnew' in line:
+                    concats.append( ('/etc/group', '/etc/group.rpmnew') )
+                elif line.startswith('error:'):
                     line = line[6:].strip()
                     self.callback.error(line)
                 elif line.startswith('warning:'):
@@ -74,6 +83,19 @@ class Callback:
             os.chroot(".")
             os.fchdir(thisDir)
             os.close(thisDir)
+
+        for (keepPath, fromPath) in concats:
+            finalLines = open(fromPath).readlines() + open(keepPath).readlines()
+            finalLines = [ (x.split(':')[0], x) for x in finalLines ]
+            seen = set()
+            f = open(keepPath, "w")
+            for (name, line) in finalLines:
+                if name not in seen:
+                    seen.add(name)
+                    f.write(line)
+
+            f.close()
+            os.unlink(fromPath)
 
     def __call__(self, what, amount, total, mydata, wibble):
         self.flushRpmLog()
@@ -94,6 +116,9 @@ class Callback:
             self.callback.restoreFiles(amount - self.lastAmount,
                                        self.totalSize)
             self.lastAmount = amount
+        elif what == rpm.RPMCALLBACK_UNPACK_ERROR:
+            hdr, path = mydata
+            self.unpackFailures.append(hdr)
 
     def __del__(self):
         assert(not self.fdnos)
@@ -102,16 +127,48 @@ class Callback:
 
 class RpmCapsuleOperation(SingleCapsuleOperation):
 
-    def doApply(self, fileDict, justDatabase = False):
+    @staticmethod
+    def _canonicalNvra(n, v, r, a):
+        return "%s-%s-%s.%s" % (n, v, r, a)
+
+    def _CheckRPMDBContents(self, testNvras, ts, errStr,
+            unpackFailures=None, enforceUnpackFailures=None):
+        mi = ts.dbMatch()
+        installedNvras = set([(h['name'], h['version'], h['release'], h['arch'])
+                              for h in mi])
+        missingNvras = testNvras.difference(installedNvras)
+
+        if unpackFailures and not enforceUnpackFailures:
+            missingNvras -= unpackFailures
+            self.callback.warning('RPM failed to unpack ' + ' '.join(
+                self._canonicalNvra(*nvra) for nvra in unpackFailures))
+
+        if missingNvras:
+            missingSpecs = sorted([self._canonicalNvra(*nvra)
+                                  for nvra in missingNvras])
+            raise errors.UpdateError(errStr + ' '.join(missingSpecs))
+
+    def doApply(self, fileDict, justDatabase = False, noScripts = False):
         # force the nss modules to be loaded from outside of any chroot
         pwd.getpwall()
 
-        rpmList = []
-
         ts = rpm.TransactionSet(self.root, rpm._RPMVSF_NOSIGNATURES)
 
+        installNvras = set()
+        removeNvras = set([(trv.troveInfo.capsule.rpm.name(),
+                            trv.troveInfo.capsule.rpm.version(),
+                            trv.troveInfo.capsule.rpm.release(),
+                            trv.troveInfo.capsule.rpm.arch())
+                           for trv in self.removes])
+        self._CheckRPMDBContents(removeNvras, ts,
+            'RPM database missing packages for removal: ')
+
+        tsFlags = 0
         if justDatabase:
-            ts.setFlags(rpm.RPMTRANS_FLAG_JUSTDB)
+            tsFlags |= rpm.RPMTRANS_FLAG_JUSTDB
+        if noScripts:
+            tsFlags |= rpm.RPMTRANS_FLAG_NOSCRIPTS
+        ts.setFlags(tsFlags)
 
         # we use a pretty heavy hammer
         ts.setProbFilter(rpm.RPMPROB_FILTER_IGNOREOS        |
@@ -125,6 +182,8 @@ class RpmCapsuleOperation(SingleCapsuleOperation):
             localPath = fileDict[(pathId, fileId)]
             fd = os.open(localPath, os.O_RDONLY)
             hdr = ts.hdrFromFdno(fd)
+            installNvras.add(
+                (hdr['name'], hdr['version'], hdr['release'], hdr['arch']))
             os.close(fd)
             ts.addInstall(hdr, (hdr, localPath), "i")
             hasTransaction = True
@@ -137,16 +196,53 @@ class RpmCapsuleOperation(SingleCapsuleOperation):
 
             self.fsJob.addToRestoreSize(thisSize)
 
-        removeList = []
-        for trv in self.removes:
-            ts.addErase("%s-%s-%s.%s" % (
-                    trv.troveInfo.capsule.rpm.name(),
-                    trv.troveInfo.capsule.rpm.version(),
-                    trv.troveInfo.capsule.rpm.release(),
-                    trv.troveInfo.capsule.rpm.arch()))
+        # don't remove RPMs if we have another reference to that RPM
+        # in the conary database
+        #
+        # by the time we get here, the erase items have already been
+        # removed from the local database, so see if anything left needs
+        # these nevra's
+
+        # if we're installing the same nvra we're removing, don't remove
+        # that nvra after installing it. that would be silly, and it just
+        # makes our database ops more expensive anyway
+        removeNvras -= installNvras
+        # look for things with the same name
+        afterInstall = set(self.db.findByNames(
+                                [ x.getName() for x in self.removes ]))
+        # but not things we're just now installing
+        afterInstall -= set( x[0].getNewNameVersionFlavor()
+                             for x in self.installs )
+        # now find the RPMs those previously installed items need
+        neededNvras = set((trv.troveInfo.capsule.rpm.name(),
+                           trv.troveInfo.capsule.rpm.version(),
+                           trv.troveInfo.capsule.rpm.release(),
+                           trv.troveInfo.capsule.rpm.arch())
+               for trv in self.db.iterTroves(afterInstall)
+               if trv.troveInfo.capsule.type() == trove._TROVECAPSULE_TYPE_RPM)
+        # and don't remove those things
+        removeNvras -= neededNvras
+        for nvra in removeNvras:
+            ts.addErase("%s-%s-%s.%s" % nvra)
 
         ts.check()
         ts.order()
+
+        # record RPM's chosen transaction ordering for future debugging
+        orderedKeys = []
+        # We must use getKeys() rather than iterating over ts to avoid
+        # a refcounting bug in RPM's python bindings
+        transactionKeys = ts.getKeys()
+        # ts.getKeys() returns *either* a list of te's *or* None.
+        if transactionKeys is not None:
+            for te in transactionKeys:
+                if te is not None:
+                    # install has a header; erase is an entry of None
+                    h = te[0]
+                    orderedKeys.append("%s-%s-%s.%s" %(
+                        h['name'], h['version'], h['release'], h['arch']))
+        if orderedKeys:
+            log.syslog('RPM install order: ' + ' '.join(orderedKeys))
 
         # redirect RPM messages into a temporary file; we harvest them from
         # there and send them on to the callback via the rpm callback
@@ -158,6 +254,8 @@ class RpmCapsuleOperation(SingleCapsuleOperation):
 
         cb = Callback(self.callback, self.fsJob.getRestoreSize(), readFile)
         probs = ts.run(cb, '')
+        unpackFailures = set((h['name'], h['version'], h['release'], h['arch'])
+                             for h in cb.unpackFailures)
 
         # flush the RPM log
         del cb
@@ -168,7 +266,17 @@ class RpmCapsuleOperation(SingleCapsuleOperation):
         if probs:
             raise ValueError(str(probs))
 
+        # CNY-3488: it's potentially harmful to enforce this here
+        self._CheckRPMDBContents(installNvras, ts,
+            'RPM failed to install requested packages: ',
+            unpackFailures=unpackFailures,
+            enforceUnpackFailures=False)
+
     def install(self, flags, troveCs):
+        ACTION_RESTORE = 1
+        ACTION_SKIP = 2
+        ACTION_CONFLICT = 3
+
         rc = SingleCapsuleOperation.install(self, flags, troveCs)
         if rc is None:
             # parent class thinks we should just ignore this troveCs; I'm
@@ -248,10 +356,11 @@ class RpmCapsuleOperation(SingleCapsuleOperation):
                 toRestore.append((fileInfo, fileObj))
                 continue
 
-            mayRestore = False
+            action = ACTION_CONFLICT
 
             existingOwners = list(
-                self.db.iterFindPathReferences(path, justPresent = True))
+                self.db.iterFindPathReferences(path, justPresent = True,
+                                               withStream = True))
 
             if existingOwners:
                 # Don't complain about files owned by the previous version
@@ -261,54 +370,91 @@ class RpmCapsuleOperation(SingleCapsuleOperation):
                     existingOwners.remove(l[0])
 
                 if not existingOwners:
-                    mayRestore = True
+                    action = ACTION_RESTORE
             elif stat.S_ISDIR(s.st_mode) and fileObj.lsTag == 'd':
                 # Don't let existing directories stop us from taking over
                 # ownership of the directory
-                mayRestore = True
+                action = ACTION_RESTORE
             elif fileObj.flags.isInitialContents():
                 # Initial contents files may be restored on top of things
                 # already in the filesystem. They're ghosts or config files
                 # and RPM will get the contents right either way, and we
                 # should remove them either way.
-                mayRestore = True
+                action = ACTION_RESTORE
 
-            if not mayRestore and existingOwners:
+            if action == ACTION_CONFLICT and existingOwners:
                 if fileId in [ x[4] for x in existingOwners ]:
                     # The files share metadata same. Whatever it looks like on
                     # disk, RPM is going to blow it away with the new one.
                     for info in existingOwners:
                         self.fsJob.sharedFile(info[0], info[1], info[2],
                                               info[3])
-                    mayRestore = True
-                elif flags.replaceManagedFiles:
-                    # The files are different. Bail unless we're supposed to
-                    # replace managed files.
-                    existingFile = files.FileFromFilesystem(absolutePath,
-                                                            pathId)
-                    for info in existingOwners:
-                        self.fsJob.userRemoval(
-                            fileObj = existingFile,
-                            content = filecontents.FromFilesystem(absolutePath),
-                            *info[0:4])
-                    mayRestore = True
+                    action = ACTION_RESTORE
+                elif path.startswith('/usr/share/doc/'):
+                    # Mirror badness Red Hat patches into RPM for rhel4
+                    # and rhel5
+                    action = ACTION_RESTORE
+                else:
+                    existingFiles = [ files.ThawFile(x[5], pathId) for x
+                                        in existingOwners ]
+
+                    compatibility = [ 1 for x in existingFiles
+                                        if fileObj.compatibleWith(x) ]
+
+
+                    if 1 in compatibility:
+                        # files can be shared even though the fileId's
+                        # are different
+                        for info in existingOwners:
+                            self.fsJob.sharedFile(info[0], info[1], info[2],
+                                                  info[3])
+                        action = ACTION_RESTORE
+                    elif 1 in [ files.rpmFileColorCmp(x, fileObj)
+                              for x in existingFiles ]:
+                        # rpm file colors and the default rpm setting for
+                        # file color policy make elf64 files silently replace
+                        # elf32 files. follow that behavior here.
+                        #
+                        # no, i'm not making this up
+                        #
+                        # yes, really
+                        action = ACTION_SKIP
+                    elif (flags.replaceManagedFiles or
+                          1 in [ files.rpmFileColorCmp(fileObj, x)
+                                 for x in existingFiles ]):
+                        # The files are different. Bail unless we're supposed
+                        # to replace managed files.
+                        existingFile = files.FileFromFilesystem(absolutePath,
+                                                                pathId)
+                        for info in existingOwners:
+                            self.fsJob.userRemoval(
+                                fileObj = existingFile,
+                                content =
+                                    filecontents.FromFilesystem(absolutePath),
+                                *info[0:4])
+                        action = ACTION_RESTORE
             elif flags.replaceUnmanagedFiles:
                 # we don't own it, but it's on disk. RPM will just write over
                 # it and we have the flag saying we're good with that
-                mayRestore = True
+                action = ACTION_RESTORE
 
-            if mayRestore:
+            if action == ACTION_RESTORE:
                 # We may proceed, and RPM will replace this file for us. We
                 # need to track that it's being restored to avoid conflicts
                 # with other restorations though.
                 toRestore.append((fileInfo, fileObj))
-            else:
+            elif action == ACTION_CONFLICT:
                 # The file exists already, we can't share it, and we're not
                 # allowed to overwrite it.
                 self._error(errors.FileInWayError(util.normpath(path),
                                                   troveCs.getName(),
                                                   troveCs.getNewVersion(),
                                                   troveCs.getNewFlavor()))
+            else:
+                assert(action == ACTION_SKIP)
+                self.preservePath(path)
+                self.fsJob.userRemoval(trv.getName(), trv.getVersion(),
+                                       trv.getFlavor(), pathId)
 
         # toRestore is the list of what is going to be restored. We need to get
         # the fileObjects which will be created so we can track them in the
@@ -316,7 +462,6 @@ class RpmCapsuleOperation(SingleCapsuleOperation):
         # conflicts within this update. We handle newly created files first
         # and files which have changed (so we have to look up the diff)
         # a bit later.
-        changedFiles = []
         for fileInfo, fileObj in toRestore:
             self.fsJob._restore(fileObj, self.root + path, trvInfo,
                                 "restoring %s from RPM",
@@ -335,6 +480,7 @@ class RpmCapsuleOperation(SingleCapsuleOperation):
 
             for (pathId, path, fileId, version), fileObj in \
                     itertools.izip(trv.iterFileList(), dbFileObjs):
+                hasCapsule = trv.troveInfo.capsule.type() or False
                 fullPath = self.root + path
                 if not os.path.exists(fullPath):
                     continue
@@ -344,7 +490,7 @@ class RpmCapsuleOperation(SingleCapsuleOperation):
                     # we don't have any responsibility for it
                     continue
                 elif (fileObj.hasContents and
-                      not fileObj.flags.isEncapsulatedContent()):
+                      trove.conaryContents(hasCapsule, pathId, fileObj)):
                     # this content isn't part of the capsule; remember to put
                     # it back when RPM is done
                     self.preservePath(path)

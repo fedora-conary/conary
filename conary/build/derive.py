@@ -19,29 +19,28 @@ resulting packages to the repository.
 
 import os
 import stat
-import shutil
 
 from conary import branch
 from conary import checkin
-from conary import conaryclient
 from conary import state
-from conary import updatecmd
-from conary import versions
+from conary.conaryclient import cmdline
 from conary.lib import log, util
+from conary.versions import Label
+from conary.repository.changeset import ChangesetExploder
 
 class DeriveCallback(checkin.CheckinCallback):
     def setUpdateJob(self, *args, **kw):
         # stifle update announcement for extract
         pass
 
-def derive(repos, cfg, targetLabel, troveSpec, checkoutDir = None, 
-           extract = False, info = False, callback = None):
+def derive(repos, cfg, targetLabel, troveSpec, checkoutDir=None,
+           extract=False, info=False, callback=None):
     """
         Performs all the commands necessary to create a derived recipe.
         First it shadows the package, then it creates a checkout of the shadow
         and converts the checkout to a derived recipe package.
 
-        Finally if extract = True, it installs an version of the binary 
+        Finally if extract = True, it installs an version of the binary
         package into a root.
 
         @param repos: trovesource to search for and derive packages from
@@ -61,8 +60,18 @@ def derive(repos, cfg, targetLabel, troveSpec, checkoutDir = None,
     """
     if callback is None:
         callback = DeriveCallback()
-    troveName, versionSpec, flavor = conaryclient.cmdline.parseTroveSpec(
-                                                                    troveSpec)
+
+    if isinstance(troveSpec, tuple):
+        troveName, versionSpec, flavor = troveSpec
+        versionSpec = str(versionSpec)
+        troveSpec = cmdline.toTroveSpec(troveName, versionSpec, flavor)
+    else:
+        troveName, versionSpec, flavor = cmdline.parseTroveSpec(troveSpec)
+
+    if isinstance(targetLabel, str):
+        targetLabel = Label(targetLabel)
+
+    troveName, versionSpec, flavor = cmdline.parseTroveSpec(troveSpec)
     result = repos.findTrove(cfg.buildLabel, (troveName, versionSpec, flavor),
                              cfg.flavor)
     # findTrove shouldn't return multiple items for one package anymore
@@ -80,9 +89,10 @@ def derive(repos, cfg, targetLabel, troveSpec, checkoutDir = None,
         cfg.interactive = False
 
     error = branch.branch(repos, cfg, str(targetLabel),
-                  ['%s=%s[%s]' % troveToDerive],
-                  makeShadow = True, sourceOnly = True, binaryOnly = False,
-                  info = info)
+                          ['%s=%s[%s]'%troveToDerive],
+                          makeShadow=True, sourceOnly=True,
+                          binaryOnly=False, allowEmptyShadow=True,
+                          info=info)
     if info or error:
         return
     shadowedVersion = troveToDerive[1].createShadow(targetLabel)
@@ -91,33 +101,76 @@ def derive(repos, cfg, targetLabel, troveSpec, checkoutDir = None,
 
     checkoutDir = checkoutDir or troveName
     checkin.checkout(repos, cfg, checkoutDir,
-                     ["%s=%s" % (troveName, shadowedVersion)], 
+                     ["%s=%s" % (troveName, shadowedVersion)],
                      callback=callback)
     os.chdir(checkoutDir)
-    recipeName = troveName + '.recipe'
-    shadowBranch = shadowedVersion.branch()
+
+    nvfs = repos.getTrovesBySource(troveToDerive[0]+':source',
+                                   troveToDerive[1].getSourceVersion())
+    trvs = repos.getTroves(nvfs)
+    hasCapsule = [ x for x in trvs if x.troveInfo.capsule.type() ]
+    if hasCapsule:
+        derivedRecipeType = 'DerivedCapsuleRecipe'
+        removeText = ''
+    else:
+        derivedRecipeType = 'DerivedPackageRecipe'
+        removeText = \
+"""
+        # This appliance uses PHP as a command interpreter but does
+        # not include a web server, so remove the file that creates
+        # a dependency on the web server
+        r.Remove('/etc/httpd/conf.d/php.conf')
+"""
 
     log.info('Rewriting recipe file')
-    className = ''.join([ x.capitalize() for x in troveName.split('-') ])
+    recipeName = troveName + '.recipe'
+    className = util.convertPackageNameToClassName(troveName)
+
     derivedRecipe = """
-class %(className)sRecipe(DerivedPackageRecipe):
+class %(className)sRecipe(%(recipeBaseClass)s):
     name = '%(name)s'
     version = '%(version)s'
 
     def setup(r):
-        pass
+        '''
+        In this recipe, you can make modifications to the package.
 
+        Examples:
+
+        # This appliance has high-memory-use PHP scripts
+        r.Replace('memory_limit = 8M', 'memory_limit = 32M', '/etc/php.ini')
+%(removeText)s
+        # This appliance requires that a few binaries be replaced
+        # with binaries built from a custom archive that includes
+        # a Makefile that honors the DESTDIR variable for its
+        # install target.
+        r.addArchive('foo.tar.gz')
+        r.Make()
+        r.MakeInstall()
+
+        # This appliance requires an extra configuration file
+        r.Create('/etc/myconfigfile', contents='some data')
+        '''
 """ % dict(className=className,
            name=troveName,
-           version=shadowedVersion.trailingRevision().getVersion())
+           version=shadowedVersion.trailingRevision().getVersion(),
+           recipeBaseClass=derivedRecipeType,
+           removeText=removeText)
+
     open(recipeName, 'w').write(derivedRecipe)
 
     log.info('Removing extra files from checkout')
+
     conaryState = state.ConaryStateFromFile('CONARY', repos)
     sourceState = conaryState.getSourceState()
+    # clear the factory since we don't care about how the parent trove was
+    # created
+    sourceState.setFactory('')
 
+    addRecipe=True
     for (pathId, path, fileId, version) in list(sourceState.iterFileList()):
         if path == recipeName:
+            addRecipe = False
             continue
         sourceState.removeFile(pathId)
         if util.exists(path):
@@ -129,15 +182,22 @@ class %(className)sRecipe(DerivedPackageRecipe):
                     os.unlink(path)
             except OSError, e:
                 log.warning("cannot remove %s: %s" % (path, e.strerror))
+
     conaryState.write('CONARY')
 
+    if addRecipe:
+        checkin.addFiles([recipeName])
+
     if extract:
-        extractDir = os.path.join(os.getcwd(), '_ROOT_')
         log.info('extracting files from %s=%s[%s]' % (troveToDerive))
-        cfg.root = os.path.abspath(extractDir)
-        cfg.interactive = False
-        updatecmd.doUpdate(cfg, troveSpec,
-                           callback=callback, depCheck=False)
+        # extract to _ROOT_
+        extractDir = os.path.join(os.getcwd(), '_ROOT_')
+        ts = [ (troveToDerive[0], (None, None),
+                (troveToDerive[1], troveToDerive[2]), True) ]
+        cs = repos.createChangeSet(ts, recurse = True)
+        ChangesetExploder(cs, extractDir)
+        # extract to _OLD_ROOT_
         secondDir = os.path.join(os.getcwd(), '_OLD_ROOT_')
-        shutil.copytree(extractDir, secondDir)
+        cs = repos.createChangeSet(ts, recurse = True)
+        ChangesetExploder(cs, secondDir)
 

@@ -25,6 +25,7 @@ import time
 import traceback
 
 from conary import metadata
+from conary import trove
 from conary import versions
 from conary import conarycfg
 from conary.deps import deps
@@ -129,7 +130,7 @@ class HttpHandler(WebHandler):
         except:
             self.req.write(self._write("error", shortError = "Error", error = traceback.format_exc()))
             return apache.OK
-        
+
     def _methodHandler(self):
         """Handle either an HTTP POST or GET command."""
 
@@ -154,7 +155,7 @@ class HttpHandler(WebHandler):
 
         if self._poolmode:
             self.repServer.reopen()
-            
+
         if not self.cmd:
             self.cmd = "main"
 
@@ -183,7 +184,7 @@ class HttpHandler(WebHandler):
         finally:
             if self._poolmode:
                 self.repServer.db.close()
-                
+
     def _requestAuth(self):
         self.req.err_headers_out['WWW-Authenticate'] = \
             'Basic realm="Conary Repository"'
@@ -358,7 +359,7 @@ class HttpHandler(WebHandler):
         f = deps.ThawFlavor(f)
         parentTrove = self.repos.getTrove(t, v, f, withFiles = False)
         # non-source group troves only show contained troves
-        if t.startswith('group-') and not t.endswith(':source'):
+        if trove.troveIsGroup(t):
             troves = sorted(parentTrove.iterTroveList(strongRefs=True))
             return self._write("group_contents", troveName = t, troves = troves)
         fileIters = []

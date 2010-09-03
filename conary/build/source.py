@@ -18,7 +18,6 @@ public classes in this module is accessed from a recipe as addI{Name}.
 """
 
 import itertools
-import gzip
 import os
 import re
 import shutil, subprocess
@@ -27,8 +26,7 @@ import sys
 import tempfile
 import stat
 
-from conary.lib import debugger, digestlib, log, magic
-from conary.build import lookaside
+from conary.lib import debugger, digestlib, log, magic, sha1helper
 from conary import rpmhelper
 from conary.lib import openpgpfile, util
 from conary.build import action, errors, filter
@@ -57,8 +55,8 @@ class _Source(_AnySource):
 
     def __init__(self, recipe, *args, **keywords):
         self.archivePath = None
-	sourcename = args[0]
-	action.RecipeAction.__init__(self, recipe, *args, **keywords)
+        sourcename = args[0]
+        action.RecipeAction.__init__(self, recipe, *args, **keywords)
         if isinstance(sourcename, (list, tuple)):
             # This adds support for multiple URLs in a source.
             # We stash them in recipe.multiurlMap, keyed on a digest computed
@@ -99,7 +97,7 @@ class _Source(_AnySource):
             self.sourcename = sourcename % recipe.macros
         self._guessName()
         recipe.sourceMap(self.sourcename)
-	self.rpm = self.rpm % recipe.macros
+        self.rpm = self.rpm % recipe.macros
 
         self.manifest = None
 
@@ -140,14 +138,13 @@ class _Source(_AnySource):
 
         suffixes = ( 'sig', 'sign', 'asc' )
 
-        self.recipe.populateLcache()
         inRepos, f = self.recipe.fileFinder.fetch(sourcename + filename,
                                                    suffixes=suffixes,
                                                    allowNone=True)
         if f:
             self.localgpgfile = f
         else:
-	    log.warning('No GPG signature file found for %s', self.sourcename)
+            log.warning('No GPG signature file found for %s', self.sourcename)
 
     def _getPublicKey(self):
         keyringPath = os.path.join(self.recipe.cfg.buildPath, 'pubring.pgp')
@@ -205,8 +202,8 @@ class _Source(_AnySource):
         if self.keyid:
             filename = os.path.basename(filepath)
             self._addSignature(filename)
-	if 'localgpgfile' not in self.__dict__:
-	    return
+        if 'localgpgfile' not in self.__dict__:
+            return
 
         key = self._getPublicKey()
 
@@ -235,7 +232,6 @@ class _Source(_AnySource):
         source lookaside cache for the extracted file.
         """
         # Always pull from RPM
-        self.recipe.populateLcache()
         inRepos, r = self.recipe.fileFinder.fetch(self.rpm)
         self.archiveInRepos = inRepos
 
@@ -280,7 +276,6 @@ class _Source(_AnySource):
         searchMethod = searchMethodMap.get(self.recipe.cookType,
             self.recipe.fileFinder.SEARCH_ALL)
 
-        self.recipe.populateLcache()
         inRepos, source = self.recipe.fileFinder.fetch(sourcename,
                                             headers=httpHeaders,
                                            suffixes=self.suffixes,
@@ -293,14 +288,13 @@ class _Source(_AnySource):
         return source
 
     def fetch(self, refreshFilter=None):
-	if 'sourcename' not in self.__dict__:
-	    return None
+        if 'sourcename' not in self.__dict__:
+            return None
 
         toFetch, guessname, suffixes = self.getPathAndSuffix()
 
         if guessname:
             toFetch += guessname
-        self.recipe.populateLcache()
         inRepos, f = self.recipe.fileFinder.fetch(toFetch,
                                           suffixes=suffixes,
                                           refreshFilter=refreshFilter,
@@ -310,7 +304,7 @@ class _Source(_AnySource):
             inRepos = self.archiveInRepos
         if f and not inRepos:
             self.checkSignature(f)
-	return f
+        return f
 
     def fetchLocal(self):
         # Used by rMake to find files that are not autosourced.
@@ -330,7 +324,7 @@ class _Source(_AnySource):
             return self.sourcename, self.guessname, self.suffixes
 
     def do(self):
-	raise NotImplementedError
+        raise NotImplementedError
 
 
 
@@ -379,7 +373,7 @@ class addArchive(_Source):
 
     B{dir} : Instructs C{r.addArchive} to change to the directory
     specified by C{dir} prior to unpacking the source archive.
-    An absolute C{dir} value will be considered relative to 
+    An absolute C{dir} value will be considered relative to
     C{%(destdir)s}, whereas a relative C{dir} value will be
     considered relative to C{%(builddir)s}.
 
@@ -426,7 +420,7 @@ class addArchive(_Source):
     Conary to ignore the lookaside cache in favor of this directory.
 
     B{debArchive} : When unpacking a dpkg .deb archive, provides the
-    prefix used to select the internal archive to unpack.  Defaults to 
+    prefix used to select the internal archive to unpack.  Defaults to
     C{"data.tar"} (will choose C{"data.tar.gz"} or C{"data.tar.bz2"}
     but can reasonably be set to C{"control.tar"} to instead choose the
     archive containing the scripts.
@@ -476,8 +470,8 @@ class addArchive(_Source):
         automatically by the C{PackageRecipe} object. Passing in  C{recipe}
         from within a recipe is unnecessary.
         @keyword dir: Instructs C{r.addArchive} to change to the directory
-        specified by C{dir} prior to unpacking the source archive. 
-        An absolute C{dir} value will be considered relative to 
+        specified by C{dir} prior to unpacking the source archive.
+        An absolute C{dir} value will be considered relative to
         C{%(destdir)s}, whereas a relative C{dir} value will be
         considered relative to C{%(builddir)s}.
         @keyword keyid: Using the C{keyid} keyword indicates the eight-digit
@@ -497,7 +491,7 @@ class addArchive(_Source):
         @keyword package: A string that specifies the package, component, or package and
         component in which to place the files added while executing this command
         @keyword debArchive: When unpacking a dpkg .deb archive, provides the
-        prefix used to select the internal archive to unpack.  Defaults to 
+        prefix used to select the internal archive to unpack.  Defaults to
         C{"data.tar"} (will choose C{"data.tar.gz"} or C{"data.tar.bz2"}
         but can reasonably be set to C{"control.tar"} to instead choose the
         archive containing the scripts.
@@ -505,7 +499,7 @@ class addArchive(_Source):
         _Source.__init__(self, recipe, *args, **keywords)
 
     def doDownload(self):
-	return self._findSource(self.httpHeaders)
+        return self._findSource(self.httpHeaders)
 
     @staticmethod
     def _cpioOwners(fullOutput):
@@ -556,14 +550,14 @@ class addArchive(_Source):
         util.mkdirChain(destDir)
 
         log.info('unpacking archive %s' %os.path.basename(f))
-	if f.endswith(".zip") or f.endswith(".xpi") or f.endswith(".jar") or f.endswith(".war"):
+        if f.endswith(".zip") or f.endswith(".xpi") or f.endswith(".jar") or f.endswith(".war"):
             if self.preserveOwnership:
                 raise SourceError('cannot preserveOwnership for xpi or zip archives')
 
             util.execute("unzip -q -o -d '%s' '%s'" % (destDir, f))
             self._addActionPathBuildRequires(['unzip'])
 
-	elif f.endswith(".rpm"):
+        elif f.endswith(".rpm"):
             self._addActionPathBuildRequires(['/bin/cpio'])
             log.info("extracting %s into %s" % (f, destDir))
             ownerList = _extractFilesFromRPM(f, directory=destDir, action=self)
@@ -583,7 +577,7 @@ class addArchive(_Source):
             self._addActionPathBuildRequires(['isoinfo'])
             _extractFilesFromISO(f, directory=destDir)
 
-	else:
+        else:
             m = magic.magic(f)
             _uncompress = "cat"
             # command to run to get ownership info; if this isn't set, use
@@ -620,6 +614,9 @@ class addArchive(_Source):
                     _uncompress = "bzip2 -d -c"
                     actionPathBuildRequires.append('bzip2')
                 elif debData.endswith('.xz'):
+                    _uncompress = "xz -d -c"
+                    actionPathBuildRequires.append('xz')
+                elif debData.endswith('.lzma'):
                     _uncompress = "xz -d -c"
                     actionPathBuildRequires.append('xz')
                 else:
@@ -859,8 +856,8 @@ class addPatch(_Source):
     C{lib/Xaw3d} directory prior to applying the patch.
     """
     keywords = {'level': None,
-		'backup': '',
-		'macros': False,
+                'backup': '',
+                'macros': False,
                 'filter': None,
                 'extraArgs': '',
                 'patchName': 'patch'}
@@ -916,8 +913,8 @@ class addPatch(_Source):
         @keyword package: A string that specifies the package, component, or package
         and component in which to place the files added while executing this command
         """
-	_Source.__init__(self, recipe, *args, **keywords)
-	self.applymacros = self.macros
+        _Source.__init__(self, recipe, *args, **keywords)
+        self.applymacros = self.macros
 
     def _applyPatch(self, patchlevel, patch, destDir, dryRun=True):
         patchProgram = self.patchName %self.recipe.macros
@@ -960,7 +957,7 @@ class addPatch(_Source):
         logFiles = []
         log.info('attempting to apply %s to %s with patch level(s) %s'
                  %(patchPath, destDir, ', '.join(str(x) for x in patchlevels)))
-        partiallyApplied = []
+
         for patchlevel in patchlevels:
             failed, logFile = self._applyPatch(patchlevel, patch, destDir,
                                               dryRun=True)
@@ -1027,7 +1024,7 @@ class addPatch(_Source):
                 continue
             log.info('patch level %s FAILED' % patchlevel)
             log.info(s)
-        log.error('could not apply patch %s in directory %s', patchPath, 
+        log.error('could not apply patch %s in directory %s', patchPath,
                   destDir)
         raise SourceError, 'could not apply patch %s' % patchPath
 
@@ -1043,13 +1040,13 @@ class addPatch(_Source):
             self.doFile(patchPath)
 
     def doFile(self, patchPath):
-	provides = "cat"
-	if self.sourcename.endswith(".gz"):
-	    provides = "zcat"
-	elif self.sourcename.endswith(".bz2"):
-	    provides = "bzcat"
-	elif self.sourcename.endswith(".xz"):
-	    provides = "xzcat"
+        provides = "cat"
+        if self.sourcename.endswith(".gz"):
+            provides = "zcat"
+        elif self.sourcename.endswith(".bz2"):
+            provides = "bzcat"
+        elif self.sourcename.endswith(".xz"):
+            provides = "xzcat"
         self._addActionPathBuildRequires([provides])
         defaultDir = os.sep.join((self.builddir, self.recipe.theMainDir))
         destDir = action._expandOnePath(self.dir, self.recipe.macros,
@@ -1075,9 +1072,9 @@ class addPatch(_Source):
                         commandReported = True
 
         pin = util.popen("%s '%s' %s" %(provides, patchPath, filterString))
-	if self.applymacros:
+        if self.applymacros:
             patch = pin.read() % self.recipe.macros
-	else:
+        else:
             patch = pin.read()
         pin.close()
         self._patchAtLevels(patchPath, patch, destDir, leveltuple)
@@ -1113,12 +1110,12 @@ class addSource(_Source):
     specify directory information, but not both. Useful mainly  when fetching
     the file from an source outside your direct control, such as a URL to a
     third-party web site, or copying a file out of an RPM package.
-    An absolute C{dest} value will be considered relative to C{%(destdir)s}, 
+    An absolute C{dest} value will be considered relative to C{%(destdir)s},
     whereas a relative C{dest} value will be considered relative to
     C{%(builddir)s}.
-    
+
     B{dir} : The directory in which to store the file, relative to the build
-    directory. An absolute C{dir} value will be considered relative to 
+    directory. An absolute C{dir} value will be considered relative to
     C{%(destdir)s}, whereas a relative C{dir} value will be considered
     relative to C{%(builddir)s}. Defaults to storing file directly in the
     build directory.
@@ -1186,9 +1183,9 @@ class addSource(_Source):
     """
 
     keywords = {'apply': '',
-		'contents': None,
-		'macros': False,
-		'dest': None,
+                'contents': None,
+                'macros': False,
+                'dest': None,
                 'mode': None}
 
 
@@ -1198,7 +1195,7 @@ class addSource(_Source):
         automatically by the PackageRecipe object. Passing in C{recipe} from
         within a recipe is unnecessary.
         @keyword dest: If set, provides the target name of the file in the build
-        directory. A full pathname can be used. Use either B{dir}, or 
+        directory. A full pathname can be used. Use either B{dir}, or
         B{dest} to specify directory information, but not both. Useful mainly
         when fetching the file from an source outside your direct control, such
         as a URL to a third-party web site, or copying a file out of an
@@ -1236,16 +1233,16 @@ class addSource(_Source):
         @keyword package: A string that specifies the package, component, or package
         and component in which to place the files added while executing this command
         """
-	_Source.__init__(self, recipe, *args, **keywords)
-	if self.dest:
-	    # make sure that user did not pass subdirectory in
-	    fileName = os.path.basename(self.dest %recipe.macros)
-	    if fileName != self.dest:
-		if self.dir:
-		    self.init_error(RuntimeError,
-				    'do not specify a directory in both dir and'
-				    ' dest keywords')
-		elif (self.dest % recipe.macros)[-1] == '/':
+        _Source.__init__(self, recipe, *args, **keywords)
+        if self.dest:
+            # make sure that user did not pass subdirectory in
+            fileName = os.path.basename(self.dest %recipe.macros)
+            if fileName != self.dest:
+                if self.dir:
+                    self.init_error(RuntimeError,
+                                    'do not specify a directory in both dir and'
+                                    ' dest keywords')
+                elif (self.dest % recipe.macros)[-1] == '/':
                     self.dir = self.dest
                     self.dest = os.path.basename(self.sourcename)
                 else:
@@ -1254,16 +1251,16 @@ class addSource(_Source):
                     # unfortunately, dir is going to be macro expanded again
                     # later, make sure any %s in the path name survive
                     self.dir.replace('%', '%%')
-	else:
-	    self.dest = os.path.basename(self.sourcename)
+        else:
+            self.dest = os.path.basename(self.sourcename)
 
-	if self.contents is not None:
-	    # Do not look for a file that does not exist...
-	    self.sourcename = ''
-	if self.macros:
-	    self.applymacros = True
-	else:
-	    self.applymacros = False
+        if self.contents is not None:
+            # Do not look for a file that does not exist...
+            self.sourcename = ''
+        if self.macros:
+            self.applymacros = True
+        else:
+            self.applymacros = False
 
     def doDownload(self):
         if self.contents is not None:
@@ -1287,29 +1284,29 @@ class addSource(_Source):
         util.mkdirChain(destDir)
         destFile = os.sep.join((destDir, self.dest))
         util.removeIfExists(destFile)
-	if self.contents is not None:
-	    pout = file(destFile, "w")
-	    if self.applymacros:
-		pout.write(self.contents %self.recipe.macros)
-	    else:
-		pout.write(self.contents)
-	    pout.close()
-	else:
+        if self.contents is not None:
+            pout = file(destFile, "w")
+            if self.applymacros:
+                pout.write(self.contents %self.recipe.macros)
+            else:
+                pout.write(self.contents)
+            pout.close()
+        else:
             f = self.doDownload()
-	    if self.applymacros:
-		log.info('applying macros to source %s' %f)
-		pin = file(f)
-		pout = file(destFile, "w")
+            if self.applymacros:
+                log.info('applying macros to source %s' %f)
+                pin = file(f)
+                pout = file(destFile, "w")
                 log.info('copying %s to %s' %(f, destFile))
-		pout.write(pin.read()%self.recipe.macros)
-		pin.close()
-		pout.close()
-	    else:
-		util.copyfile(f, destFile)
+                pout.write(pin.read()%self.recipe.macros)
+                pin.close()
+                pout.close()
+            else:
+                util.copyfile(f, destFile)
         if self.mode:
             os.chmod(destFile, self.mode)
-	if self.apply:
-	    util.execute(self.apply %self.recipe.macros, destDir)
+        if self.apply:
+            util.execute(self.apply %self.recipe.macros, destDir)
         if self.package:
             self.manifest.create()
 
@@ -1328,7 +1325,7 @@ class addCapsule(_Source):
 
     SYNOPSIS
     ========
-    C{r.addCapsule(I{capsulename}, [I{dir}=,] [I{httpHeaders}=,] [I{keyid}=,] [I{mode}=,] [I{package}=,] [I{sourceDir}=,] I{ignoreConflictingPaths}=])}
+    C{r.addCapsule(I{capsulename}, [I{dir}=,] [I{httpHeaders}=,] [I{keyid}=,] [I{mode}=,] [I{package}=,] [I{sourceDir}=,] I{ignoreConflictingPaths}=,] I{ignoreAllConflictingTimes}=])}
 
     DESCRIPTION
     ===========
@@ -1381,6 +1378,9 @@ class addCapsule(_Source):
     B{ignoreConflictingPaths} : A list of paths in which C{r.addCapsule} will
     not check files for conflicting contents.
 
+    B{ignoreAllConflictingTimes} : When checking for conflicts between
+    files contained in multiple capsules, ignore the mtime on the files.
+
     EXAMPLES
     ========
 
@@ -1395,6 +1395,7 @@ class addCapsule(_Source):
     """
 
     keywords = {'ignoreConflictingPaths': set(),
+                'ignoreAllConflictingTimes': False,
                }
 
     def __init__(self, recipe, *args, **keywords):
@@ -1424,6 +1425,8 @@ class addCapsule(_Source):
         for files.
         @keyword ignoreConflictingPaths: A list of paths that will not be
         checked for conflicting file contents
+        @keyword ignoreAllConflictingTimes: When checking for conflicts between
+        files contained in multiple capsules, ignore the mtime on the files.
         """
         _Source.__init__(self, recipe, *args, **keywords)
         self.magicObj = None
@@ -1481,6 +1484,10 @@ class addCapsule(_Source):
         destDir = self.recipe.macros.destdir
 
         f = self.doDownload()
+        if f in self.recipe.capsuleFileSha1s:
+            raise SourceError('cannot add the same capsule multiple times: '
+                              '%s' % f)
+
         # If we just now figured out the package:component, we need to
         # initialize the manifest
         self._initManifest()
@@ -1494,6 +1501,7 @@ class addCapsule(_Source):
         # read ownership, permissions, file type, etc.
         ownerList = _extractFilesFromRPM(f, directory=destDir, action=self)
 
+        sha1Map = {}
         totalPathList=[]
         totalPathData=[]
         ExcludeDirectories = []
@@ -1504,11 +1512,17 @@ class addCapsule(_Source):
         for (path, user, group, mode, size,
              rdev, flags, vflags, digest, filelinktos, mtime) in ownerList:
 
+            fullpath = util.joinPaths(destDir,path)
+
             totalPathList.append(path)
             # CNY-3304: some RPM versions allow impossible modes on symlinks
             if stat.S_ISLNK(mode):
                 mode = stat.S_IFLNK | 0777
-            totalPathData.append((path, user, group, mode, digest, mtime))
+            if self.ignoreAllConflictingTimes:
+                checkTime = 0 # CNY-3415
+            else:
+                checkTime = mtime
+            totalPathData.append((path, user, group, mode, digest, checkTime))
 
             devtype = None
             if stat.S_ISBLK(mode):
@@ -1519,8 +1533,7 @@ class addCapsule(_Source):
                 minor = rdev & 0xff | (rdev >> 12) & 0xffffff00
                 major = (rdev >> 8) & 0xfff
                 self.recipe.MakeDevices(path, devtype, major, minor,
-                                        user, group,
-                                        mode=stat.S_IMODE(mode),
+                                        user, group, mode=stat.S_IMODE(mode),
                                         package=self.package)
 
             if stat.S_ISDIR(mode):
@@ -1573,9 +1586,13 @@ class addCapsule(_Source):
             if flags & rpmhelper.RPMFILE_MISSINGOK:
                 MissingOkay.append(path)
 
-            if len(ExcludeDirectories):
-                self.recipe.ExcludeDirectories(exceptions=filter.PathSet(
-                        ExcludeDirectories))
+            if stat.S_ISREG(mode) and util.exists(fullpath):
+                sha1Map[path] = sha1helper.sha1FileBin(fullpath)
+
+
+        if len(ExcludeDirectories):
+            self.recipe.ExcludeDirectories(exceptions=filter.PathSet(
+                ExcludeDirectories))
 
         if len(InitialContents):
             self.recipe.InitialContents(filter.PathSet(InitialContents))
@@ -1586,13 +1603,16 @@ class addCapsule(_Source):
         if len(MissingOkay):
             self.recipe.MissingOkay(filter.PathSet(MissingOkay))
 
+
+        assert f not in self.recipe.capsuleFileSha1s
+        self.recipe.capsuleFileSha1s[f] = sha1Map
         self.manifest.recordRelativePaths(totalPathList)
         self.manifest.create()
         self.recipe._validatePathInfoForCapsule(totalPathData,
             self.ignoreConflictingPaths)
-        self.recipe._setPathInfoForCapsule(f, totalPathData, self.package)
 
-        self.recipe._addCapsule(f, self.capsuleType, self.package)
+        self.recipe._setPathInfoForCapsule(f, totalPathData, self.package)
+        self.recipe._addCapsule(f, self.capsuleType, self.package, )
 
         # Now store script info:
         scriptDir = '/'.join((
@@ -1654,7 +1674,7 @@ class addAction(action.RecipeAction):
 
     B{dir} : Specify a directory to change into prior to executing the
     command. An absolute directory specified as the C{dir} value
-    is considered relative to C{%(destdir)s}. 
+    is considered relative to C{%(destdir)s}.
 
     B{use} : A Use flag, or boolean, or a tuple of Use flags, and/or
     boolean values which determine whether the source code archive is
@@ -1697,7 +1717,7 @@ class addAction(action.RecipeAction):
         automatically by the PackageRecipe object. Passing in  C{recipe} from
         within a recipe is unnecessary.
         @keyword dir: Specify a directory to change into prior to executing the
-        command. An absolute directory specified as the C{dir} value 
+        command. An absolute directory specified as the C{dir} value
         is considered relative to C{%(destdir)s}.
         @keyword use: A Use flag, or boolean, or a tuple of Use flags, and/or
         boolean values which determine whether the source code archive is
@@ -1712,7 +1732,7 @@ class addAction(action.RecipeAction):
         return None
 
     def do(self):
-	builddir = self.recipe.macros.builddir
+        builddir = self.recipe.macros.builddir
         defaultDir = os.sep.join((builddir, self.recipe.theMainDir))
         destDir = action._expandOnePath(self.dir, self.recipe.macros,
                                                   defaultDir)
@@ -1720,12 +1740,12 @@ class addAction(action.RecipeAction):
 
         if self.package:
             self._initManifest()
-	util.execute(self.action %self.recipe.macros, destDir)
+        util.execute(self.action %self.recipe.macros, destDir)
         if self.package:
             self.manifest.create()
 
     def fetch(self, refreshFilter=None):
-	return None
+        return None
 Action = addAction
 
 class _RevisionControl(addArchive):
@@ -1843,7 +1863,7 @@ class addGitSnapshot(_RevisionControl):
 
     def showInfo(self, lookasideDir):
         log.info('Most recent repository commit message:')
-        util.execute("cd '%s' && git --no-pager log -1 '%s'" % (lookasideDir, 
+        util.execute("cd '%s' && git --no-pager log -1 '%s'" % (lookasideDir,
             self.branch))
 
     def createSnapshot(self, lookasideDir, target):
@@ -1893,7 +1913,7 @@ class addMercurialSnapshot(_RevisionControl):
 
     B{dir} : Specify a directory to change into prior to executing the
     command. An absolute directory specified as the C{dir} value
-    is considered relative to C{%(destdir)s}. 
+    is considered relative to C{%(destdir)s}.
 
     B{package} : (None) If set, must be a string that specifies the package
     (C{package='packagename'}), component (C{package=':componentname'}), or
@@ -2052,7 +2072,7 @@ class addSvnSnapshot(_RevisionControl):
 
     B{dir} : Specify a directory to change into prior to executing the
     command. An absolute directory specified as the C{dir} value
-    is considered relative to C{%(destdir)s}. 
+    is considered relative to C{%(destdir)s}.
 
     B{package} : (None) If set, must be a string that specifies the package
     (C{package='packagename'}), component (C{package=':componentname'}), or
@@ -2084,13 +2104,13 @@ class addSvnSnapshot(_RevisionControl):
     def createArchive(self, lookasideDir):
         os.mkdir(lookasideDir)
         log.info('Checking out %s, revision %s' % (self.url, self.revision))
-        util.execute('svn --quiet checkout --revision \'%s\' \'%s\' \'%s\'' 
+        util.execute('svn --quiet checkout --revision \'%s\' \'%s\' \'%s\''
                      % (self.revision, self.url, lookasideDir))
 
     def updateArchive(self, lookasideDir):
         log.info('Updating repository %s to revision %s'
                   % (self.project,self.revision))
-        util.execute('cd \'%s\' && svn --quiet update --revision \'%s\'' 
+        util.execute('cd \'%s\' && svn --quiet update --revision \'%s\''
                       % ( lookasideDir, self.revision ))
 
     def showInfo(self, lookasideDir):
@@ -2098,7 +2118,7 @@ class addSvnSnapshot(_RevisionControl):
         util.execute("svn log --limit 1 '%s'" % lookasideDir)
 
     def createSnapshot(self, lookasideDir, target):
-        log.info('Creating repository snapshot for %s, revision %s' 
+        log.info('Creating repository snapshot for %s, revision %s'
                   % (self.url, self.revision))
         tmpPath = tempfile.mkdtemp()
         stagePath = tmpPath + '/' + self.project + '--' + \
@@ -2487,12 +2507,30 @@ def _extractScriptsFromRPM(rpm, directory):
         scriptFile.close()
 
 
+_forbiddenRPMTags = (
+    # RPM tags that we do not currently handle and want to raise an
+    # error rather than packaging (possibly incorrectly)
+    ('BLINKPKGID', rpmhelper.BLINKPKGID),
+    ('BLINKHDRID', rpmhelper.BLINKHDRID),
+    ('BLINKNEVRA', rpmhelper.BLINKNEVRA),
+    ('FLINKPKGID', rpmhelper.BLINKPKGID),
+    ('FLINKHDRID', rpmhelper.BLINKHDRID),
+    ('FLINKNEVRA', rpmhelper.BLINKNEVRA),
+)
+
 def _extractFilesFromRPM(rpm, targetfile=None, directory=None, action=None):
     assert targetfile or directory
     if not directory:
-	directory = os.path.dirname(targetfile)
+        directory = os.path.dirname(targetfile)
     r = file(rpm, 'r')
     h = rpmhelper.readHeader(r)
+
+    # CNY-3404
+    forbiddenTags = [(tagName, tag) for (tagName, tag) in _forbiddenRPMTags
+                     if tag in h]
+    if forbiddenTags:
+        raise SourceError('Unhandled RPM tags: %s ' %
+            ', '.join(('%s(%d)'%x for x in forbiddenTags)))
 
     # The rest of this function gets information on the files stored
     # in an RPM.  Some RPMs intentionally contain no files, and
@@ -2567,23 +2605,23 @@ def _extractFilesFromRPM(rpm, targetfile=None, directory=None, action=None):
     os.close(rpipe)
     while 1:
         buf = uncompressed.read(16384)
-	if not buf:
-	    break
+        if not buf:
+            break
         try:
             os.write(wpipe, buf)
-        except OSError, msg:
+        except OSError:
             break
     os.close(wpipe)
     (pid, status) = os.waitpid(pid, 0)
     if not os.WIFEXITED(status):
-	raise IOError, 'cpio died %s' %errorMessage
+        raise IOError, 'cpio died %s' %errorMessage
     if os.WEXITSTATUS(status):
-	raise IOError, \
-	    'cpio returned failure %d %s' %(
-		os.WEXITSTATUS(status), errorMessage)
+        raise IOError, \
+            'cpio returned failure %d %s' %(
+                os.WEXITSTATUS(status), errorMessage)
     if targetfile and not os.path.exists(targetfile):
-	raise IOError, 'failed to extract source %s from RPM %s' \
-		       %(filename, os.path.basename(rpm))
+        raise IOError, 'failed to extract source %s from RPM %s' \
+                       %(filename, os.path.basename(rpm))
 
     return ownerList
 
@@ -2599,7 +2637,6 @@ def _extractFilesFromISO(iso, directory):
         raise IOError('ISO %s contains neither Joliet nor Rock Ridge info'
                       %iso)
 
-    errorMessage = 'extracting ISO %s' %os.path.basename(iso)
     filenames = util.popen("isoinfo -i '%s' '%s' -f" %(iso, isoType)).readlines()
     filenames = [ x.strip() for x in filenames ]
 
@@ -2631,7 +2668,7 @@ class SourceError(errors.CookError):
         self.msg = msg %args
 
     def __repr__(self):
-	return self.msg
+        return self.msg
 
     def __str__(self):
-	return repr(self)
+        return repr(self)

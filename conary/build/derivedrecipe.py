@@ -45,16 +45,6 @@ class DerivedChangesetExploder(changeset.ChangesetExploder):
 
     def handleFileAttributes(self, trv, fileObj, path):
         self.troveFlavor -= fileObj.flavor()
-
-        # A payload file means that we are dealing with a Capsule.  This
-        # is verboten in derived recipes because it is meaningless.
-        if fileObj.flags.isEncapsulatedContent():
-            raise builderrors.RecipeFileError(
-                'Derived recipes cannot be used with %s, '
-                'it was created with a CapsuleRecipe.' % self.trv.name()
-                )
-
-
         # Config vs. InitialContents etc. might be change in derived pkg
         # Set defaults here, and they can be overridden with
         # "exceptions = " later
@@ -216,7 +206,7 @@ class AbstractDerivedPackageRecipe(AbstractPackageRecipe):
         else:
             parentVersion = parentBranch
         try:
-            troveList = repos.findTrove(None, 
+            troveList = repos.findTrove(None,
                                    (self.name, parentVersion, self._buildFlavor))
         except conaryerrors.TroveNotFound, err:
             raise builderrors.RecipeFileError('Could not find package to derive from for this flavor: ' + str(err))
@@ -244,6 +234,16 @@ class AbstractDerivedPackageRecipe(AbstractPackageRecipe):
                         for x in binaries ]
 
         cs = repos.createChangeSet(troveSpec, recurse = False)
+
+        # Capsules are not supported in derrived packages
+        for trv in cs.iterNewTroveList():
+            if trv.hasCapsule():
+                raise builderrors.RecipeFileError(
+                    'DerivedRecipe cannot be used with %s, '
+                    'it was created with a CapsuleRecipe.  Please use'
+                    'a DerivedCapsuleRecipe instead.'
+                    % trv.name())
+
         self.setDerivedFrom([
             (x.getName(), x.getNewVersion(), x.getNewFlavor()) for x
             in cs.iterNewTroveList() ])
@@ -258,7 +258,7 @@ class AbstractDerivedPackageRecipe(AbstractPackageRecipe):
     def loadPolicy(self):
         klass = self._getParentClass('AbstractPackageRecipe')
         return klass.loadPolicy(self,
-                                internalPolicyModules = ( 'derivedpolicy', ) )
+                                internalPolicyModules = ( 'destdirpolicy', 'packagepolicy', 'derivedpolicy', ) )
 
     def __init__(self, cfg, laReposCache, srcDirs, extraMacros={},
                  crossCompile=None, lightInstance=False):

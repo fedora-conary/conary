@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2004-2009 rPath, Inc.
+# Copyright (c) 2004-2010 rPath, Inc.
 #
 # This program is distributed under the terms of the Common Public License,
 # version 1.0. A copy of this license should have been distributed with this
@@ -13,7 +13,7 @@
 #
 
 """ XMLRPC transport class that uses urllib to allow for proxies
-    Unfortunately, urllib needs some touching up to allow 
+    Unfortunately, urllib needs some touching up to allow
     XMLRPC commands to be sent, hence the XMLOpener class """
 
 import base64
@@ -21,7 +21,9 @@ import errno
 import glob
 import httplib
 import itertools
+import logging
 import os
+import random
 import select
 import socket
 import sys
@@ -30,6 +32,8 @@ import xmlrpclib
 import urllib
 import warnings
 import zlib
+import errors
+
 try:
     from cStringIO import StringIO
 except ImportError:
@@ -41,15 +45,21 @@ except ImportError:
     SSL = None
 
 
+log = logging.getLogger(__name__)
+
+
 LocalHosts = set(['localhost', 'localhost.localdomain', '127.0.0.1',
                   socket.gethostname()])
 
 from conary.lib import util
+from conary.lib import log as clog
+
 
 class InfoURL(urllib.addinfourl):
     def __init__(self, fp, headers, url, protocolVersion):
         urllib.addinfourl.__init__(self, fp, headers, url)
         self.protocolVersion = protocolVersion
+
 
 class DecompressFileObj:
     "implements a wrapper file object that decompress()s data on the fly"
@@ -190,6 +200,8 @@ class HTTPSConnection(httplib.HTTPConnection):
 
 
 _ipCache = {}
+
+
 def getIPAddress(hostAndPort):
     host, port = urllib.splitport(hostAndPort)
     if host in LocalHosts:
@@ -197,7 +209,7 @@ def getIPAddress(hostAndPort):
         return hostAndPort
     try:
         ret = socket.gethostbyname(host)
-    except (IOError, socket.error), err:
+    except (IOError, socket.error):
         util.res_init()
         # error looking up the host.  If this fails,
         # the we fall back to the cache
@@ -211,8 +223,10 @@ def getIPAddress(hostAndPort):
         ret = "%s:%s" % (ret, port)
     return ret
 
+
 def clearIPCache():
     _ipCache.clear()
+
 
 class URLOpener(urllib.FancyURLopener):
     '''Replacement class for urllib.FancyURLopener'''
@@ -230,6 +244,8 @@ class URLOpener(urllib.FancyURLopener):
         self.usedProxy = False
         self.proxyHost = None
         self.proxyProtocol = None
+        self.retries = kw.pop('retries', 3)
+        self.proxyRetries = max(kw.pop('proxyRetries', 7), self.retries)
         # FIXME: this should go away in a future release.
         # forceProxy is used to ensure that if the proxy returns some
         # bogus address like "localhost" from a URL fetch, we can
@@ -264,7 +280,6 @@ class URLOpener(urllib.FancyURLopener):
         try:
             sock.connect((host, port))
         except socket.error, e:
-            self._processSocketError(e)
             raise
 
         sock.sendall("CONNECT %s:%s HTTP/1.0\r\n" %
@@ -331,34 +346,35 @@ class URLOpener(urllib.FancyURLopener):
         if useConaryProxy:
             return False
 
-        # From python 2.6's urllib (lynx also seems to obey NO_PROXY)
-        no_proxy = os.environ.get('no_proxy', '') or os.environ.get('NO_PROXY', '')
-        # '*' is special case for always bypass
-        if no_proxy == '*':
-            return True
-        # check if the host ends with any of the DNS suffixes
-        for name in no_proxy.split(','):
-            # urllib does not handle the case where the separator is ", ", the
-            # way the example in the following URL shows no_proxy to be set
-            # http://lynx.isc.org/lynx2.8.5/lynx2-8-5/lynx_help/keystrokes/environments.html
-            name = name.strip()
-            if name and destHost.endswith(name):
-                return True
-        return False
+        # filter based on the no_proxy env var
+        npFilt = util.noproxyFilter()
+        return npFilt.bypassProxy(destHost)
 
     def createConnection(self, url, ssl=False, withProxy=False):
+        """Return a HTTP/S connection suitable for use by open_http().
+
+        @param url: A string containing a URL, or a tuple (proxyhost, url)
+        @type  url: C{str} or C{tuple}
+        @return: C{tuple} (HTTPConnection, url, selector, headers)
+        """
         # Return an HTTP or HTTPS class suitable for use by open_http
         self.usedProxy = False
         if ssl:
-            protocol='https'
+            protocol = 'https'
         else:
-            protocol='http'
+            protocol = 'http'
 
         if withProxy:
-            # XXX this is duplicating work done in urllib.URLoperner.open
+            # DEPRECATED: Check self.proxies again to see if a proxy should be
+            # used. The only apparent consumer is netclient.httpPutFile, which
+            # should be using the same interface as everyone else.  This
+            # duplicates code from URLOpener.open().
+            assert isinstance(url, str)
             proxy = self.proxies.get(protocol, None)
             if proxy:
+                proxy = util.ProtectedString(proxy)
                 urltype, proxyhost = urllib.splittype(proxy)
+                proxyhost = util.ProtectedString(proxyhost)
                 host, selector = urllib.splithost(proxyhost)
                 url = (host, protocol + ':' + url)
 
@@ -366,9 +382,12 @@ class URLOpener(urllib.FancyURLopener):
         user_passwd = None
         proxyUserPasswd = None
         if isinstance(url, str):
+            # Target is NOT a proxy.
             host, selector = urllib.splithost(url)
             if host:
                 user_passwd, host = urllib.splituser(host)
+                if user_passwd:
+                    user_passwd = util.ProtectedString(user_passwd)
                 host = urllib.unquote(host)
             realhost = host
             urlstr = "%s://%s%s" % (protocol, host, selector)
@@ -384,8 +403,9 @@ class URLOpener(urllib.FancyURLopener):
             # into the mix, for which we have no control over what the
             # selector is (and for the proxies we tested it's a relative URI)
         else:
-            # Request should go through a proxy
-            # Check to see if it's a conary proxy
+            # Target IS a proxy.
+            # Check to see if it's a conary proxy, in which case the behavior
+            # is slightly different (no tunneling of SSL).
             proxy = self.proxies[protocol]
             proxyUrlType, proxyhost = urllib.splittype(proxy)
             useConaryProxy = proxyUrlType in ('conary', 'conarys')
@@ -394,6 +414,8 @@ class URLOpener(urllib.FancyURLopener):
 
             host, selector = url
             proxyUserPasswd, host = urllib.splituser(host)
+            if proxyUserPasswd:
+                proxyUserPasswd = util.ProtectedString(proxyUserPasswd)
             urltype, rest = urllib.splittype(selector)
             url = rest
             user_passwd = None
@@ -404,37 +426,39 @@ class URLOpener(urllib.FancyURLopener):
                 if realhost:
                     user_passwd, realhost = urllib.splituser(realhost)
                 if user_passwd:
+                    user_passwd = util.ProtectedString(user_passwd)
                     selector = "%s://%s%s" % (urltype, realhost, rest)
                 if self.proxyBypass(host, realhost, useConaryProxy):
                     host = realhost
                     selector = rest
                 else:
                     self.usedProxy = True
-                    # To make it visible for users of this object 
+                    # To make it visible for users of this object
                     # that we're going through a proxy
                     self.proxyHost = host
                     if useConaryProxy:
-                        # override ssl setting to talk the right protocol to the
-                        # proxy - the proxy will take the real url and communicate
-                        # either ssl or not as appropriate
+                        # override ssl setting to talk the right protocol to
+                        # the proxy - the proxy will take the real url and
+                        # communicate either ssl or not as appropriate
 
                         # Other proxies will not support proxying ssl over !ssl
                         # or vice versa.
                         ssl = (proxyUrlType == 'conarys')
             urlstr = selector
 
-        if not host: raise IOError, ('http error', 'no host given')
+        if not host:
+            raise IOError(('http error', 'no host given'))
         if not self.usedProxy:
             ipOrHost = getIPAddress(host)
         else:
             ipOrHost = host
 
         if user_passwd:
-            auth = base64.b64encode(user_passwd)
+            auth = util.ProtectedString(base64.b64encode(user_passwd))
         else:
             auth = None
         if proxyUserPasswd:
-            proxyAuth = base64.b64encode(proxyUserPasswd)
+            proxyAuth = util.ProtectedString(base64.b64encode(proxyUserPasswd))
         else:
             proxyAuth = None
 
@@ -448,19 +472,27 @@ class URLOpener(urllib.FancyURLopener):
                         'will not be validated')
 
             if host != realhost and not useConaryProxy:
+                # Target: HTTPS proxy, origin server may or may not be SSL
                 h = self.proxy_ssl(host, realhost, proxyAuth)
+
             elif self.caCerts and SSL:
+                # Target: HTTPS origin server or conary proxy
+
                 # If cert checking is requested use our HTTPSConnection (which
                 # uses m2crypto)
                 commonName = urllib.splitport(host)[0]
                 h = HTTPSConnection(ipOrHost, caCerts=self.caCerts,
-                        commonName=commonName)
+                                    commonName=commonName)
             else:
+                # Target: HTTPS origin server or conary proxy
+
                 # Either no cert checking was requested, or we don't have the
                 # module to support it, so use vanilla httpslib.
                 h = httplib.HTTPSConnection(ipOrHost)
         else:
+            # Target: HTTP proxy or conary proxy or origin server
             h = httplib.HTTPConnection(ipOrHost)
+
             if host != realhost and not useConaryProxy and proxyAuth:
                 headers.append(("Proxy-Authorization",
                                 "Basic " + proxyAuth))
@@ -483,37 +515,90 @@ class URLOpener(urllib.FancyURLopener):
 
     def open_http(self, url, data=None, ssl=False):
         """override this WHOLE FUNCTION to change
-	   one magic string -- the content type --
-	   which is hardcoded in (this version also supports https)"""
+           one magic string -- the content type --
+           which is hardcoded in (this version also supports https)"""
         # Splitting some of the functionality so we can reuse this code with
         # PUT requests too
-        h, urlstr, selector, headers = self.createConnection(url, ssl=ssl)
-        if data is not None:
-            h.putrequest('POST', selector)
-            if self.compress:
-                h.putheader('Content-encoding', 'deflate')
-                data = zlib.compress(data, 9)
-            h.putheader('Content-type', self.contentType)
-            h.putheader('Content-length', '%d' % len(data))
-            h.putheader('Accept-encoding', 'deflate')
-        else:
-            h.putrequest('GET', selector)
-        for args in itertools.chain(headers, self.addheaders):
-            h.putheader(*args)
-        try:
-            h.endheaders()
-        except socket.error, e:
-            self._processSocketError(e)
-            raise
 
-        if data is not None:
-            h.send(data)
-        # wait for a response
-        self._wait(h)
-        response = h.getresponse()
-        errcode, errmsg = response.status, response.reason
-        headers = response.msg
-        fp = response.fp
+        # Retry the connection if the remote end closes the connection
+        # without sending a response. This may happen after shutting
+        # down the SSL stream (BadStatusLine), or without doing so
+        # (socket.sslerror)
+        resetResolv = False
+        if isinstance(url, tuple):
+            retryCount = self.proxyRetries
+            connection = url[1] + ' using ' + url[0] + ' as a proxy'
+        else:
+            retryCount = self.retries
+            connection = url
+        timer = BackoffTimer()
+        connectFailed = False
+        for i in range(retryCount):
+            try:
+                h, urlstr, selector, headers = self.createConnection(
+                    url, ssl=ssl)
+                if data is not None:
+                    h.putrequest('POST', selector)
+                    if self.compress:
+                        h.putheader('Content-encoding', 'deflate')
+                        data = zlib.compress(data, 9)
+                    h.putheader('Content-type', self.contentType)
+                    h.putheader('Content-length', '%d' % len(data))
+                    h.putheader('Accept-encoding', 'deflate')
+                else:
+                    h.putrequest('GET', selector)
+                for args in itertools.chain(headers, self.addheaders):
+                    h.putheader(*args)
+                h.endheaders()
+                if data is not None:
+                    h.send(data)
+                # wait for a response
+                self._wait(h)
+                response = h.getresponse()
+                errcode, errmsg = response.status, response.reason
+                headers = response.msg
+                fp = response.fp
+                break
+            except (socket.sslerror, socket.gaierror), e:
+                if e.args[0] == 'socket error':
+                    e = e.args[1]
+                self._processSocketError(e)
+                if isinstance(e, socket.gaierror):
+                    if e.args[0] == socket.EAI_AGAIN:
+                        pass
+                    else:
+                        connectFailed = True
+                        break
+                elif isinstance(e, socket.sslerror):
+                    pass
+                else:
+                    connectFailed = True
+                    break
+            except httplib.BadStatusLine:
+                # closed connection without sending a response.
+                pass
+            except socket.error, e:
+                self._processSocketError(e)
+                raise e
+            # try resetting the resolver - /etc/resolv.conf
+            # might have changed since this process started.
+            if not resetResolv:
+                util.res_init()
+                resetResolv = True
+
+            # Sleep and try again, per RFC 2616 s. 8.2.4
+            timer.sleep()
+        else:
+            # we've run out of tries and so we've failed
+            connectFailed = True
+        if connectFailed:
+            log.info("Failed to connect to %s. Aborting after "
+                      "%i of %i tries." % (connection, i + 1, retryCount))
+            raise
+        elif i:
+            log.info("Suceeded to connect to %s after "
+                      "%i of %i tries." % (connection, i + 1, retryCount))
+
         if errcode == 200:
             encoding = headers.get('Content-encoding', None)
             if encoding == 'deflate':
@@ -548,7 +633,7 @@ class URLOpener(urllib.FancyURLopener):
             pt = 'HTTP'
         else:
             pt = 'Conary'
-        error.args = (error[0], "%s (via %s proxy %s)" % 
+        error.args = (error[0], "%s (via %s proxy %s)" %
             (error[1], pt, self.proxyHost))
 
     def _wait(self, h):
@@ -591,10 +676,12 @@ class URLOpener(urllib.FancyURLopener):
     def http_error_default(self, url, fp, errcode, errmsg, headers, data=None):
         raise TransportError("Unable to open %s: %s" % (url, errmsg))
 
+
 class ConaryURLOpener(URLOpener):
     """An opener aware of the conary:// protocol"""
     open_conary = URLOpener.open_http
     open_conarys = URLOpener.open_https
+
 
 class XMLOpener(URLOpener):
     contentType = 'text/xml'
@@ -611,27 +698,44 @@ class XMLOpener(URLOpener):
     open_conarys = URLOpener.open_https
 
 
+class BackoffTimer(object):
+    """Helper for functions that need an exponential backoff."""
+
+    factor = 2.7182818284590451
+    jitter = 0.11962656472
+
+    def __init__(self, delay=0.1):
+        self.delay = delay
+
+    def sleep(self):
+        time.sleep(self.delay)
+        self.delay *= self.factor
+        self.delay = random.normalvariate(self.delay, self.delay * self.jitter)
+
+
 def getrealhost(host):
     """ Slice off username/passwd and portnum """
     atpoint = host.find('@') + 1
     colpoint = host.rfind(':')
     if colpoint == -1 or colpoint < atpoint:
-	return host[atpoint:]
+        return host[atpoint:]
     else:
-	return host[atpoint:colpoint]
+        return host[atpoint:colpoint]
 
 
 class Transport(xmlrpclib.Transport):
 
     # override?
-    user_agent =  "xmlrpclib.py/%s (www.pythonware.com modified by rPath, Inc.)" % xmlrpclib.__version__
-    # make this a class variable so that across all attempts to transport we'll only
+    user_agent = "xmlrpclib.py/%s (www.pythonware.com modified by " \
+        "rPath, Inc.)" % xmlrpclib.__version__
+    # make this a class variable so that across all attempts to transport
+    # we'll only
     # spew messages once per host.
     failedHosts = set()
     UrlOpenerFactory = XMLOpener
 
-    def __init__(self, https = False, proxies = None, serverName = None,
-                 extraHeaders = None, caCerts=None):
+    def __init__(self, https=False, proxies=None, serverName=None,
+                 extraHeaders=None, caCerts=None):
         self.https = https
         self.compress = False
         self.abortCheck = None
@@ -681,7 +785,7 @@ class Transport(xmlrpclib.Transport):
         return 'http'
 
     def request(self, host, handler, body, verbose=0):
-	self.verbose = verbose
+        self.verbose = verbose
 
         protocol = self._protocol()
 
@@ -689,13 +793,13 @@ class Transport(xmlrpclib.Transport):
         opener.setCompress(self.compress)
         opener.setAbortCheck(self.abortCheck)
 
-	opener.addheaders = []
-	host, extra_headers, x509 = self.get_host_info(host)
-	if extra_headers:
-	    if isinstance(extra_headers, dict):
-		extra_headers = extra_headers.items()
-	    for key, value in extra_headers:
-		opener.addheader(key,value)
+        opener.addheaders = []
+        host, extra_headers, x509 = self.get_host_info(host)
+        if extra_headers:
+            if isinstance(extra_headers, dict):
+                extra_headers = extra_headers.items()
+            for key, value in extra_headers:
+                opener.addheader(key, value)
 
         if self.entitlement:
             opener.addheader('X-Conary-Entitlement', self.entitlement)
@@ -707,61 +811,29 @@ class Transport(xmlrpclib.Transport):
         for k, v in self.extraHeaders.items():
             opener.addheader(k, v)
 
-        tries = 0
-        resetResolv = False
         url = ''.join([protocol, '://', host, handler])
-        while tries < 5:
-            try:
-                # Make sure we capture some useful information from the
-                # opener, even if we failed
-                try:
-                    usedAnonymous, response = opener.open(url, body)
-                finally:
-                    self.usedProxy = getattr(opener, 'usedProxy', False)
-                    self.proxyHost = getattr(opener, 'proxyHost', None)
-                    self.proxyProtocol = getattr(opener, 'proxyProtocol', None)
-                break
-            except (IOError, socket.sslerror), e:
-                from conary.lib import log
-                # try resetting the resolver - /etc/resolv.conf
-                # might have changed since this process started.
-                util.res_init()
-                if not resetResolv:
-                    # first time through this loop, don't sleep or
-                    # print a warning - just try again immediately
-                    resetResolv = True
-                    continue
-                tries += 1
-                if tries >= 5 or host in self.failedHosts:
-                    self.failedHosts.add(host)
-                    raise
-                if e.args[0] == 'socket error':
-                    e = e.args[1]
-                if isinstance(e, socket.gaierror):
-                    if e.args[0] == socket.EAI_AGAIN:
-                        log.warning('got "%s" when trying to '
-                                    'resolve %s.  Retrying in '
-                                    '500 ms.' %(e.args[1], host))
-                        time.sleep(.5)
-                    else:
-                        raise
-                elif isinstance(e, socket.sslerror):
-                    log.warning('got "%s" when trying to '
-                                'make an SSL connection to %s.'
-                                'Retrying in 500 ms.' %(e.args[1], host))
-                    time.sleep(.5)
-                else:
-                    raise
+        # Make sure we capture some useful information from the
+        # opener, even if we failed
+        try:
+            usedAnonymous, response = opener.open(url, body)
+        finally:
+            self.usedProxy = getattr(opener, 'usedProxy', False)
+            self.proxyHost = getattr(opener, 'proxyHost', None)
+            self.proxyProtocol = getattr(opener, 'proxyProtocol', None)
         if hasattr(response, 'headers'):
             self.responseHeaders = response.headers
             self.responseProtocol = response.protocolVersion
         resp = self.parse_response(response)
-        rc = ( [ usedAnonymous ] + resp[0], )
-	return rc
+        rc = ([usedAnonymous] + resp[0], )
+        return rc
 
     def getparser(self):
         return util.xmlrpcGetParser()
 
-class AbortError(Exception): pass
 
-class TransportError(Exception): pass
+class AbortError(Exception):
+    pass
+
+
+class TransportError(Exception):
+    pass

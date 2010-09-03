@@ -22,9 +22,11 @@ import sys
 import time
 
 from conary.conaryclient import callbacks as clientCallbacks
+from conary.conaryclient import cmdline
 from conary import conarycfg, callbacks, trove
 from conary.lib import cfg, util, log
 from conary.repository import errors, changeset, netclient
+from conary.deps.deps import parseFlavor
 
 class OptionError(Exception):
     def __init__(self, errcode, errmsg, *args):
@@ -89,22 +91,27 @@ class MirrorConfigurationSection(cfg.ConfigSection):
     user                  =  conarycfg.CfgUserInfo
     entitlement           =  conarycfg.CfgEntitlement
 
+
 class MirrorFileConfiguration(cfg.SectionedConfigFile):
-    host                  =  cfg.CfgString
-    entitlementDirectory  =  cfg.CfgPath
-    labels                =  conarycfg.CfgInstallLabelPath
-    matchTroves           =  cfg.CfgSignedRegExpList
-    recurseGroups         =  (cfg.CfgBool, False)
-    uploadRateLimit       =  (conarycfg.CfgInt, 0,
+    host = cfg.CfgString
+    entitlementDirectory = cfg.CfgPath
+    labels = conarycfg.CfgInstallLabelPath
+    matchTroves = cfg.CfgSignedRegExpList
+    matchTroveSpecs = cfg.CfgSignedRegExpList
+
+    recurseGroups = (cfg.CfgBool, False)
+    uploadRateLimit = (conarycfg.CfgInt, 0,
             "Upload rate limit, in bytes per second")
-    downloadRateLimit     =  (conarycfg.CfgInt, 0,
+    downloadRateLimit = (conarycfg.CfgInt, 0,
             "Download rate limit, in bytes per second")
-    lockFile              =  cfg.CfgString
-    useHiddenCommits      =  (cfg.CfgBool, True)
-    absoluteChangesets    =  (cfg.CfgBool, False)
-    
-    _allowNewSections   = True
+    lockFile = cfg.CfgString
+    useHiddenCommits = (cfg.CfgBool, True)
+    absoluteChangesets = (cfg.CfgBool, False)
+    includeSources = (cfg.CfgBool, False)
+
+    _allowNewSections = True
     _defaultSectionType = MirrorConfigurationSection
+
 
 # for compatibility with older code base that requires a source and a
 # target to de defined
@@ -163,7 +170,7 @@ def mainWorkflow(cfg = None, callback=ChangesetCallback(),
         targets.append(target)
     # checkSync is a special operation...
     if checkSync:
-        return checkSyncRepos(cfg, sourceRepos, targets)        
+        return checkSyncRepos(cfg, sourceRepos, targets)
     # we pass in the sync flag only the first time around, because after
     # that we need the targetRepos mark to advance accordingly after being
     # reset to -1
@@ -218,8 +225,8 @@ def groupTroves(troveList):
         if ret:
             return ret
         # if they have the same mark, sort the groups at the end
-        ahasgrp = [x[1][1] for x in a if x[1][0].startswith("group-")]
-        bhasgrp = [x[1][1] for x in b if x[1][0].startswith("group-")]
+        ahasgrp = [x[1][1] for x in a if trove.troveIsGroup(x[1][0])]
+        bhasgrp = [x[1][1] for x in b if trove.troveIsGroup(x[1][0])]
         if len(ahasgrp) > len(bhasgrp):
             return 1
         if len(bhasgrp) > len(ahasgrp):
@@ -237,7 +244,7 @@ def buildJobList(src, target, groupList, absolute = False):
     for group in groupList:
         for mark, (name, version, flavor) in group:
             # force groups to always be transferred using absolute changesets
-            if name.startswith("group-"):
+            if trove.troveIsGroup(name):
                 continue
             srcAvailable[(name,version,flavor)] = True
             d = q.setdefault(name, {})
@@ -302,12 +309,12 @@ def buildJobList(src, target, groupList, absolute = False):
                               (version, flavor), currentMatch[0] is None)
 
             groupJobList.append((mark, job))
-        
+
         # now iterate through groupJobList and update latestAvailable to
         # reflect the state of the mirror after this job completes
         for mark, job in groupJobList:
             name = job[0]
-            if name.startswith("group-"):
+            if trove.troveIsGroup(name):
                 continue
             oldVersion, oldFlavor = job[1]
             newVersion, newFlavor = job[2]
@@ -333,7 +340,7 @@ recursedGroups = set()
 def recurseTrove(sourceRepos, name, version, flavor,
                  callback = ChangesetCallback()):
     global recursedGroups
-    assert(name.startswith("group-"))
+    assert(trove.troveIsGroup(name))
     # there's nothing much we can recurse from the source
     if name.endswith(":source"):
         return [], []
@@ -355,7 +362,7 @@ def recurseTrove(sourceRepos, name, version, flavor,
     for troveCs in groupCs.iterNewTroveList():
         nvf = troveCs.getNewNameVersionFlavor()
         # keep track of groups we have already recursed through
-        if nvf[0].startswith("group-"):
+        if trove.troveIsGroup(nvf[0]):
             recursedGroups.add(nvf)
         if troveCs.getType() == trove.TROVE_TYPE_REMOVED:
             removedList.append(nvf)
@@ -422,10 +429,15 @@ def splitJobList(jobList, src, targetSet, hidden = False, callback = ChangesetCa
         i += 1
     return
 
+
 # filter a trove tuple based on cfg
 def _filterTup(troveTup, cfg):
     (n, v, f) = troveTup
-    # if we're matching troves, filter by name first
+    troveSpec = cmdline.toTroveSpec(n, str(v), f)
+    # filter by trovespec 
+    if cfg.matchTroveSpecs and cfg.matchTroveSpecs.match(troveSpec) <= 0:
+        return False
+    # if we're matching troves
     if cfg.matchTroves and cfg.matchTroves.match(n) <= 0:
         return False
     # filter by host/label
@@ -434,6 +446,7 @@ def _filterTup(troveTup, cfg):
     if cfg.labels and v.branch().label() not in cfg.labels:
         return False
     return True
+
 
 # get all the trove info to be synced
 def _getAllInfo(src, cfg):
@@ -495,7 +508,7 @@ def _getNewInfo(src, cfg, mark):
         # otherwise we mirror just the sigs...
         infoList = _getNewSigs(src, cfg, mark)
     return infoList
-            
+
 # mirror new trove info for troves we have already mirrored.
 def mirrorTroveInfo(src, targets, mark, cfg, resync=False):
     if resync:
@@ -603,11 +616,11 @@ class TargetRepository:
             # only send up the troves that actually have a signature change
             infoList = [ x for x in infoList if len(x[1]) > 0 ]
             log.debug("%s pushing %d trove sigs...", self.name, len(infoList))
-            self.repo.setTroveSigs(infoList)          
+            self.repo.setTroveSigs(infoList)
         else:
             log.debug("%s uploaded %d info records", self.name, len(infoList))
         return len(infoList)
-    
+
     def addTroveList(self, tl):
         # Filter out troves which are already in the local repository. Since
         # the marks aren't distinct (they increase, but not monotonically), it's
@@ -634,7 +647,7 @@ class TargetRepository:
     def presentHiddenTroves(self):
         log.debug("%s unhiding comitted troves", self.name)
         self.repo.presentHiddenTroves(self.cfg.host)
-                                      
+
 # split a troveList in changeset jobs
 def buildBundles(sourceRepos, target, troveList, absolute=False):
     bundles = []
@@ -750,7 +763,7 @@ def mirrorRepository(sourceRepos, targetRepos, cfg,
     if fastSync:
         updateCount = 0
         log.debug("skip trove info records sync because of fast-sync")
-    else:                  
+    else:
         updateCount = mirrorTroveInfo(sourceRepos, targets, currentMark, cfg, syncSigs)
     newMark, troveList = getTroveList(sourceRepos, cfg, currentMark)
     if not troveList:
@@ -758,7 +771,7 @@ def mirrorRepository(sourceRepos, targetRepos, cfg,
             for t in targets:
                 t.setMirrorMark(newMark)
             return -1 # call again
-        return 0   
+        return 0
     # prepare a new max mark to be used when we need to break out of a loop
     crtMaxMark = max(long(x[0]) for x in troveList)
     if currentMark > 0 and crtMaxMark == currentMark:
@@ -776,14 +789,25 @@ def mirrorRepository(sourceRepos, targetRepos, cfg,
         # avoid adding duplicates
         troveSetList = set([x[1] for x in troveList])
         for mark, (name, version, flavor) in troveList:
-            if name.startswith("group-"):
-                recTroves, rmTroves = recurseTrove(sourceRepos, name, version, flavor,
-                                                   callback = callback)
+            if trove.troveIsGroup(name):
+                recTroves, rmTroves = recurseTrove(sourceRepos, name, version,
+                                                   flavor, callback=callback)
+
+                # add sources here:
+                if cfg.includeSources:
+                    troveInfo = sourceRepos.getTroveInfo(
+                        trove._TROVEINFO_TAG_SOURCENAME, recTroves)
+                    sourceComps = set()
+                    for nvf, source in itertools.izip(recTroves, troveInfo):
+                        sourceComps.add((source(), nvf[1].getSourceVersion(),
+                                         parseFlavor('')))
+                    recTroves.extend(sourceComps)
+
                 # add the results at the end with the current mark
-                for (n,v,f) in recTroves:
-                    if (n,v,f) not in troveSetList:
-                        troveList.append((mark, (n,v,f)))
-                        troveSetList.add((n,v,f))
+                for (n, v, f) in recTroves:
+                    if (n, v, f) not in troveSetList:
+                        troveList.append((mark, (n, v, f)))
+                        troveSetList.add((n, v, f))
                 for x in rmTroves:
                     removedSet.add(x)
         log.debug("after group recursion %d troves are needed", len(troveList))
@@ -824,7 +848,7 @@ def mirrorRepository(sourceRepos, targetRepos, cfg,
             t.setMirrorMark(crtMaxMark)
         # try again
         return -1
-    
+
     # now we get each section of the troveList for each targetSet. We
     # start off mirroring by those required by fewer targets, using
     # the assumption that those troves are what is required for the
@@ -858,7 +882,7 @@ def mirrorRepository(sourceRepos, targetRepos, cfg,
             try:
                 sourceRepos.createChangeSetFile(jobList, tmpName, recurse = False,
                                                 callback = callback, mirrorMode = True)
-            except changeset.ChangeSetKeyConflictError, e:
+            except changeset.ChangeSetKeyConflictError:
                 splitJobList(jobList, sourceRepos, targetSet, hidden=hidden,
                              callback=callback)
             else:
@@ -899,7 +923,7 @@ def checkSyncRepos(config, sourceRepos, targetRepos):
     checkConfig(config)
     targets = _makeTargets(config, targetRepos)
     log.setVerbosity(log.DEBUG)
-        
+
     # retrieve the set of troves from a give repository
     def _getTroveSet(config, repo):
         def _flatten(troveSpec):

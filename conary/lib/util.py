@@ -15,9 +15,10 @@
 import bdb
 import bz2
 import debugger
-import fcntl
-import gzip
 import errno
+import fcntl
+import fnmatch
+import gzip
 import itertools
 import log
 import misc
@@ -29,8 +30,8 @@ import signal
 import stat
 import string
 import StringIO
-import subprocess
 import struct
+import subprocess
 import sys
 import tempfile
 import time
@@ -52,7 +53,7 @@ from conary.lib.formattrace import formatTrace
 def normpath(path):
     s = os.path.normpath(path)
     if s.startswith(os.sep + os.sep):
-	return s[1:]
+        return s[1:]
     return s
 
 def realpath(path):
@@ -224,7 +225,7 @@ def genExcepthook(debug=True,
                 cmd = cmd[:len('/commands/conary')] + '/bin/conary'
             elif cmd.endswith('/commands/cvc'):
                 cmd = cmd[:len('/commands/cvc')] + '/bin/cvc'
-                
+
             origTb = tb
             cmd = normpath(cmd)
             sys.argv[0] = cmd
@@ -250,14 +251,14 @@ def genExcepthook(debug=True,
 
 def _handle_rc(rc, cmd):
     if rc:
-	if not os.WIFEXITED(rc):
-	    info = 'Shell command "%s" killed with signal %d' \
-		    %(cmd, os.WTERMSIG(rc))
-	if os.WEXITSTATUS(rc):
-	    info = 'Shell command "%s" exited with exit code %d' \
-		    %(cmd, os.WEXITSTATUS(rc))
+        if not os.WIFEXITED(rc):
+            info = 'Shell command "%s" killed with signal %d' \
+                    %(cmd, os.WTERMSIG(rc))
+        if os.WEXITSTATUS(rc):
+            info = 'Shell command "%s" exited with exit code %d' \
+                    %(cmd, os.WEXITSTATUS(rc))
         log.error(info)
-	raise RuntimeError, info
+        raise RuntimeError, info
 
 def execute(cmd, destDir=None, verbose=True):
     """
@@ -282,7 +283,7 @@ class popen:
     """
     # unfortunately, can't derive from os.popen.  Add methods as necessary.
     def __init__(self, *args):
-	self.p = os.popen(*args)
+        self.p = os.popen(*args)
         self.write = self.p.write
         self.read = self.p.read
         self.readline = self.p.readline
@@ -290,8 +291,8 @@ class popen:
         self.writelines = self.p.writelines
 
     def close(self, *args):
-	rc = self.p.close(*args)
-	_handle_rc(rc, self.p.name)
+        rc = self.p.close(*args)
+        _handle_rc(rc, self.p.name)
         return rc
 
 # string extensions
@@ -300,10 +301,10 @@ def find(s, subs, start=0):
     ret = -1
     found = None
     for sub in subs:
-	this = string.find(s, sub, start)
-	if this > -1 and ( ret < 0 or this < ret):
-	    ret = this
-	    found = s[this:this+1]
+        this = string.find(s, sub, start)
+        if this > -1 and ( ret < 0 or this < ret):
+            ret = this
+            found = s[this:this+1]
     return (ret, found)
 
 def literalRegex(s):
@@ -499,47 +500,47 @@ def braceGlob(paths):
     """
     pathlist = []
     for path in braceExpand(paths):
-	pathlist.extend(fixedglob.glob(path))
+        pathlist.extend(fixedglob.glob(path))
     return pathlist
 
 @api.developerApi
 def rmtree(paths, ignore_errors=False, onerror=None):
     for path in braceGlob(paths):
-	log.debug('deleting [tree] %s', path)
-	# act more like rm -rf -- allow files, too
-	if (os.path.islink(path) or
+        log.debug('deleting [tree] %s', path)
+        # act more like rm -rf -- allow files, too
+        if (os.path.islink(path) or
                 (os.path.exists(path) and not os.path.isdir(path))):
-	    os.remove(path)
-	else:
-	    os.path.walk(path, _permsVisit, None)
-	    shutil.rmtree(path, ignore_errors, onerror)
+            os.remove(path)
+        else:
+            os.path.walk(path, _permsVisit, None)
+            shutil.rmtree(path, ignore_errors, onerror)
 
 def _permsVisit(arg, dirname, names):
     for name in names:
-	path = dirname + os.sep + name
-	mode = os.lstat(path)[stat.ST_MODE]
-	# has to be executable to cd, readable to list, writeable to delete
-	if stat.S_ISDIR(mode) and (mode & 0700) != 0700:
-	    log.warning("working around illegal mode 0%o at %s", mode, path)
-	    mode |= 0700
-	    os.chmod(path, mode)
+        path = dirname + os.sep + name
+        mode = os.lstat(path)[stat.ST_MODE]
+        # has to be executable to cd, readable to list, writeable to delete
+        if stat.S_ISDIR(mode) and (mode & 0700) != 0700:
+            log.warning("working around illegal mode 0%o at %s", mode, path)
+            mode |= 0700
+            os.chmod(path, mode)
 
 def remove(paths, quiet=False):
     for path in braceGlob(paths):
-	if os.path.isdir(path) and not os.path.islink(path):
-	    log.warning('Not removing directory %s', path)
-	elif os.path.exists(path) or os.path.islink(path):
+        if os.path.isdir(path) and not os.path.islink(path):
+            log.warning('Not removing directory %s', path)
+        elif os.path.exists(path) or os.path.islink(path):
             if not quiet:
                 log.debug('deleting [file] %s', path)
-	    os.remove(path)
-	else:
-	    log.warning('file %s does not exist when attempting to delete [file]', path)
+            os.remove(path)
+        else:
+            log.warning('file %s does not exist when attempting to delete [file]', path)
 
 def copyfile(sources, dest, verbose=True):
     for source in braceGlob(sources):
-	if verbose:
-	    log.info('copying %s to %s', source, dest)
-	shutil.copy2(source, dest)
+        if verbose:
+            log.info('copying %s to %s', source, dest)
+        shutil.copy2(source, dest)
 
 def copyfileobj(source, dest, callback = None, digest = None,
                 abortCheck = None, bufSize = 128*1024, rateLimit = None,
@@ -598,7 +599,7 @@ def copyfileobj(source, dest, callback = None, digest = None,
         if now == starttime:
             rate = 0 # don't bother limiting download until now > starttime.
         else:
-            rate = copied / ((now - starttime)) 
+            rate = copied / ((now - starttime))
 
         if callback:
             callback(total, rate)
@@ -613,8 +614,8 @@ def copyfileobj(source, dest, callback = None, digest = None,
 
 def rename(sources, dest):
     for source in braceGlob(sources):
-	log.debug('renaming %s to %s', source, dest)
-	os.rename(source, dest)
+        log.debug('renaming %s to %s', source, dest)
+        os.rename(source, dest)
 
 def _copyVisit(arg, dirname, names):
     sourcelist = arg[0]
@@ -623,12 +624,12 @@ def _copyVisit(arg, dirname, names):
     filemode = arg[3]
     dirmode = arg[4]
     if dirmode:
-	os.chmod(dirname, dirmode)
+        os.chmod(dirname, dirmode)
     for name in names:
-	if filemode:
-	    os.chmod(dirname+os.sep+name, filemode)
-	sourcelist.append(os.path.normpath(
-	    dest + os.sep + dirname[sourcelen:] + os.sep + name))
+        if filemode:
+            os.chmod(dirname+os.sep+name, filemode)
+        sourcelist.append(os.path.normpath(
+            dest + os.sep + dirname[sourcelen:] + os.sep + name))
 
 def copytree(sources, dest, symlinks=False, filemode=None, dirmode=None):
     """
@@ -637,26 +638,26 @@ def copytree(sources, dest, symlinks=False, filemode=None, dirmode=None):
     """
     sourcelist = []
     for source in braceGlob(sources):
-	if os.path.isdir(source):
-	    if source[-1] == '/':
-		source = source[:-1]
-	    thisdest = '%s%s%s' %(dest, os.sep, os.path.basename(source))
-	    log.debug('copying [tree] %s to %s', source, thisdest)
-	    shutil.copytree(source, thisdest, symlinks)
-	    if dirmode:
-		os.chmod(thisdest, dirmode)
-	    os.path.walk(source, _copyVisit,
-			 (sourcelist, len(source), thisdest, filemode, dirmode))
-	else:
-	    log.debug('copying [file] %s to %s', source, dest)
-	    shutil.copy2(source, dest)
-	    if dest.endswith(os.sep):
-		thisdest = dest + os.sep + os.path.basename(source)
-	    else:
-		thisdest = dest
-	    if filemode:
-		os.chmod(thisdest, filemode)
-	    sourcelist.append(thisdest)
+        if os.path.isdir(source):
+            if source[-1] == '/':
+                source = source[:-1]
+            thisdest = '%s%s%s' %(dest, os.sep, os.path.basename(source))
+            log.debug('copying [tree] %s to %s', source, thisdest)
+            shutil.copytree(source, thisdest, symlinks)
+            if dirmode:
+                os.chmod(thisdest, dirmode)
+            os.path.walk(source, _copyVisit,
+                         (sourcelist, len(source), thisdest, filemode, dirmode))
+        else:
+            log.debug('copying [file] %s to %s', source, dest)
+            shutil.copy2(source, dest)
+            if dest.endswith(os.sep):
+                thisdest = dest + os.sep + os.path.basename(source)
+            else:
+                thisdest = dest
+            if filemode:
+                os.chmod(thisdest, filemode)
+            sourcelist.append(thisdest)
     return sourcelist
 
 def checkPath(binary, root=None):
@@ -666,7 +667,7 @@ def checkPath(binary, root=None):
     """
     path = os.environ.get('PATH', '')
     if binary[0] == '/':
-        # handle case where binary starts with / seperately 
+        # handle case where binary starts with / seperately
         # because os.path.join will not do the right
         # thing with root set.
         if root:
@@ -712,10 +713,10 @@ def splitPath(path):
 
 def assertIteratorAtEnd(iter):
     try:
-	iter.next()
-	raise AssertionError
+        iter.next()
+        raise AssertionError
     except StopIteration:
-	return True
+        return True
 
 ref = weakref.ref
 class ObjectCache(dict):
@@ -764,7 +765,7 @@ def memusage(pid = None):
         pfn = "/proc/%d/statm" % pid
     line = open(pfn).readline()
     # Assume page size is 4k (true for i386). This can be adjusted by reading
-    # resource.getpagesize() 
+    # resource.getpagesize()
     arr = [ 4 * int(x) for x in line.split()[:6] ]
     vmsize, vmrss, vmshared, text, lib, data = arr
 
@@ -1128,11 +1129,11 @@ class SeekableNestedFile:
         else:
             readPos = offset
 
-	if bytes < 0 or (self.end - readPos) <= bytes:
-	    # return the rest of the file
-	    count = self.end - readPos
-	    newPos = self.end
-	else:
+        if bytes < 0 or (self.end - readPos) <= bytes:
+            # return the rest of the file
+            count = self.end - readPos
+            newPos = self.end
+        else:
             count = bytes
             newPos = readPos + bytes
 
@@ -1303,7 +1304,8 @@ pread = misc.pread
 res_init = misc.res_init
 sha1Uncompress = misc.sha1Uncompress
 fchmod = misc.fchmod
-
+fopenIfExists = misc.fopenIfExists
+structFlock = misc.structFlock
 
 def _LazyFile_reopen(method):
     """Decorator to perform the housekeeping of opening/closing of fds"""
@@ -1404,7 +1406,7 @@ class _LazyFile(object):
 
 class LazyFileCache:
     """An object tracking open files. It will serve file-like objects that get
-    closed behind the scene (and reopened on demand) if the number of open 
+    closed behind the scene (and reopened on demand) if the number of open
     files in the current process exceeds a threshold.
     The objects will close automatically when they fall out of scope.
     """
@@ -1418,7 +1420,7 @@ class LazyFileCache:
         # Counter used for hashing
         self._fdCounter = 0
         self._fdMap = {}
-    
+
     @api.publicApi
     def open(self, path, mode="r"):
         """
@@ -2094,7 +2096,7 @@ def rethrow(newClassOrInstance, prependClassName=True, oldTup=None):
     when re-throwing a re-thrown exception so that the intermediate
     class is not prepended to a value that already has the original
     class name in it.
-    
+
     @param newClassOrInstance: Class of the new exception to be thrown,
         or the exact exception instance to be thrown.
     @type  newClass: subclass or instance of Exception
@@ -2133,28 +2135,102 @@ class Tick:
 
 class GzipFile(gzip.GzipFile):
 
-    # fix gzip implementation to not seek
+    # fix gzip implementation to not seek. i'll probably end up in a
+    # hot, firey place for this
     def __init__(self, *args, **kwargs):
         self._first = True
         gzip.GzipFile.__init__(self, *args, **kwargs)
+
+    def _read_gzip_header(self):
+        magic = self.fileobj.read(2)
+        if magic == '':
+            return False
+
+        elif magic != '\037\213':
+            raise IOError, 'Not a gzipped file'
+        method = ord( self.fileobj.read(1) )
+        if method != 8:
+            raise IOError, 'Unknown compression method'
+        flag = ord( self.fileobj.read(1) )
+        # modtime = self.fileobj.read(4)
+        # extraflag = self.fileobj.read(1)
+        # os = self.fileobj.read(1)
+        self.fileobj.read(6)
+
+        if flag & gzip.FEXTRA:
+            # Read & discard the extra field, if present
+            xlen = ord(self.fileobj.read(1))
+            xlen = xlen + 256*ord(self.fileobj.read(1))
+            self.fileobj.read(xlen)
+        if flag & gzip.FNAME:
+            # Read and discard a null-terminated string containing the filename
+            while True:
+                s = self.fileobj.read(1)
+                if not s or s=='\000':
+                    break
+        if flag & gzip.FCOMMENT:
+            # Read and discard a null-terminated string containing a comment
+            while True:
+                s = self.fileobj.read(1)
+                if not s or s=='\000':
+                    break
+        if flag & gzip.FHCRC:
+            self.fileobj.read(2)     # Read & discard the 16-bit header CRC
+
+        return True
 
     def _read(self, size=1024):
         if self.fileobj is None:
             raise EOFError, "Reached EOF"
 
-        if self._first:
-            assert(self._new_member)
+        if self._new_member:
             # If the _new_member flag is set, we have to
             # jump to the next member, if there is one.
             self._init_read()
-            self._read_gzip_header()
+            if not self._read_gzip_header():
+                raise EOFError, "Reached EOF"
             self.decompress = zlib.decompressobj(-zlib.MAX_WBITS)
             self._new_member = False
-            self._first = False
-        elif self._new_member:
-            raise EOFError, "Reached EOF"
 
-        return gzip.GzipFile._read(self, size = size)
+        # Read a chunk of data from the file
+        buf = self.fileobj.read(size)
+
+        # If the EOF has been reached, flush the decompression object
+        # and mark this object as finished.
+
+        if buf == "":
+            uncompress = self.decompress.flush()
+            self._read_eof()
+            self._add_read_data( uncompress )
+            raise EOFError, 'Reached EOF'
+
+        uncompress = self.decompress.decompress(buf)
+        self._add_read_data( uncompress )
+
+        if self.decompress.unused_data != "":
+            eof = self.decompress.unused_data
+            eof += self.fileobj.read(8 - len(eof))
+
+            # Check the CRC and file size, and set the flag so we read
+            # a new member on the next call
+            self._read_eof(eof)
+            self._new_member = True
+
+    def _read_eof(self, eof):
+        # We've read to the end of the file, so we have to rewind in order
+        # to reread the 8 bytes containing the CRC and the file size.
+        # We check the that the computed CRC and size of the
+        # uncompressed data matches the stored values.  Note that the size
+        # stored is the true file size mod 2**32.
+        #self.fileobj.seek(-8, 1)
+        crc32, isize = struct.unpack("<LL", eof)
+
+        actualCrc = (self.crc & 0xffffffff)
+        if crc32 != actualCrc:
+            raise IOError("CRC check failed %s != %s" % (hex(crc32),
+                                                         hex(actualCrc)))
+        elif isize != (self.size & 0xffffffffL):
+            raise IOError, "Incorrect length of data produced"
 
 # yields sorted paths and their stat bufs
 def walkiter(dirNameList, skipPathSet = set(), root = '/'):
@@ -2204,3 +2280,231 @@ class noproxyFilter(object):
             if urlStr.endswith(x):
                 return True
         return False
+
+def fnmatchTranslate(pattern):
+    "Like fnmatch.translate, but do not add the end-of-string character(s)"
+    patt = fnmatch.translate(pattern)
+    # Python 2.6.5 appends \Z(?ms) instead of $
+    if patt.endswith('$'):
+        return patt[:-1]
+    if patt.endswith(r'\Z(?ms)'):
+        return patt[:-7]
+    raise RuntimeError("Unrecognized end-of-string in %s" % patt)
+
+class LockedFile(object):
+    """
+    A file protected by a lock.
+    To use it:
+
+    l = LockedFile("filename")
+    fileobj = l.open()
+    if fileobj is None:
+        # The target file does not exist. Create it.
+        l.write("Some content")
+        fileobj = l.commit()
+    else:
+        # The target file exists
+        pass
+    print fileobj.read()
+    """
+    __slots__ = ('fileName', 'lockFileName', '_lockfobj', '_tmpfobj')
+
+    # python 2.4 defines SEEK_SET in posixfile, which is deprecated
+    SEEK_SET = 0
+    WRLOCK = structFlock(fcntl.F_WRLCK, SEEK_SET, 0, 0, None)
+
+    def __init__(self, fileName):
+        self.fileName = fileName
+        self.lockFileName = self.fileName + '.lck'
+        self._lockfobj = None
+        self._tmpfobj = None
+
+    def open(self, shouldLock = True):
+        """
+        Attempt to open the file.
+        Returns a file object if the file exists.
+        Returns None if the file does not exist, and needs to be created. At
+            this point the lock is acquired. Use write() and commit() to have
+            the file created and the lock released.
+        """
+
+        if self._lockfobj is not None:
+            self.close()
+
+        fobj = fopenIfExists(self.fileName, "r")
+        if fobj is not None or not shouldLock:
+            return fobj
+
+        self._lockfobj = open(self.lockFileName, "w")
+
+        # Attempt to lock file in write mode
+        fcntl.fcntl(self._lockfobj, fcntl.F_SETLKW, self.WRLOCK)
+        # If we got this far, we now have the lock. Check if the data file was
+        # created
+        fobj = fopenIfExists(self.fileName, "r")
+        if fobj is not None:
+            # The other process committed (and we probably hold a link to a
+            # removed file).
+            self.unlock()
+            return fobj
+
+        if not os.path.exists(self.lockFileName):
+            # The original caller returned without creating the data file, and
+            # it also removed the lock file - so now we hold a lock on an
+            # orphaned fd
+            # This should normally not happen, since a close() will not remove
+            # the lock file after releasing the lock
+            return self.open()
+        # We now hold the lock
+        return None
+
+    def write(self, data):
+        if self._tmpfobj is None:
+            # Create temporary file
+            self._tmpfobj = AtomicFile(self.fileName)
+        self._tmpfobj.write(data)
+
+    def commit(self):
+        # It is important that we move the file into place first, before
+        # releasing the lock. This make sure that any process that was blocked
+        # will see the file immediately, instead of retrying to lock
+        if self._tmpfobj is None:
+            fileobj = None
+        else:
+            fileobj = self._tmpfobj.commit(returnHandle = True)
+            self._tmpfobj = None
+        self.unlock()
+        return fileobj
+
+    def unlock(self):
+        removeIfExists(self.lockFileName)
+        self.close()
+
+    def close(self):
+        """Close without removing the lock file"""
+        if self._tmpfobj is not None:
+            self._tmpfobj.close()
+            self._tmpfobj = None
+        # This also releases the lock
+        if self._lockfobj is not None:
+            self._lockfobj.close()
+            self._lockfobj = None
+
+    __del__ = close
+
+class AtomicFile(object):
+    """
+    Open a temporary file adjacent to C{path} for writing. When
+    C{f.commit()} is called, the temporary file will be flushed and
+    renamed on top of C{path}, constituting an atomic file write.
+    """
+
+    fObj = None
+
+    def __init__(self, path, mode='w+b', chmod=0644, tmpsuffix = "",
+                 tmpprefix = None):
+        self.finalPath = os.path.realpath(path)
+        self.finalMode = chmod
+
+        if tmpprefix is None:
+            tmpprefix = os.path.basename(self.finalPath) + '.tmp.'
+        fDesc, self.name = tempfile.mkstemp(dir=os.path.dirname(self.finalPath),
+            suffix=tmpsuffix, prefix=tmpprefix)
+        self.fObj = os.fdopen(fDesc, mode)
+
+    def __getattr__(self, name):
+        return getattr(self.fObj, name)
+
+    def commit(self, returnHandle=False):
+        """
+        C{flush()}, C{chmod()}, and C{rename()} to the target path.
+        C{close()} afterwards.
+        """
+        if self.fObj.closed:
+            raise RuntimeError("Can't commit a closed file")
+
+        # Flush and change permissions before renaming so the contents
+        # are immediately present and accessible.
+        self.fObj.flush()
+        os.chmod(self.name, self.finalMode)
+        os.fsync(self.fObj)
+
+        # Rename to the new location. Since both are on the same
+        # filesystem, this will atomically replace the old with the new.
+        os.rename(self.name, self.finalPath)
+
+        # Now close the file.
+        if returnHandle:
+            fObj, self.fObj = self.fObj, None
+            return fObj
+            return fObj
+        else:
+            self.fObj.close()
+
+    def close(self):
+        if self.fObj and not self.fObj.closed:
+            removeIfExists(self.name)
+            self.fObj.close()
+    __del__ = close
+
+
+class TimestampedMap(object):
+    """
+    A map that timestamps entries, to cycle them out after delta seconds.
+    If delta is set to None, new entries will never go stale.
+    """
+    __slots__ = [ 'delta', '_map' ]
+    def __init__(self, delta = None):
+        self.delta = delta
+        self._map = dict()
+
+    def get(self, key, default = None, stale = False):
+        v = self._map.get(key, None)
+        if v is not None:
+            v, ts = v
+            if stale or ts is None or time.time() <= ts:
+                return v
+        return default
+
+    def set(self, key, value):
+        if self.delta is None:
+            ts = None
+        else:
+            ts = time.time() + self.delta
+        self._map[key] = (value, ts)
+        return self
+
+    def clear(self):
+        self._map.clear()
+
+
+def statFile(pathOrFile, missingOk=False, inodeOnly=False):
+    """Return a (dev, inode, size, mtime, ctime) tuple of the given file.
+
+    Accepts paths, file descriptors, and file-like objects with a C{fileno()}
+    method.
+
+    @param pathOrFile: A file path or file-like object
+    @type  pathOrFile: C{basestring} or file-like object or C{int}
+    @param missingOk: If C{True}, return C{None} if the file is missing.
+    @type  missingOk: C{bool}
+    @param inodeOnly: If C{True}, return just (dev, inode).
+    @type  inodeOnly: C{bool}
+    @rtype: C{tuple}
+    """
+    try:
+        if isinstance(pathOrFile, basestring):
+            st = os.stat(pathOrFile)
+        else:
+            if hasattr(pathOrFile, 'fileno'):
+                pathOrFile = pathOrFile.fileno()
+            st = os.fstat(pathOrFile)
+    except OSError, err:
+        if err.errno == errno.ENOENT and missingOk:
+            return None
+        raise
+
+    if inodeOnly:
+        return (st.st_dev, st.st_ino)
+    else:
+        return (st.st_dev, st.st_ino, st.st_size, st.st_mtime, st.st_ctime)

@@ -14,7 +14,6 @@
 
 import base64
 import binascii
-import errno
 import fcntl
 import itertools
 import os
@@ -1070,7 +1069,7 @@ class PGP_BasePacket(object):
                 raise InvalidPacketError("Invalid body length %s for "
                     "header length %s" % (self.bodyLength, self.headerLength))
             self._writeBin(stream, len2ToBytes(self.bodyLength))
-            return 
+            return
         if self.headerLength == 2:
             # 1-byte body length length
             if not (self.bodyLength < 192):
@@ -2163,7 +2162,7 @@ class PGP_Key(PGP_BaseKeySig):
             self._readCountMPIs(self.mpiFile, 1, discard = True)
             end2 = self.mpiFile.tell()
             fpr = digestlib.md5()
-            # Skip the 2-octet length 
+            # Skip the 2-octet length
             fpr.update(self.mpiFile.pread(end1 - 2, 2))
             fpr.update(self.mpiFile.pread((end2 - end1) - 2, end1 + 2))
             fpr = fpr.hexdigest().upper()
@@ -2954,20 +2953,22 @@ class PGP_SecretAnyKey(PGP_Key):
         # Fetch the crypto key
         cryptoKey = self.makePgpKey(passPhrase = passwordCallback())
 
-        if isinstance(cryptoKey,(DSA.DSAobj_c, DSA.DSAobj)):
+        # See comment in OpenPGPKey.getType
+        keyType = key_type(cryptoKey)
+        if keyType == 'DSA':
             pkAlg = PK_ALGO_DSA
             # Pick a random number that is relatively prime with the crypto
             # key's q
             relprime = cryptoKey.q + 1
             while relprime > cryptoKey.q:
                 relprime = num_getRelPrime(cryptoKey.q)
-        elif isinstance(cryptoKey, (RSA.RSAobj_c, RSA.RSAobj)):
+        elif keyType == 'RSA':
             pkAlg = PK_ALGO_RSA
             # RSA doesn't need a prime for signing
             relprime = 0
         else:
             # Maybe we need a different exception?
-            raise UnsupportedEncryptionAlgorithm(cryptoKey.__class__.__name__)
+            raise UnsupportedEncryptionAlgorithm(keyType)
 
         hashAlg = 2 # sha
 
@@ -3130,7 +3131,7 @@ class PGP_SubKey(PGP_Key):
         """Merge this subkey with the other key"""
         assert self.tag == other.tag
         # Subkeys MUST have a key binding signature (unless it's been revoked,
-        # in which case only the revocation 
+        # in which case only the revocation
         # They MAY also have an optional revocation.
         # Revoking a subkey effectively terminates that key. Reconciling
         # revocation signatures is therefore not a big issue - probably
@@ -3480,6 +3481,8 @@ class PublicKeyring(object):
         if mtime0 == mtime1:
             # Cheat, and set the mtime to be a second larger
             os.utime(self._tsDbPath, (mtime1, mtime1 + self._timeIncrement))
+        elif self._timeIncrement > 1:
+            os.utime(self._tsDbPath, (mtime1, mtime1 + self._timeIncrement))
         # We know for a fact we've touched the file.
         # In order to prevent sub-second updates from not being noticed, reset
         # the mtime.
@@ -3545,3 +3548,15 @@ class PublicKeyring(object):
             fp = pk.getKeyId()
             ret[fp] = set(x.getKeyId() for x in pk.iterSubKeys())
         return ret
+
+
+def key_type(cryptoKey):
+    # pycrypto's API has no consistent way to tell what kind of key we
+    # have. This is apparently the least awful way to do it.
+    keyName = cryptoKey.__class__.__name__
+    if 'RSA' in keyName:
+        return 'RSA'
+    elif 'DSA' in keyName:
+        return 'DSA'
+    else:
+        raise TypeError("Unrecognized key type: " + keyName)

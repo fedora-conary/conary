@@ -47,6 +47,7 @@ class Config(packagepolicy.Config):
     # a config file and therefore should have no invariants
     invariantinclusions = None
     invariantexceptions = [ ]
+    processUnmodified = True
     requires = (
         ('PackageSpec', policy.REQUIRED_PRIOR), # for hardlink detection
         ('LinkType', policy.CONDITIONAL_SUBSEQUENT),
@@ -77,13 +78,14 @@ class InitialContents(packagepolicy.InitialContents):
     # and avoid errors when importing RPMs
     invariantinclusions = None
     invariantexceptions = [ ]
+    processUnmodified = True
 
     def updateArgs(self, *args, **keywords):
         # override packagepolicy.InitialContents to avoid invoking Config
         policy.Policy.updateArgs(self, *args, **keywords)
 
     def doFile(self, filename):
-	fullpath = self.macros.destdir + filename
+        fullpath = self.macros.destdir + filename
         recipe = self.recipe
         if not os.path.isdir(fullpath) or os.path.islink(fullpath):
             for pkg in self.recipe.autopkg.findComponents(filename):
@@ -102,10 +104,11 @@ class Transient(packagepolicy.Transient):
     # Descends from packagepolicy.Transient to remove invariants
     # and avoid errors when importing RPMs
     invariantinclusions = None
+    processUnmodified = True
 
     def doFile(self, filename):
-	fullpath = self.macros.destdir + filename
-	if os.path.isfile(fullpath) and util.isregular(fullpath):
+        fullpath = self.macros.destdir + filename
+        if os.path.isfile(fullpath) and util.isregular(fullpath):
             recipe = self.recipe
             for pkg in self.recipe.autopkg.findComponents(filename):
                 f = pkg.getFile(filename)
@@ -188,6 +191,7 @@ class Payload(policy.Policy):
     """
     bucket = policy.PACKAGE_CREATION
     filetree = policy.PACKAGE
+    processUnmodified = True
 
     requires = (
         ('PackageSpec', policy.REQUIRED_PRIOR),
@@ -283,7 +287,7 @@ class RPMProvides(policy.Policy):
             if capsule and capsule[0] == 'rpm':
                 path = capsule[1]
                 h = rpmhelper.readHeader(file(path))
-                prov = h._getDepsetFromHeader(rpmhelper.PROVIDENAME)
+                prov = h.getProvides()
                 comp[1].provides.union(prov)
 
                 if self.provisions:
@@ -423,7 +427,6 @@ class RPMRequires(policy.Policy):
                                for x in self.excepts]
 
                 path = capsule[1]
-
                 matchFound = False
                 for regexp, f in self.filters:
                     if f.match(path):
@@ -433,8 +436,8 @@ class RPMRequires(policy.Policy):
                     continue
 
                 h = rpmhelper.readHeader(file(path))
-                rReqs = h._getDepsetFromHeader(rpmhelper.REQUIRENAME)
-                rProv = h._getDepsetFromHeader(rpmhelper.PROVIDENAME)
+                rReqs, rProv = h.getDeps()
+
                 # integrate user specified requirements
                 if self.requirements:
                     userReqs = self.requirements.get(comp[0])
@@ -497,22 +500,71 @@ class RPMRequires(policy.Policy):
 
 class PureCapsuleComponents(policy.Policy):
     """
+    NAME
+    ====
+
+    B{C{r.PureCapsuleComponents()}} - Ensure that components which contain a
+    capsule do not contain any other files.
+
+    SYNOPSIS
+    ========
+
+    C{r.PureCapsuleComponents(I{exceptions=filterexp}])}
+
+    DESCRIPTION
+    ===========
+
     This policy is used to ensure that if a component contains a capsule that
-    it only contains files defined within that capsule.
-    Do not call it directly; it is for internal use only.
+    it only contains files defined within that capsule. It should not normally
+    be called.  It is, however, sometimes necessary to provide an exception to
+    add an additional file to a capsule package.
+
+
+    EXAMPLES
+    ========
+
+    C{r.PureCapsuleComponents( exceptions='foo.*conf')}
     """
     bucket = policy.ENFORCEMENT
+    requires = (
+        ('ExcludeDirectories', policy.REQUIRED_PRIOR),
+    )
 
-    def do(self):
-        for comp in self.recipe.autopkg.components.items():
-            compHasCapsule = bool(self.recipe._hasCapsulePackage(comp[0]))
-            error = False
-            for path in comp[1]:
-                inCapsule = bool(self.recipe._getCapsulePathsForFile(path))
-                if (compHasCapsule ^ inCapsule):
-                    error = True;
-                    break
-            if error:
-                self.error("Component %s contains both "
-                           "capsule and non-capsule files" % comp[0] )
+    def doFile(self,path):
+        inCapsule = bool(self.recipe._getCapsulePathsForFile(path))
+        if inCapsule:
+            return
+        comp = self.recipe.autopkg.componentMap.get(path,None)
+        if comp:
+            compHasCapsule = bool(self.recipe._hasCapsulePackage(comp.name))
+            if compHasCapsule:
+                self.error("Component %s contains both a "
+                           "capsule and the non-capsule file: %s. Use an "
+                           "exception to add this file to this component."
+                           % (comp.name,path) )
 
+class CapsuleModifications(policy.Policy):
+    """
+    This policy is used to mark files which are modified in or added to a
+    capsule component.
+    Do not call it directly; it is for internal use only.
+    """
+    bucket = policy.PACKAGE_CREATION
+    filetree = policy.PACKAGE
+
+    requires = (
+        ('PackageSpec', policy.REQUIRED_PRIOR),
+        ('ExcludeDirectories', policy.REQUIRED_PRIOR),
+    )
+
+    def doFile(self, filename):
+        changeState = self.fileChanged(filename)
+        if changeState:
+            for pkg in self.recipe.autopkg.findComponents(filename):
+                capPath = self.recipe._getCapsulePathsForFile(filename)
+                hasCapsule = bool(self.recipe._hasCapsulePackage(pkg.name))
+                if hasCapsule:
+                    f = pkg.getFile(filename)
+                    f.flags.isCapsuleOverride(True)
+                    if not capPath:
+                        f.flags.isCapsuleAddition(True)

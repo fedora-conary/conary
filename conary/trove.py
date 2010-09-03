@@ -37,7 +37,7 @@ from conary.streams import OptionalFlavorStream
 from conary.streams import StringVersionStream
 
 TROVE_VERSION=10
-# the difference between 10 and 11 is that the REMOVED type appeared, 
+# the difference between 10 and 11 is that the REMOVED type appeared,
 # and we allow group redirects; 11 is used *only* for those situations
 TROVE_VERSION_1_1=11
 
@@ -78,7 +78,7 @@ def conaryContents(hasCapsule, pathId, fileObj):
         return False
 
     return (fileObj.flags.isCapsuleOverride() or
-            fileObj.flags.isConfig() or
+            #fileObj.flags.isConfig() or
             not hasCapsule)
 
 class TroveTuple(streams.StreamSet):
@@ -202,11 +202,11 @@ class SingleTroveRedirect(streams.StreamSet):
 
     ignoreUnknown = True
     streamDict = {
-        _SINGLE_REDIRECT_NAME   : 
+        _SINGLE_REDIRECT_NAME   :
                 (SMALL, streams.StringStream,        'name'    ),
-        _SINGLE_REDIRECT_BRANCH : 
+        _SINGLE_REDIRECT_BRANCH :
                 (SMALL, streams.StringVersionStream, 'branch' ),
-        _SINGLE_REDIRECT_FLAVOR : 
+        _SINGLE_REDIRECT_FLAVOR :
                 (SMALL, OptionalFlavorStream,        'flavor'  )
     }
 
@@ -280,7 +280,7 @@ class PathHashes(set, streams.InfoStream):
         additions = self - them
         removals = them - self
         s = struct.pack("!I" + "8s" * (len(additions) + len(removals)),
-                        *itertools.chain((len(additions),), additions, 
+                        *itertools.chain((len(additions),), additions,
                                          removals))
         return s
 
@@ -313,6 +313,7 @@ _DIGSIG_SIGNATURE     = 1
 _DIGSIG_TIMESTAMP     = 2
 
 class DigitalSignature(streams.StreamSet):
+    __slots__ = ('fingerprint', 'signature', 'timestamp')
     streamDict = {
         _DIGSIG_FINGERPRINT  : (SMALL, streams.StringStream,   'fingerprint' ),
         _DIGSIG_SIGNATURE    : (SMALL, streams.StringStream,   'signature'   ),
@@ -385,6 +386,7 @@ _DIGSIGS_DIGSIGNATURE     = 1
 # should always send the whole stream collection as a
 # AbsoluteStreamCollection
 class DigitalSignatures(streams.AbsoluteStreamCollection):
+    __slots__ = ()
     streamDict = { _DIGSIGS_DIGSIGNATURE: DigitalSignature }
 
     def add(self, val):
@@ -419,6 +421,7 @@ _VERSIONED_DIGITAL_SIGNATURES_DIGEST   = 1
 _VERSIONED_DIGITAL_SIGNATURES_DIGSIGS = 2
 
 class VersionedDigitalSignatures(streams.StreamSet):
+    __slots__ = ( 'version', 'digest', 'signatures' )
     streamDict = {
         _VERSIONED_DIGITAL_SIGNATURES_VERSION:
                 (SMALL, streams.ByteStream,    'version'   ),
@@ -500,6 +503,8 @@ class TroveSignatures(streams.StreamSet):
     considered version 0, and this object hides the different storage method
     for those signatures.
     """
+
+    __slots__ = ( 'digitalSigs', 'sha1', 'vSigs', 'ignoreUnknown', 'streamDict' )
 
     ignoreUnknown = True
     streamDict = {
@@ -604,24 +609,24 @@ _TROVE_FLAG_ISMISSING    = 1 << 2
 class TroveFlagsStream(streams.ByteStream):
 
     def isCollection(self, set = None):
-	return self._isFlag(_TROVE_FLAG_ISCOLLECTION, set)
+        return self._isFlag(_TROVE_FLAG_ISCOLLECTION, set)
 
     def isDerived(self, set = None):
-	return self._isFlag(_TROVE_FLAG_ISDERIVED, set)
+        return self._isFlag(_TROVE_FLAG_ISDERIVED, set)
 
     def isMissing(self, set = None):
-	return self._isFlag(_TROVE_FLAG_ISMISSING, set)
+        return self._isFlag(_TROVE_FLAG_ISMISSING, set)
 
     def _isFlag(self, flag, set):
-	if set != None:
+        if set != None:
             if self() is None:
                 self.set(0x0)
-	    if set:
-		self.set(self() | flag)
-	    else:
-		self.set(self() & ~(flag))
+            if set:
+                self.set(self() | flag)
+            else:
+                self.set(self() & ~(flag))
 
-	return (self() and self() & flag)
+        return (self() and self() & flag)
 
 
 # FIXME: this should be a dynamically extendable stream.  StreamSet is a
@@ -640,6 +645,10 @@ _METADATA_ITEM_TAG_LANGUAGE = 10
 _METADATA_ITEM_ORIG_ITEMS = 10
 _METADATA_ITEM_TAG_KEY_VALUE = 11
 _METADATA_ITEM_TAG_NEW_SIGNATURES = 12
+# this exists in order to correct a previous error in calculating the size of
+# troves which contain a capsule
+_METADATA_ITEM_TAG_SIZE_OVERRIDE = 13
+
 
 _METADATA_ITEM_SIG_VER_ALL = [ 0, 1 ]
 
@@ -735,7 +744,12 @@ class MetadataItem(streams.StreamSet):
                 (DYNAMIC, KeyValueItemsStream,    'keyValue'     ),
         _METADATA_ITEM_TAG_NEW_SIGNATURES:
                 (DYNAMIC, VersionedSignaturesSet, 'signatures'   ),
+        _METADATA_ITEM_TAG_SIZE_OVERRIDE:
+                (DYNAMIC, streams.LongLongStream, 'sizeOverride'),
         }
+    # define a set of metadata fields in which 0 is a valid value and should be
+    # distingished from None
+    _zeroIsValidSet = set(('sizeOverride',))
 
     _skipSet = { 'id' : True, 'signatures': True, 'oldSignatures' : True }
     _keys = [ x[2] for x in streamDict.itervalues() if x[2] not in _skipSet ]
@@ -851,7 +865,9 @@ class MetadataItem(streams.StreamSet):
             if hasattr(attr, 'keys'):
                 if attr.keys():
                     ret.append(x)
-            elif hasattr(attr, '__call__') and attr():
+            elif hasattr(attr, '__call__') and (attr() or
+                                                (x in self._zeroIsValidSet and
+                                                attr() is not None)):
                 ret.append(x)
         return ret
 
@@ -860,6 +876,7 @@ class MetadataItem(streams.StreamSet):
         if hasattr(attr, '__call__'):
             return attr()
         return attr
+
 
 class Metadata(streams.OrderedStreamCollection):
     streamDict = { 1: MetadataItem }
@@ -899,7 +916,6 @@ class Metadata(streams.OrderedStreamCollection):
         if filteredKeyValues is None:
             filteredKeyValues = []
         items = {}
-        keys = MetadataItem._keys
         for item in self.getStreams(1):
             language = item.language()
             newItem = items.setdefault(language, MetadataItem())
@@ -952,8 +968,8 @@ _TROVEINFO_TAG_INSTALLBUCKET  =  6          # unused as of 0.62.16
 _TROVEINFO_TAG_FLAGS          =  7
 _TROVEINFO_TAG_CLONEDFROM     =  8
 _TROVEINFO_TAG_SIGS           =  9
-_TROVEINFO_TAG_PATH_HASHES    = 10 
-_TROVEINFO_TAG_LABEL_PATH     = 11 
+_TROVEINFO_TAG_PATH_HASHES    = 10
+_TROVEINFO_TAG_LABEL_PATH     = 11
 _TROVEINFO_TAG_POLICY_PROV    = 12
 _TROVEINFO_TAG_TROVEVERSION   = 13
 _TROVEINFO_TAG_INCOMPLETE     = 14
@@ -963,7 +979,7 @@ _TROVEINFO_ORIGINAL_SIG       = _TROVEINFO_TAG_INCOMPLETE
 _TROVEINFO_TAG_DIR_HASHES     = 15
 _TROVEINFO_TAG_SCRIPTS        = 16
 _TROVEINFO_TAG_METADATA       = 17
-_TROVEINFO_TAG_COMPLETEFIXUP  = 18  # indicates that this trove went through 
+_TROVEINFO_TAG_COMPLETEFIXUP  = 18  # indicates that this trove went through
                                     # a fix for incompleteness. only used on
                                     # the client, and left out of frozen forms
                                     # normally (since it should always be None)
@@ -996,6 +1012,7 @@ _TROVECAPSULE_RPM_RELEASE     = 2
 _TROVECAPSULE_RPM_ARCH        = 3
 _TROVECAPSULE_RPM_EPOCH       = 4
 _TROVECAPSULE_RPM_OBSOLETES   = 5
+_TROVECAPSULE_RPM_SHA1HEADER  = 6
 
 _TROVECAPSULE_MSI_NAME        = 0
 _TROVECAPSULE_MSI_VERSION     = 1
@@ -1038,7 +1055,7 @@ class RpmObsoletes(streams.StreamCollection):
             single.version.set(version)
             self.addStream(1, single)
 
-class RPMTroveCapsule(streams.StreamSet):
+class TroveRpmCapsule(streams.StreamSet):
     ignoreUnknown = streams.PRESERVE_UNKNOWN
     streamDict = {
         _TROVECAPSULE_RPM_NAME    : (DYNAMIC, streams.StringStream, 'name' ),
@@ -1047,6 +1064,7 @@ class RPMTroveCapsule(streams.StreamSet):
         _TROVECAPSULE_RPM_ARCH    : (DYNAMIC, streams.StringStream, 'arch' ),
         _TROVECAPSULE_RPM_EPOCH   : (DYNAMIC, streams.IntStream,    'epoch' ),
         _TROVECAPSULE_RPM_OBSOLETES:(DYNAMIC, RpmObsoletes,         'obsoletes' ),
+        _TROVECAPSULE_RPM_SHA1HEADER: (DYNAMIC, streams.AbsoluteSha1Stream, 'sha1header' ),
     }
 
     def reset(self):
@@ -1055,8 +1073,10 @@ class RPMTroveCapsule(streams.StreamSet):
         self.release.set(None)
         self.arch.set(None)
         self.epoch.set(None)
+        self.obsoletes = RpmObsoletes()
+        self.sha1header = streams.AbsoluteSha1Stream()
 
-class MSITroveCapsule(streams.StreamSet):
+class TroveMsiCapsule(streams.StreamSet):
     ignoreUnknown = streams.PRESERVE_UNKNOWN
     streamDict = {
         _TROVECAPSULE_MSI_NAME    : (DYNAMIC, streams.StringStream, 'name' ),
@@ -1071,8 +1091,8 @@ class TroveCapsule(streams.StreamSet):
     ignoreUnknown = streams.PRESERVE_UNKNOWN
     streamDict = {
         _TROVECAPSULE_TYPE     : (SMALL, streams.StringStream, 'type'),
-        _TROVECAPSULE_RPM      : (SMALL, RPMTroveCapsule,         'rpm'  ),
-        _TROVECAPSULE_MSI      : (SMALL, MSITroveCapsule,         'msi'  ),
+        _TROVECAPSULE_RPM      : (SMALL, TroveRpmCapsule,         'rpm'  ),
+        _TROVECAPSULE_MSI      : (SMALL, TroveMsiCapsule,         'msi'  ),
     }
 
     def reset(self):
@@ -1198,7 +1218,7 @@ class TroveRefsTrovesStream(dict, streams.InfoStream):
 
     """
     Defines a dict which represents the troves referenced by a trove. Each
-    entry maps a (troveName, version, flavor) tuple to a byDefault (boolean) 
+    entry maps a (troveName, version, flavor) tuple to a byDefault (boolean)
     value.
 
     It can be frozen (to allow signatures to be calculated), but the other
@@ -1249,7 +1269,7 @@ class TroveRefsFilesStream(dict, streams.InfoStream):
     entry maps a pathId to a (path, fileId, version) tuple.
 
     It can be frozen (to allow signatures to be calculated), but the other
-    stream methods are not provided. The frozen form is slightly more 
+    stream methods are not provided. The frozen form is slightly more
     complicated then probably seems necessary, but it's designed to allow more
     information to be added to each entry if it becomes necessary without
     affecting old troves (so the signatures of old troves will still be
@@ -1318,33 +1338,33 @@ class Trove(streams.StreamSet):
     troves but no files. While this object allows any mix of file and
     package inclusion, in practice conary doesn't allow it.
 
-    Trove is a stream primarily to allow it to be frozen and have a signature 
-    computed. It does provide a nice level of consistency as well. If it were 
-    a true stream, diff() would return a string instead of an object (a 
+    Trove is a stream primarily to allow it to be frozen and have a signature
+    computed. It does provide a nice level of consistency as well. If it were
+    a true stream, diff() would return a string instead of an object (a
     TroveChangeSet), but that string would be difficult to handle (and
     Conary often directly manipulates TroveChangeSet objects))
     """
-    streamDict = { 
-        _STREAM_TRV_NAME          : 
+    streamDict = {
+        _STREAM_TRV_NAME          :
                     (SMALL, streams.StringStream,        "name"         ),
-        _STREAM_TRV_VERSION       : 
-                    (SMALL, streams.FrozenVersionStream, "version"      ), 
-        _STREAM_TRV_FLAVOR        : 
-                    (LARGE, streams.FlavorsStream,       "flavor"       ), 
-        _STREAM_TRV_PROVIDES      : 
-                    (LARGE, streams.DependenciesStream,  "provides"     ), 
-        _STREAM_TRV_REQUIRES      : 
-                    (LARGE, streams.DependenciesStream,  "requires"     ), 
-        _STREAM_TRV_CHANGELOG     : 
-                    (LARGE, changelog.ChangeLog,         "changeLog"    ), 
-        _STREAM_TRV_TROVEINFO     : 
-                    (LARGE, TroveInfo,                   "troveInfo"    ), 
-        _STREAM_TRV_STRONG_TROVES : 
-                    (LARGE, TroveRefsTrovesStream,       "strongTroves" ), 
-        _STREAM_TRV_WEAK_TROVES   : 
-                    (LARGE, TroveRefsTrovesStream,       "weakTroves"   ), 
-        _STREAM_TRV_FILES         : 
-                    (LARGE, TroveRefsFilesStream,        "idMap"        ), 
+        _STREAM_TRV_VERSION       :
+                    (SMALL, streams.FrozenVersionStream, "version"      ),
+        _STREAM_TRV_FLAVOR        :
+                    (LARGE, streams.FlavorsStream,       "flavor"       ),
+        _STREAM_TRV_PROVIDES      :
+                    (LARGE, streams.DependenciesStream,  "provides"     ),
+        _STREAM_TRV_REQUIRES      :
+                    (LARGE, streams.DependenciesStream,  "requires"     ),
+        _STREAM_TRV_CHANGELOG     :
+                    (LARGE, changelog.ChangeLog,         "changeLog"    ),
+        _STREAM_TRV_TROVEINFO     :
+                    (LARGE, TroveInfo,                   "troveInfo"    ),
+        _STREAM_TRV_STRONG_TROVES :
+                    (LARGE, TroveRefsTrovesStream,       "strongTroves" ),
+        _STREAM_TRV_WEAK_TROVES   :
+                    (LARGE, TroveRefsTrovesStream,       "weakTroves"   ),
+        _STREAM_TRV_FILES         :
+                    (LARGE, TroveRefsFilesStream,        "idMap"        ),
         _STREAM_TRV_TYPE          :
                     (SMALL, ByteStream,                  "type"         ),
         _STREAM_TRV_REDIRECTS     :
@@ -1394,7 +1414,7 @@ class Trove(streams.StreamSet):
         """
         sha1_orig = self.troveInfo.sigs.sha1()
         self.computeDigests()
-        assert(skipIntegrityChecks or not sha1_orig or 
+        assert(skipIntegrityChecks or not sha1_orig or
                sha1_orig == self.troveInfo.sigs.sha1())
 
         self.troveInfo.sigs.sign(keyId)
@@ -1459,7 +1479,7 @@ class Trove(streams.StreamSet):
 
         The highest trust level verified is return along with the list of
         keys which were unavailable. A trust level of zero means no trusted
-        keys were available. Invalid signatures raise 
+        keys were available. Invalid signatures raise
         DigitalSignatureVerificationError.
 
         @param threshold: trust level required; trust levels below this result
@@ -1526,7 +1546,7 @@ class Trove(streams.StreamSet):
                         'is needed for: %s', ', '.join(missingKeys))
         if len(badFingerprints):
             raise DigitalSignatureVerificationError(
-                    "Trove signatures made by the following keys are bad: %s" 
+                    "Trove signatures made by the following keys are bad: %s"
                             % (' '.join(badFingerprints)))
         if maxTrust < threshold:
             if untrustedKeys:
@@ -1539,7 +1559,7 @@ class Trove(streams.StreamSet):
                         (self.getName(), ', '.join(
                             "%s" % x[-8:] for x in sorted(untrustedKeys))))
             raise DigitalSignatureVerificationError(
-                    "Trove does not meet minimum trust level: %s" 
+                    "Trove does not meet minimum trust level: %s"
                             % self.getName())
         return maxTrust, missingKeys, untrustedKeys
 
@@ -1560,7 +1580,7 @@ class Trove(streams.StreamSet):
         """
         Recomputes the sha1 signature of this trove.
 
-        @param store: The newly computed sha1 is stored as the sha1 for this 
+        @param store: The newly computed sha1 is stored as the sha1 for this
         trove.
         @type store: boolean
         @rtype: string
@@ -1629,7 +1649,7 @@ class Trove(streams.StreamSet):
     @api.publicApi
     def getName(self):
         return self.name()
-    
+
     @api.publicApi
     def getVersion(self):
         return self.version()
@@ -1672,10 +1692,14 @@ class Trove(streams.StreamSet):
         not be copied.
         @type filteredKeyValues: iterable
         """
+        skipSet = set(skipSet or [])
+        skipSet.add('sizeOverride')
         items = metadata.flatten(skipSet=skipSet,
                                  filteredKeyValues=filteredKeyValues)
-        self.troveInfo.metadata = Metadata()
-        self.troveInfo.metadata.addItems(items)
+        # we only copy the metadata if acutally has some data in it
+        if [x for x in items if x.keys()]:
+            self.troveInfo.metadata = Metadata()
+            self.troveInfo.metadata.addItems(items)
 
     def getFactory(self):
         return self.troveInfo.factory()
@@ -1687,7 +1711,7 @@ class Trove(streams.StreamSet):
         self.version.set(version)
 
     def changeChangeLog(self, cl):
-	self.changeLog.thaw(cl.freeze())
+        self.changeLog.thaw(cl.freeze())
 
     def changeFlavor(self, flavor):
         self.flavor.set(flavor)
@@ -1726,6 +1750,10 @@ class Trove(streams.StreamSet):
         epoch = hdr.get(rpmhelper.EPOCH, [None])[0]
         if epoch is not None:
             self.troveInfo.capsule.rpm.epoch.set(epoch)
+        sha1header = hdr.get(rpmhelper.SIG_SHA1, None)
+        if sha1header is not None:
+            self.troveInfo.capsule.rpm.sha1header.set(
+                sha1helper.sha1FromString(sha1header))
 
         self.troveInfo.capsule.rpm.obsoletes.addFromHeader(hdr)
 
@@ -1759,24 +1787,24 @@ class Trove(streams.StreamSet):
         self.updateRawFile(pathId, dirName, baseName, version, fileId)
 
     def updateRawFile(self, pathId, dirName, baseName, version, fileId):
-	(origDir, origBase, origFileId, origVersion) = self.idMap[pathId]
+        (origDir, origBase, origFileId, origVersion) = self.idMap[pathId]
 
-	if baseName is None:
+        if baseName is None:
             dirName, baseName = origDir, origBase
 
-	if not version:
-	    version = origVersion
-	    
-	if not fileId:
-	    fileId = origFileId
-	    
-	self.idMap[pathId] = (dirName, baseName, fileId, version)
+        if not version:
+            version = origVersion
+
+        if not fileId:
+            fileId = origFileId
+
+        self.idMap[pathId] = (dirName, baseName, fileId, version)
 
     @api.developerApi
-    def removeFile(self, pathId):   
-	del self.idMap[pathId]
+    def removeFile(self, pathId):
+        del self.idMap[pathId]
 
-	#return self.idMap.iteritems()
+        #return self.idMap.iteritems()
 
     def removeAllFiles(self):
         self.idMap = TroveRefsFilesStream()
@@ -1801,10 +1829,10 @@ class Trove(streams.StreamSet):
 
     def getFile(self, pathId):
         x = self.idMap[pathId]
-	return (os.path.join(x[0], x[1]), x[2], x[3])
+        return (os.path.join(x[0], x[1]), x[2], x[3])
 
     def hasFile(self, pathId):
-	return self.idMap.has_key(pathId)
+        return self.idMap.has_key(pathId)
 
     def hasFiles(self):
         return len(self.idMap) != 0
@@ -1814,61 +1842,61 @@ class Trove(streams.StreamSet):
 
     def addTrove(self, name, version, flavor, presentOkay = False,
                  byDefault = True, weakRef = False):
-	"""
-	Adds a single version of a trove.
+        """
+        Adds a single version of a trove.
 
-	@param name: name of the trove
-	@type name: str
-	@param version: version of the trove
-	@type version: versions.Version
-	@param flavor: flavor of the trove to include
-	@type flavor: deps.deps.Flavor
-	@param presentOkay: replace if this is a duplicate, don't complain
-	@type presentOkay: boolean
-	"""
+        @param name: name of the trove
+        @type name: str
+        @param version: version of the trove
+        @type version: versions.Version
+        @param flavor: flavor of the trove to include
+        @type flavor: deps.deps.Flavor
+        @param presentOkay: replace if this is a duplicate, don't complain
+        @type presentOkay: boolean
+        """
         if weakRef:
             troveGroup = self.weakTroves
         else:
             troveGroup = self.strongTroves
         key = (name, version, flavor)
-	if not presentOkay and key in troveGroup:
-	    raise TroveError, "duplicate trove included in %s" % self.name()
+        if not presentOkay and key in troveGroup:
+            raise TroveError, "duplicate trove included in %s" % self.name()
 
         troveGroup[key] = byDefault
 
     def delTrove(self, name, version, flavor, missingOkay, weakRef = False):
-	"""
-	Removes a single version of a trove.
+        """
+        Removes a single version of a trove.
 
-	@param name: name of the trove
-	@type name: str
-	@param version: version of the trove
-	@type version: versions.Version
-	@param flavor: flavor of the trove to include
-	@type flavor: deps.deps.Flavor
-	@param missingOkay: should we raise an error if the version isn't
-	part of this trove?
-	@type missingOkay: boolean
-	"""
+        @param name: name of the trove
+        @type name: str
+        @param version: version of the trove
+        @type version: versions.Version
+        @param flavor: flavor of the trove to include
+        @type flavor: deps.deps.Flavor
+        @param missingOkay: should we raise an error if the version isn't
+        part of this trove?
+        @type missingOkay: boolean
+        """
         key = (name, version, flavor)
         if weakRef and key in self.weakTroves:
-	    del self.weakTroves[key]
-	elif not weakRef and key in self.strongTroves:
-	    del self.strongTroves[key]
-	elif missingOkay:
-	    pass
-	else:
-	    # FIXME, we should have better text here
-	    raise TroveError
+            del self.weakTroves[key]
+        elif not weakRef and key in self.strongTroves:
+            del self.strongTroves[key]
+        elif missingOkay:
+            pass
+        else:
+            # FIXME, we should have better text here
+            raise TroveError
 
     @api.publicApi
     def iterTroveList(self, strongRefs = False, weakRefs = False):
-	"""
-	Returns a generator for (name, version, flavor) ordered pairs, 
-	listing all of the trove in the group, along with their versions. 
+        """
+        Returns a generator for (name, version, flavor) ordered pairs,
+        listing all of the trove in the group, along with their versions.
 
-	@rtype: list
-	"""
+        @rtype: list
+        """
         assert(strongRefs or weakRefs)
         if strongRefs:
             for key in self.strongTroves.iterkeys():
@@ -1879,11 +1907,11 @@ class Trove(streams.StreamSet):
                 yield key
 
     def iterTroveListInfo(self):
-	"""
-	Returns a generator for (name, version, flavor), byDefault, isStrong
+        """
+        Returns a generator for (name, version, flavor), byDefault, isStrong
 
-	@rtype: list
-	"""
+        @rtype: list
+        """
 
         for item, byDefault in self.strongTroves.iteritems():
             yield item, byDefault, True
@@ -1921,36 +1949,36 @@ class Trove(streams.StreamSet):
 
     def hasTrove(self, name, version, flavor):
         key = (name, version, flavor)
-	return (key in self.strongTroves) or (key in self.weakTroves)
+        return (key in self.strongTroves) or (key in self.weakTroves)
 
     # returns a dictionary mapping a pathId to a (path, version, trvName) tuple
-    def applyChangeSet(self, trvCs, skipIntegrityChecks = False, 
+    def applyChangeSet(self, trvCs, skipIntegrityChecks = False,
                        allowIncomplete = False, skipFiles = False,
                        needNewFileMap = False):
-	"""
-	Updates the trove from the changes specified in a change set.
-	Returns a dictionary, indexed by pathId, which gives the
-	(path, version, troveName) for that file. This method assumes
+        """
+        Updates the trove from the changes specified in a change set.
+        Returns a dictionary, indexed by pathId, which gives the
+        (path, version, troveName) for that file. This method assumes
         there are no conflicts.
 
-	@param trvCs: change set
-	@type trvCs: TroveChangeSet
+        @param trvCs: change set
+        @type trvCs: TroveChangeSet
         @param skipIntegrityChecks: Normally sha1 signatures are confirmed
         after a merge. In some cases (notably where version numbers are
         being changed), this check needs to be skipped.
         @type skipIntegrityChecks: boolean
-	@rtype: dict
-	"""
+        @rtype: dict
+        """
 
         # If we skipFiles, we have to also skipIntegrityChecks
         assert(not skipFiles or skipIntegrityChecks)
 
-	self.type.set(trvCs.getType())
+        self.type.set(trvCs.getType())
         if self.type():
             # we don't explicitly remove files for non-normal troves
             self.idMap = TroveRefsFilesStream()
 
-	fileMap = {}
+        fileMap = {}
 
         if not skipFiles:
             for (pathId, dirName, baseName, fileId, fileVersion) in \
@@ -1967,11 +1995,6 @@ class Trove(streams.StreamSet):
                                    fileId)
                 # look up the path/version in self.idMap as the ones here
                 # could be None
-                if baseName is not None:
-                    path = os.path.join(dirName, baseName)
-                else:
-                    path = None
-
                 if needNewFileMap:
                     fileMap[pathId] = (None, fileVersion, fileId, self.name(),
                                        os.path.join(oldDir, oldBase),
@@ -1980,15 +2003,15 @@ class Trove(streams.StreamSet):
             for pathId in trvCs.getOldFileList():
                 self.removeFile(pathId)
 
-	self.mergeTroveListChanges(
+        self.mergeTroveListChanges(
               trvCs.iterChangedTroves(strongRefs = True,  weakRefs = False),
               trvCs.iterChangedTroves(strongRefs = False, weakRefs = True))
-	self.flavor.set(trvCs.getNewFlavor())
-	self.changeLog = trvCs.getChangeLog()
-	self.setProvides(trvCs.getProvides())
-	self.setRequires(trvCs.getRequires())
-	self.changeVersion(trvCs.getNewVersion())
-	self.changeFlavor(trvCs.getNewFlavor())
+        self.flavor.set(trvCs.getNewFlavor())
+        self.changeLog = trvCs.getChangeLog()
+        self.setProvides(trvCs.getProvides())
+        self.setRequires(trvCs.getRequires())
+        self.changeVersion(trvCs.getNewVersion())
+        self.changeFlavor(trvCs.getNewFlavor())
 
         self.redirects.reset()
         for info in trvCs.getRedirects().iter():
@@ -2025,7 +2048,7 @@ class Trove(streams.StreamSet):
            TROVE_VERSION_1_1 < self.troveInfo.troveVersion():
             self.troveInfo.incomplete.set(1)
         elif self.troveInfo.incomplete() is None:
-            # old troves don't have an incomplete flag - we want it to 
+            # old troves don't have an incomplete flag - we want it to
             # be set to either 1 or 0 for all troves.
             self.troveInfo.incomplete.set(0)
 
@@ -2034,7 +2057,7 @@ class Trove(streams.StreamSet):
         # keeping them off).
         if self.troveInfo.incomplete():
             pass
-            # we don't warn here because the warning would show up 
+            # we don't warn here because the warning would show up
             # everywhere we call getTrove as opposed to only when installing
             # from conary.util import log
             #log.warning('Not checking integrity of trove %s with new schema version %s' % (self.getName(), self.troveInfo.troveVersion()))
@@ -2049,10 +2072,10 @@ class Trove(streams.StreamSet):
                 #log.warning('changeset does not contain a sha1 checksum')
                 pass
 
-        assert((not self.idMap) or 
+        assert((not self.idMap) or
                (not(self.strongTroves and not self.weakTroves)))
 
-	return fileMap
+        return fileMap
 
     def mergeTroveListChanges(self, strongChangeList, weakChangeList,
                               redundantOkay = False):
@@ -2068,7 +2091,7 @@ class Trove(streams.StreamSet):
         changes; this is the same as returned by
         TroveChangeSet.iterChangedTroves(strongRefs=False, weakRefs=True)
         @type weakChangeList: (name, list) tuple
-        @param redundantOkay: Redundant changes are normally considered 
+        @param redundantOkay: Redundant changes are normally considered
         errors
         @type redundantOkay: boolean
         """
@@ -2092,26 +2115,26 @@ class Trove(streams.StreamSet):
                         troveDict[(name, version, flavor)] = byDefault
                     else:
                         assert(0)
-    
+
     def __eq__(self, them):
-	"""
-	Compare two troves for equality. This is an expensive operation,
-	and shouldn't really be done. It's handy for testing the database
-	though.
-	"""
+        """
+        Compare two troves for equality. This is an expensive operation,
+        and shouldn't really be done. It's handy for testing the database
+        though.
+        """
         if them is None:
             return False
-	if self.getName() != them.getName():
-	    return False
-	if self.getVersion() != them.getVersion():
-	    return False
-	if self.getFlavor() != them.getFlavor():
-	    return False
-	if self.type() != them.type():
-	    return False
+        if self.getName() != them.getName():
+            return False
+        if self.getVersion() != them.getVersion():
+            return False
+        if self.getFlavor() != them.getFlavor():
+            return False
+        if self.type() != them.type():
+            return False
 
-	(csg, pcl, fcl) = self.diff(them)
-	return (not pcl) and (not fcl) and (not csg.getOldFileList()) \
+        (csg, pcl, fcl) = self.diff(them)
+        return (not pcl) and (not fcl) and (not csg.getOldFileList()) \
             and self.getRequires() == them.getRequires() \
             and self.getProvides() == them.getProvides() \
             and self.getTroveInfo() == them.getTroveInfo() \
@@ -2120,37 +2143,37 @@ class Trove(streams.StreamSet):
 
 
     def __ne__(self, them):
-	return not self == them
+        return not self == them
 
     @api.publicApi
     def diff(self, them, absolute = 0, getPathHashes = None):
-	"""
-	Generates a change set between them (considered the old
-	version) and this instance. We return the change set, a list
-	of other trove diffs which should be included for this change
-	set to be complete, and a list of file change sets which need
-	to be included.  The list of trove changes is of the form
-	(trvName, oldVersion, newVersion, oldFlavor, newFlavor).  If
-	absolute is True, oldVersion is always None and absolute diffs
-	can be used.  Otherwise, absolute versions are not necessary,
-	and oldVersion of None means the trove is new. The list of
-	file changes is a list of (pathId, oldVersion, newVersion,
-	oldPath, newPath) tuples, where newPath is the path to the
-	file in this trove.
+        """
+        Generates a change set between them (considered the old
+        version) and this instance. We return the change set, a list
+        of other trove diffs which should be included for this change
+        set to be complete, and a list of file change sets which need
+        to be included.  The list of trove changes is of the form
+        (trvName, oldVersion, newVersion, oldFlavor, newFlavor).  If
+        absolute is True, oldVersion is always None and absolute diffs
+        can be used.  Otherwise, absolute versions are not necessary,
+        and oldVersion of None means the trove is new. The list of
+        file changes is a list of (pathId, oldVersion, newVersion,
+        oldPath, newPath) tuples, where newPath is the path to the
+        file in this trove.
 
-	@param them: object to generate a change set from (may be None)
-	@type them: Group
-	@param absolute: tells if this is a new group or an absolute change
-	when them is None
-	@type absolute: boolean
-	@rtype: (TroveChangeSet, fileChangeList, troveChangeList)
-	"""
+        @param them: object to generate a change set from (may be None)
+        @type them: Group
+        @param absolute: tells if this is a new group or an absolute change
+        when them is None
+        @type absolute: boolean
+        @rtype: (TroveChangeSet, fileChangeList, troveChangeList)
+        """
 
         def _iterInfo(d, name):
             for flavor, verList in d[name].iteritems():
                 for ver in verList:
                     yield (name, ver, flavor)
-        
+
         def _infoByBranch(infoSet):
             byBr = {}
             for info in infoSet:
@@ -2174,7 +2197,7 @@ class Trove(streams.StreamSet):
 
             for key in sameSet:
                 if ourDict[key] != theirDict[key]:
-                    chgSet.changedTrove(key[0], key[1], key[2], ourDict[key], 
+                    chgSet.changedTrove(key[0], key[1], key[2], ourDict[key],
                                         weakRef = weakRefs)
 
             for key in addedSet:
@@ -2187,21 +2210,21 @@ class Trove(streams.StreamSet):
 
         # def diff() begins here
 
-	assert(not them or self.name() == them.name())
-        assert((not self.idMap) or (not self.strongTroves) or 
+        assert(not them or self.name() == them.name())
+        assert((not self.idMap) or (not self.strongTroves) or
                (not self.weakTroves))
         assert((not them) or (not them.idMap) or (not them.strongTroves or
                (not them.weakTroves)))
 
-	# find all of the file ids which have been added, removed, and
-	# stayed the same
-	if them:
+        # find all of the file ids which have been added, removed, and
+        # stayed the same
+        if them:
             troveInfoDiff = self.troveInfo.diff(them.troveInfo)
             if troveInfoDiff is None:
                 troveInfoDiff = ""
 
-	    themMap = them.idMap
-	    chgSet = TroveChangeSet(self.name(), self.changeLog,
+            themMap = them.idMap
+            chgSet = TroveChangeSet(self.name(), self.changeLog,
                                     them.getVersion(),
                                     self.getVersion(),
                                     them.getFlavor(), self.getFlavor(),
@@ -2209,29 +2232,29 @@ class Trove(streams.StreamSet):
                                     absolute = False,
                                     type = self.type(),
                                     troveInfoDiff = troveInfoDiff)
-	else:
-	    themMap = {}
-	    chgSet = TroveChangeSet(self.name(), self.changeLog,
-				      None, self.getVersion(),
-				      None, self.getFlavor(),
+        else:
+            themMap = {}
+            chgSet = TroveChangeSet(self.name(), self.changeLog,
+                                      None, self.getVersion(),
+                                      None, self.getFlavor(),
                                       None, self.getSigs(),
-				      absolute = absolute,
+                                      absolute = absolute,
                                       type = self.type(),
                                       troveInfoDiff = self.troveInfo.freeze())
 
         chgSet.setTroveInfo(self.troveInfo)
 
-	# dependency and flavor information is always included in total;
-	# this lets us do dependency checking w/o having to load troves
-	# on the client
+        # dependency and flavor information is always included in total;
+        # this lets us do dependency checking w/o having to load troves
+        # on the client
         chgSet.setRequires(self.requires())
         chgSet.setProvides(self.provides())
         chgSet.setRedirects(self.redirects)
 
-	removedIds = []
-	addedIds = []
-	sameIds = {}
-	filesNeeded = []
+        removedIds = []
+        addedIds = []
+        sameIds = {}
+        filesNeeded = []
 
         if not self.type():
             # we just ignore file information for nonnormal troves
@@ -2270,13 +2293,13 @@ class Trove(streams.StreamSet):
 
                 if selfVersion != themVersion or themFileId != selfFileId:
                     newVersion = selfVersion
-                    filesNeeded.append((pathId, themFileId, themVersion, 
+                    filesNeeded.append((pathId, themFileId, themVersion,
                                         selfFileId, selfVersion))
 
                 if newPath or newVersion:
                     chgSet.changedFile(pathId, newPath, selfFileId, newVersion)
 
-	# now handle the troves we include
+        # now handle the troves we include
         if them:
             troveSetDiff(self.strongTroves, them.strongTroves, False)
             troveSetDiff(self.weakTroves, them.weakTroves, True)
@@ -2284,8 +2307,8 @@ class Trove(streams.StreamSet):
             troveSetDiff(self.strongTroves, None, False)
             troveSetDiff(self.weakTroves, None, True)
 
-	added = {}
-	removed = {}
+        added = {}
+        removed = {}
         oldTroves = []
 
         for name, chgList in \
@@ -2327,7 +2350,7 @@ class Trove(streams.StreamSet):
 
         def _makeMatch(name, oldInfo, newInfo, trvList,
                        addedList, removedList):
-            """ 
+            """
                 NOTE: this function has side effects!
                 Removes items from global addedDict and removedDict as
                 necessary to avoid the info from being used in another
@@ -2380,7 +2403,7 @@ class Trove(streams.StreamSet):
                 If the name is for a collection, then the path hashes
                 for that collection are based on all the components
                 for that collection (that are in this update).
-            """ 
+            """
             if troveIsCollection(name):
                 newTroves = (addedByPackage[name, x[0], x[1]] for x in allAdded)
                 newTroves = list(itertools.chain(*newTroves))
@@ -2415,7 +2438,7 @@ class Trove(streams.StreamSet):
                     continue
                 newHash = newHashes[newInfo]
 
-                # we store overlaps by version, flavor not by  name, version, 
+                # we store overlaps by version, flavor not by  name, version,
                 # flavor
                 newInfo = (newInfo[1], newInfo[2])
                 for oldInfo in oldTroves:
@@ -2424,7 +2447,6 @@ class Trove(streams.StreamSet):
                     oldHash = oldHashes[oldInfo]
                     oldInfo = (oldInfo[1], oldInfo[2])
                     if newHash & oldHash:
-                        found = True
                         # just mark by version, flavor
                         overlaps.setdefault(newInfo, [])
                         overlaps[newInfo].append(oldInfo)
@@ -2441,7 +2463,7 @@ class Trove(streams.StreamSet):
 
                 Finds matches for troves based on path hashes.  Also finds
                 troves that match paths with other packages _outside_ of the
-                given lists, and returns those lists as "delayed" troves - 
+                given lists, and returns those lists as "delayed" troves -
                 troves that if possible should not be matched up within the
                 given list.
             """
@@ -2465,7 +2487,7 @@ class Trove(streams.StreamSet):
 
 
                 # matches that are _outside_ of this compatibility
-                # check are a good reason to not pick a package if 
+                # check are a good reason to not pick a package if
                 # otherwise the selection would be arbitrary
                 outMatches = [ x for x in removedPathMatches
                                if x not in inMatches ]
@@ -2473,7 +2495,7 @@ class Trove(streams.StreamSet):
                         == len(removedPathMatches))
 
                 # find matches from the removed trove to other added troves.
-                # Any such matches means we can't use the pathhash info 
+                # Any such matches means we can't use the pathhash info
                 # reliably.
                 reverseMatches = []
                 for inMatch in inMatches:
@@ -2543,7 +2565,7 @@ class Trove(streams.StreamSet):
 
             changePair = []
 
-            # score every new flavor against every old flavor 
+            # score every new flavor against every old flavor
             # to find the best match.  Doing anything less
             # may result in incorrect flavor lineups
             scoredValues = []
@@ -2555,9 +2577,9 @@ class Trove(streams.StreamSet):
             scoredValues.sort(key = lambda x: x[0], reverse=True)
 
             # go through scored values in order, from highest to lowest,
-            # picking off 
+            # picking off
             for (score, oldFlavor, newFlavor) in scoredValues:
-                if (newFlavor not in addedByFlavor 
+                if (newFlavor not in addedByFlavor
                     or oldFlavor not in removedByFlavor):
                     continue
                 newVersions = addedByFlavor.pop(newFlavor)
@@ -2612,7 +2634,7 @@ class Trove(streams.StreamSet):
             # pass 1, find things on the same branch
             for newInfo, oldInfoList in sorted(byLabel.items(), reverse=True):
                 # take the newest (by timestamp) item from oldInfoList which
-                # hasn't been matched to anything else 
+                # hasn't been matched to anything else
                 oldInfoList.sort(reverse=True)
 
                 for revision, oldInfo in oldInfoList:
@@ -2678,18 +2700,18 @@ class Trove(streams.StreamSet):
             """
             if not addedList or not removedList:
                 return []
-            addDelays, removeDelays = _checkPathHashMatch(name, addedList, 
-                                          removedList, 
+            addDelays, removeDelays = _checkPathHashMatch(name, addedList,
+                                          removedList,
                                           trvList,
                                           pathHashOverlap,
                                           scoreCache,
                                           requireCompatible=requireCompatible)
-            # Now we go through a whole bunch of work to deal with this 
+            # Now we go through a whole bunch of work to deal with this
             # case:  two foo:runtimes, 1 and 2,  exist on branch a, but only
             # one new foo:runtime is being updated on branch a.  However,
-            # a second foo:runtime on branch b that shares paths with a/1 
+            # a second foo:runtime on branch b that shares paths with a/1
             # is also being added.
-            # We match by branch first, so what we need to do is _delay_ 
+            # We match by branch first, so what we need to do is _delay_
             # matching a/1 if possible, that is prefer to match a/2 to match
             # with the new update on a.
             # In this case, a/1 will be in the removeDelays lists.
@@ -2697,8 +2719,8 @@ class Trove(streams.StreamSet):
             # We have 2 potential overlaps between a and b, but only
             # one slot for delays.  In that case, we just drop the delays
             # - better than trying to make the algorithm more complicated
-            # by matching between all the troves, and then remove the worst 
-            # matches that are also delayed troves and delay them, allowing 
+            # by matching between all the troves, and then remove the worst
+            # matches that are also delayed troves and delay them, allowing
             # them to match up with the trove we want (commented out code
             # to do that is below, just in case).
 
@@ -2721,12 +2743,12 @@ class Trove(streams.StreamSet):
                 addDelays = []
                 rematchesNeeded = max(len(removeDelays) - possibleDelays, 0)
                 if not rematchesNeeded:
-                    newRemovedList = [ x for x in removedList 
+                    newRemovedList = [ x for x in removedList
                                        if x not in removeDelays]
                 # else bail - we don't have enough slots to delay
                 # all the troves we want to delay.
 
-            # NOTE: turn off the algorithm below, which tries to handle 
+            # NOTE: turn off the algorithm below, which tries to handle
             # dealing with only have one slot available for delays and
             # two troves to delay.  It's unlikely to occur and not worth
             # dealing with afaict.
@@ -2843,7 +2865,7 @@ class Trove(streams.StreamSet):
                 continue
 
             if getPathHashes:
-                overlaps = _getPathHashOverlaps(name, 
+                overlaps = _getPathHashOverlaps(name,
                                                 addedDict[name],
                                                 removedDict[name],
                                                 addedByPackage,
@@ -2929,6 +2951,11 @@ class Trove(streams.StreamSet):
         return self.troveInfo
 
     def getSize(self):
+        sizeOverrides = [x.sizeOverride() for x in
+                         self.troveInfo.metadata.flatten()
+                         if x.sizeOverride() is not None]
+        if sizeOverrides:
+            return sizeOverrides[-1]
         return self.troveInfo.size()
 
     def setSize(self, sz):
@@ -2936,7 +2963,7 @@ class Trove(streams.StreamSet):
 
     def setCompatibilityClass(self, theClass):
         self.troveInfo.compatibilityClass.set(theClass)
- 
+
     @api.publicApi
     def getCompatibilityClass(self):
         c = self.troveInfo.compatibilityClass()
@@ -3016,7 +3043,7 @@ class Trove(streams.StreamSet):
             self.troveInfo.buildReqs.add(name, ver, flavor)
 
     def getBuildRequirements(self):
-        return [ (x[1].name(), x[1].version(), x[1].flavor()) 
+        return [ (x[1].name(), x[1].version(), x[1].flavor())
                          for x in self.troveInfo.buildReqs.iterAll() ]
 
     def setPolicyProviders(self, itemList):
@@ -3024,7 +3051,7 @@ class Trove(streams.StreamSet):
             self.troveInfo.policyProviders.add(name, ver, release)
 
     def getPolicyProviders(self):
-        return [ (x[1].name(), x[1].version(), x[1].flavor()) 
+        return [ (x[1].name(), x[1].version(), x[1].flavor())
                          for x in self.troveInfo.policyProviders.iterAll() ]
 
     def setLoadedTroves(self, itemList):
@@ -3032,7 +3059,7 @@ class Trove(streams.StreamSet):
             self.troveInfo.loadedTroves.add(name, ver, release)
 
     def getLoadedTroves(self):
-        return [ (x[1].name(), x[1].version(), x[1].flavor()) 
+        return [ (x[1].name(), x[1].version(), x[1].flavor())
                  for x in self.troveInfo.loadedTroves.iterAll() ]
 
     def setDerivedFrom(self, itemList):
@@ -3060,7 +3087,7 @@ class Trove(streams.StreamSet):
         return [ (x[1].name(), x[1].version(), x[1].flavor())
                  for x in self.troveInfo.troveCopiedFrom.iterAll() ]
 
-    def __init__(self, name, version = None, flavor = None, changeLog = None, 
+    def __init__(self, name, version = None, flavor = None, changeLog = None,
                  type = TROVE_TYPE_NORMAL, skipIntegrityChecks = False,
                  setVersion = True):
         streams.StreamSet.__init__(self)
@@ -3069,7 +3096,7 @@ class Trove(streams.StreamSet):
             trvCs = name
             assert(not trvCs.getOldVersion())
             self.name.set(trvCs.getName())
-            self.applyChangeSet(trvCs, skipIntegrityChecks = 
+            self.applyChangeSet(trvCs, skipIntegrityChecks =
                                             skipIntegrityChecks)
         else:
             if name.count(':') > 1:
@@ -3091,7 +3118,7 @@ class Trove(streams.StreamSet):
             if setVersion:
                 if type == TROVE_TYPE_REMOVED:
                     self.troveInfo.troveVersion.set(TROVE_VERSION_1_1)
-                elif type == TROVE_TYPE_REDIRECT and name.startswith('group-'):
+                elif type == TROVE_TYPE_REDIRECT and troveIsGroup(name):
                     self.troveInfo.troveVersion.set(TROVE_VERSION_1_1)
                 else:
                     self.troveInfo.troveVersion.set(TROVE_VERSION)
@@ -3116,51 +3143,53 @@ class TroveWithFileObjects(Trove):
 
 class ReferencedTroveSet(dict, streams.InfoStream):
 
-    def freeze(self, skipSet = {}):
-	l = []
-	for name, troveList in sorted(self.iteritems()):
-	    subL = []
-	    for (change, version, flavor, byDefault) in sorted(troveList):
-		version = version.freeze()
-		if flavor is None or flavor == deps.Flavor():
-		    flavor = "-"
-		else:
-		    flavor = flavor.freeze()
+    __slots__ = ()
 
-		subL.append(change)
-		subL.append(version)
-		subL.append(flavor)
+    def freeze(self, skipSet = {}):
+        l = []
+        for name, troveList in sorted(self.iteritems()):
+            subL = []
+            for (change, version, flavor, byDefault) in sorted(troveList):
+                version = version.freeze()
+                if flavor is None or flavor == deps.Flavor():
+                    flavor = "-"
+                else:
+                    flavor = flavor.freeze()
+
+                subL.append(change)
+                subL.append(version)
+                subL.append(flavor)
                 if not byDefault:
                     subL.append('0')
                 else:
                     subL.append('1')
 
-	    l.append(name)
-	    l += subL
-	    l.append("")
+            l.append(name)
+            l += subL
+            l.append("")
 
-	return "\0".join(l)
+        return "\0".join(l)
 
     def thaw(self, data):
-	if not data: return
-	self.clear()
+        if not data: return
+        self.clear()
 
-	l = data.split("\0")
-	i = 0
+        l = data.split("\0")
+        i = 0
 
-	while i < len(l):
-	    name = l[i]
-	    self[name] = []
+        while i < len(l):
+            name = intern(l[i])
+            self[name] = []
 
-	    i += 1
-	    while l[i]:
+            i += 1
+            while l[i]:
                 change, version, flavor, byDefFlag = l[i:i+4]
                 version = versions.ThawVersion(version)
 
-		if flavor == "-":
-		    flavor = deps.Flavor()
-		else:
-		    flavor = deps.ThawFlavor(flavor)
+                if flavor == "-":
+                    flavor = deps.Flavor()
+                else:
+                    flavor = deps.ThawFlavor(flavor)
 
                 if change == '-':
                     byDefault = None
@@ -3169,76 +3198,76 @@ class ReferencedTroveSet(dict, streams.InfoStream):
                 else:
                     byDefault = True
 
-		self[name].append((change, version, flavor, byDefault))
-		i += 4
+                self[name].append((change, version, flavor, byDefault))
+                i += 4
 
-	    i += 1
+            i += 1
 
     def __init__(self, data = None):
-	dict.__init__(self)
-	if data is not None:
-	    self.thaw(data)
+        dict.__init__(self)
+        if data is not None:
+            self.thaw(data)
 
 class OldFileStream(list, streams.InfoStream):
 
     def freeze(self, skipSet = {}):
-	return "".join(self)
+        return "".join(self)
 
     def thaw(self, data):
-	i = 0
-	del self[:]
-	while i < len(data):
-	    self.append(data[i:i+16])
-	    i += 16
-	assert(i == len(data))
+        i = 0
+        del self[:]
+        while i < len(data):
+            self.append(data[i:i+16])
+            i += 16
+        assert(i == len(data))
 
     def __init__(self, data = None):
-	list.__init__(self)
-	if data is not None:
-	    self.thaw(data)
+        list.__init__(self)
+        if data is not None:
+            self.thaw(data)
 
 class ReferencedFileList(list, streams.InfoStream):
 
     def freeze(self, skipSet = {}):
-	l = []
+        l = []
 
-	for (pathId, dirName, baseName, fileId, version) in self:
-	    l.append(pathId)
+        for (pathId, dirName, baseName, fileId, version) in self:
+            l.append(pathId)
             if baseName is None:
                 path = ""
             else:
                 path = os.path.join(dirName, baseName)
 
-	    l.append(struct.pack("!H", len(path)))
-	    l.append(path)
+            l.append(struct.pack("!H", len(path)))
+            l.append(path)
 
-	    if not fileId:
-		fileId = ""
+            if not fileId:
+                fileId = ""
 
-	    l.append(struct.pack("!H", len(fileId)))
-	    l.append(fileId)
+            l.append(struct.pack("!H", len(fileId)))
+            l.append(fileId)
 
-	    if version:
-		version = version.asString()
-	    else:
-		version = ""
+            if version:
+                version = version.asString()
+            else:
+                version = ""
 
-	    l.append(struct.pack("!H", len(version)))
-	    l.append(version)
+            l.append(struct.pack("!H", len(version)))
+            l.append(version)
 
-	return "".join(l)
+        return "".join(l)
 
     def thaw(self, data):
-	del self[:]
+        del self[:]
 
         # this lastVerStr check bypasses the normal version cache whenever
         # there are two sequential versions which are the same; this is a
         # massive speedup for troves with many files (90% or better)
         lastVerStr = None;
-
+        lastVer = None
         i = 0
         while i < len(data):
-            i, (pathId, path, fileId, verStr) = misc.unpack("!S16SHSHSH", i, 
+            i, (pathId, path, fileId, verStr) = misc.unpack("!S16SHSHSH", i,
                                                             data)
             if not path:
                 dirName = None
@@ -3266,18 +3295,18 @@ class ReferencedFileList(list, streams.InfoStream):
                          version))
 
     def __init__(self, data = None):
-	list.__init__(self)
-	if data is not None:
-	    self.thaw(data)
+        list.__init__(self)
+        if data is not None:
+            self.thaw(data)
 
-_STREAM_TCS_NAME	            =  0
-_STREAM_TCS_OLD_VERSION	            =  1
-_STREAM_TCS_NEW_VERSION	            =  2
-_STREAM_TCS_REQUIRES	            =  3
-_STREAM_TCS_PROVIDES	            =  4
-_STREAM_TCS_CHANGE_LOG	            =  5
-_STREAM_TCS_OLD_FILES	            =  6
-_STREAM_TCS_TYPE	            =  7
+_STREAM_TCS_NAME                    =  0
+_STREAM_TCS_OLD_VERSION             =  1
+_STREAM_TCS_NEW_VERSION             =  2
+_STREAM_TCS_REQUIRES                =  3
+_STREAM_TCS_PROVIDES                =  4
+_STREAM_TCS_CHANGE_LOG              =  5
+_STREAM_TCS_OLD_FILES               =  6
+_STREAM_TCS_TYPE                    =  7
 _STREAM_TCS_STRONG_TROVE_CHANGES    =  8
 _STREAM_TCS_NEW_FILES               =  9
 _STREAM_TCS_CHG_FILES               = 10
@@ -3297,8 +3326,8 @@ _TCS_TYPE_RELATIVE = 2
 
 class AbstractTroveChangeSet(streams.StreamSet):
 
-    streamDict = { 
-	_STREAM_TCS_NAME	: (SMALL, streams.StringStream, "name"       ),
+    streamDict = {
+        _STREAM_TCS_NAME        : (SMALL, streams.StringStream, "name"       ),
         _STREAM_TCS_OLD_VERSION : (SMALL, FrozenVersionStream,  "oldVersion" ),
         _STREAM_TCS_NEW_VERSION : (SMALL, FrozenVersionStream,  "newVersion" ),
         _STREAM_TCS_REQUIRES    : (LARGE, DependenciesStream,   "requires"   ),
@@ -3326,17 +3355,17 @@ class AbstractTroveChangeSet(streams.StreamSet):
                                 : (LARGE, streams.StringStream,
                                                         "extendedMetadata"   ),
     }
-
+    __slots__ = [ x[2] for x in streamDict.values() ]
     ignoreUnknown = True
 
     """
     Represents the changes between two troves and forms part of a
-    ChangeSet. 
+    ChangeSet.
     """
 
     @api.publicApi
     def isAbsolute(self):
-	return self.tcsType() == _TCS_TYPE_ABSOLUTE
+        return self.tcsType() == _TCS_TYPE_ABSOLUTE
 
     def newFile(self, pathId, path, fileId, version):
         dirName, baseName = os.path.split(path)
@@ -3351,10 +3380,10 @@ class AbstractTroveChangeSet(streams.StreamSet):
                             for x in self.newFiles]
 
     def oldFile(self, pathId):
-	self.oldFiles.append(pathId)
+        self.oldFiles.append(pathId)
 
     def getOldFileList(self):
-	return self.oldFiles
+        return self.oldFiles
 
     @api.publicApi
     def getName(self):
@@ -3363,7 +3392,7 @@ class AbstractTroveChangeSet(streams.StreamSet):
         @return: name of the trove.
         @rtype: string
         """
-	return self.name()
+        return self.name()
 
     def getTroveInfoDiff(self):
         return self.troveInfoDiff()
@@ -3493,8 +3522,6 @@ class AbstractTroveChangeSet(streams.StreamSet):
         if oldCompatibilityClass == thisCompatClass:
             return False
 
-        # FIXME: the rollbackScript variable below is never used.
-        rollbackScript = self.getPostRollbackScript()
         postRollback = self._getScriptObj(_TROVESCRIPTS_POSTROLLBACK)
 
         if postRollback is None or not postRollback.script():
@@ -3531,14 +3558,14 @@ class AbstractTroveChangeSet(streams.StreamSet):
             return None
 
     def getChangeLog(self):
-	return self.changeLog
+        return self.changeLog
 
     def changeOldVersion(self, version):
-	self.oldVersion.set(version)
+        self.oldVersion.set(version)
 
     def changeChangeLog(self, cl):
         assert(0)
-	self.changeLog.thaw(cl.freeze())
+        self.changeLog.thaw(cl.freeze())
 
     @api.publicApi
     def getOldVersion(self):
@@ -3548,7 +3575,7 @@ class AbstractTroveChangeSet(streams.StreamSet):
         @return: old version
         @rtype: conary.versions.Version object or None
         """
-	return self.oldVersion()
+        return self.oldVersion()
 
     @api.publicApi
     def getOldNameVersionFlavor(self):
@@ -3562,7 +3589,7 @@ class AbstractTroveChangeSet(streams.StreamSet):
         @return: new version
         @rtype: conary.versions.Version object
         """
-	return self.newVersion()
+        return self.newVersion()
 
     @api.publicApi
     def getNewNameVersionFlavor(self):
@@ -3609,55 +3636,55 @@ class AbstractTroveChangeSet(streams.StreamSet):
         return l
 
     def hasChangedFiles(self):
-        return (len(self.newFiles) + len(self.changedFiles) + 
+        return (len(self.newFiles) + len(self.changedFiles) +
                 len(self.oldFiles)) != 0
 
     def iterChangedTroves(self, strongRefs = True, weakRefs = False):
         if strongRefs:
-	    for x in self.strongTroves.iteritems():
+            for x in self.strongTroves.iteritems():
                 yield x
 
         if weakRefs:
-	    for x in self.weakTroves.iteritems():
+            for x in self.weakTroves.iteritems():
                 yield x
 
-    def newTroveVersion(self, name, version, flavor, byDefault, 
+    def newTroveVersion(self, name, version, flavor, byDefault,
                         weakRef = False):
-	"""
-	Adds a version of a troves which appeared in newVersion.
+        """
+        Adds a version of a troves which appeared in newVersion.
 
-	@param name: name of the trove
-	@type name: str
-	@param version: new version
-	@type version: versions.Version
-	@param flavor: new flavor
-	@type flavor: deps.deps.Flavor
+        @param name: name of the trove
+        @type name: str
+        @param version: new version
+        @type version: versions.Version
+        @param flavor: new flavor
+        @type flavor: deps.deps.Flavor
         @param byDefault: value of byDefault
         @param weakRef: is this a weak references?
         @type weakRef: boolean
         @type byDefault: boolean
-	"""
+        """
 
         if weakRef:
             l = self.weakTroves.setdefault(name, [])
         else:
             l = self.strongTroves.setdefault(name, [])
 
-	l.append(('+', version, flavor, byDefault))
+        l.append(('+', version, flavor, byDefault))
 
     def oldTroveVersion(self, name, version, flavor, weakRef = False):
-	"""
-	Adds a version of a trove which appeared in oldVersion.
+        """
+        Adds a version of a trove which appeared in oldVersion.
 
-	@param name: name of the trove
-	@type name: str
-	@param version: old version
-	@type version: versions.Version
-	@param flavor: old flavor
-	@type flavor: deps.deps.Flavor
+        @param name: name of the trove
+        @type name: str
+        @param version: old version
+        @type version: versions.Version
+        @param flavor: old flavor
+        @type flavor: deps.deps.Flavor
         @param weakRef: is this a weak reference?
         @type weakRef: boolean
-	"""
+        """
 
         if weakRef:
             l = self.weakTroves.setdefault(name, [])
@@ -3667,20 +3694,20 @@ class AbstractTroveChangeSet(streams.StreamSet):
         l.append(('-', version, flavor, None))
 
     def changedTrove(self, name, version, flavor, byDefault, weakRef = False):
-	"""
-	Records the change in the byDefault setting of a referenced trove.
+        """
+        Records the change in the byDefault setting of a referenced trove.
 
-	@param name: name of the trove
-	@type name: str
-	@param version: version
-	@type version: versions.Version
-	@param flavor: flavor
-	@type flavor: deps.deps.Flavor
+        @param name: name of the trove
+        @type name: str
+        @param version: version
+        @type version: versions.Version
+        @param flavor: flavor
+        @type flavor: deps.deps.Flavor
         @param byDefault: New value of byDefault
         @type byDefault: boolean
         @param weakRef: is this a weak reference?
         @type weakRef: boolean
-	"""
+        """
         if weakRef:
             l = self.weakTroves.setdefault(name, [])
         else:
@@ -3689,7 +3716,7 @@ class AbstractTroveChangeSet(streams.StreamSet):
         l.append(('~', version, flavor, byDefault))
 
     def formatToFile(self, changeSet, f):
-	f.write("%s " % self.getName())
+        f.write("%s " % self.getName())
 
         if self.troveType() == TROVE_TYPE_REDIRECT:
             if not [ x for x in self.redirects.iter() ]:
@@ -3697,14 +3724,14 @@ class AbstractTroveChangeSet(streams.StreamSet):
             else:
                 f.write("redirect ")
 
-	if self.isAbsolute():
-	    f.write("absolute ")
-	elif self.getOldVersion():
-	    f.write("from %s to " % self.getOldVersion().asString())
-	else:
-	    f.write("new ")
+        if self.isAbsolute():
+            f.write("absolute ")
+        elif self.getOldVersion():
+            f.write("from %s to " % self.getOldVersion().asString())
+        else:
+            f.write("new ")
 
-	f.write("%s\n" % self.getNewVersion().asString())
+        f.write("%s\n" % self.getNewVersion().asString())
 
         def depformat(name, dep, f):
             f.write('\t%s: %s\n' %(name,
@@ -3722,36 +3749,36 @@ class AbstractTroveChangeSet(streams.StreamSet):
         for redirect in self.redirects.iter():
             print '\t-> %s=%s' % (redirect.name(), redirect.branch())
 
-	for (pathId, path, fileId, version) in self.getNewFileList():
-	    #f.write("\tadded (%s(.*)%s)\n" % (pathId[:6], pathId[-6:]))
+        for (pathId, path, fileId, version) in self.getNewFileList():
+            #f.write("\tadded (%s(.*)%s)\n" % (pathId[:6], pathId[-6:]))
             change = changeSet.getFileChange(None, fileId)
             fileobj = files.ThawFile(change, pathId)
-            
-	    if isinstance(fileobj, files.SymbolicLink):
-		name = "%s -> %s" % (path, fileobj.target())
-	    else:
-		name = path
-	    
-            f.write("\t%s    1 %-8s %-8s %s %s %s\n" % 
+
+            if isinstance(fileobj, files.SymbolicLink):
+                name = "%s -> %s" % (path, fileobj.target())
+            else:
+                name = path
+
+            f.write("\t%s    1 %-8s %-8s %s %s %s\n" %
                     (fileobj.modeString(), fileobj.inode.owner(),
                      fileobj.inode.group(), fileobj.sizeString(),
                      fileobj.timeString(), name))
 
-	for (pathId, path, fileId, version) in self.getChangedFileList():
-	    pathIdStr = sha1helper.md5ToString(pathId)
-	    if path:
-		f.write("\tchanged %s (%s(.*)%s)\n" % 
-			(path, pathIdStr[:6], pathIdStr[-6:]))
-	    else:
-		f.write("\tchanged %s\n" % pathIdStr)
-	    oldFileId, change = changeSet._findFileChange(fileId)
-	    f.write("\t\t%s\n" % " ".join(files.fieldsChanged(change)))
+        for (pathId, path, fileId, version) in self.getChangedFileList():
+            pathIdStr = sha1helper.md5ToString(pathId)
+            if path:
+                f.write("\tchanged %s (%s(.*)%s)\n" %
+                        (path, pathIdStr[:6], pathIdStr[-6:]))
+            else:
+                f.write("\tchanged %s\n" % pathIdStr)
+            oldFileId, change = changeSet._findFileChange(fileId)
+            f.write("\t\t%s\n" % " ".join(files.fieldsChanged(change)))
 
-	for pathId in self.oldFiles:
-	    pathIdStr = sha1helper.md5ToString(pathId)
-	    f.write("\tremoved %s(.*)%s\n" % (pathIdStr[:6], pathIdStr[-6:]))
+        for pathId in self.oldFiles:
+            pathIdStr = sha1helper.md5ToString(pathId)
+            f.write("\tremoved %s(.*)%s\n" % (pathIdStr[:6], pathIdStr[-6:]))
 
-	for name in self.strongTroves.keys():
+        for name in self.strongTroves.keys():
             l = []
             for x in self.strongTroves[name]:
                 l.append(x[0] + x[1].asString())
@@ -3761,10 +3788,10 @@ class AbstractTroveChangeSet(streams.StreamSet):
                     l[-1] += ' (True)'
                 else:
                     l[-1] += ' (False)'
-	    f.write("\t" + name + " " + " ".join(l) + "\n")
+            f.write("\t" + name + " " + " ".join(l) + "\n")
 
     def setProvides(self, provides):
-	self.provides.set(provides)
+        self.provides.set(provides)
 
     def getType(self):
         return self.troveType()
@@ -3779,7 +3806,7 @@ class AbstractTroveChangeSet(streams.StreamSet):
         return self.provides()
 
     def setRequires(self, requires):
-	self.requires.set(requires)
+        self.requires.set(requires)
 
     def getRequires(self):
         return self.requires()
@@ -3804,26 +3831,28 @@ class AbstractTroveChangeSet(streams.StreamSet):
 
 class TroveChangeSet(AbstractTroveChangeSet):
 
-    def __init__(self, name, changeLog, oldVersion, newVersion, 
-		 oldFlavor, newFlavor, oldSigs, newSigs,
+    __slots__ = ()
+
+    def __init__(self, name, changeLog, oldVersion, newVersion,
+                 oldFlavor, newFlavor, oldSigs, newSigs,
                  absolute = 0, type = TROVE_TYPE_NORMAL,
                  troveInfoDiff = None):
-	AbstractTroveChangeSet.__init__(self)
-	assert(isinstance(newVersion, versions.AbstractVersion))
-	assert(isinstance(newFlavor, deps.Flavor))
-	assert(oldFlavor is None or isinstance(oldFlavor, deps.Flavor))
-	self.name.set(name)
-	self.oldVersion.set(oldVersion)
-	self.newVersion.set(newVersion)
-	if changeLog:
-	    self.changeLog = changeLog
-	if absolute:
-	    self.tcsType.set(_TCS_TYPE_ABSOLUTE)
-	else:
-	    self.tcsType.set(_TCS_TYPE_RELATIVE)
+        AbstractTroveChangeSet.__init__(self)
+        assert(isinstance(newVersion, versions.AbstractVersion))
+        assert(isinstance(newFlavor, deps.Flavor))
+        assert(oldFlavor is None or isinstance(oldFlavor, deps.Flavor))
+        self.name.set(name)
+        self.oldVersion.set(oldVersion)
+        self.newVersion.set(newVersion)
+        if changeLog:
+            self.changeLog = changeLog
+        if absolute:
+            self.tcsType.set(_TCS_TYPE_ABSOLUTE)
+        else:
+            self.tcsType.set(_TCS_TYPE_RELATIVE)
         if oldVersion is not None:
             self.oldFlavor.set(oldFlavor)
-	self.newFlavor.set(newFlavor)
+        self.newFlavor.set(newFlavor)
         self.troveType.set(type)
         assert(troveInfoDiff is not None)
         self.troveInfoDiff.set(troveInfoDiff)
@@ -3836,8 +3865,10 @@ class TroveChangeSet(AbstractTroveChangeSet):
 
 class ThawTroveChangeSet(AbstractTroveChangeSet):
 
+    __slots__ = ()
+
     def __init__(self, buf):
-	AbstractTroveChangeSet.__init__(self, buf)
+        AbstractTroveChangeSet.__init__(self, buf)
 
 
 class FlavorScoreCache(object):
@@ -3851,14 +3882,14 @@ class FlavorScoreCache(object):
 
     def __getitem__(self, (oldFlavor, newFlavor)):
         # check for superset matching and subset
-        # matching.  Currently we don't consider 
-        # a superset flavor match "better" than 
-        # a subset - if we want to change that, 
-        # a initial parameter for maxScore that 
+        # matching.  Currently we don't consider
+        # a superset flavor match "better" than
+        # a subset - if we want to change that,
+        # a initial parameter for maxScore that
         # ordered scores by type would work.
         # If we do that, we should consider adding
         # heuristic to prefer strongly satisfied
-        # flavors most of all. 
+        # flavors most of all.
         if not (oldFlavor, newFlavor) in self.cache:
             if oldFlavor.isEmpty() and newFlavor.isEmpty():
                 myMax = self.POS_INF

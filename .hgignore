@@ -1,10 +1,7 @@
-(^|/)CVS($|/)
-(^|/)\.hg($|/)
-.*\.pyc$
-.*\~$
-.*\.o$
-.*\.so$
+\.(py[co]|o|so|sw[op]|orig|rej|egg-info)$
+~$
 ^(bin|tmp)/
 conary/constants.py$
 conary/pysqlite3/build
 conary/sqlite3
+NEWS.html

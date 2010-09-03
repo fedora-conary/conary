@@ -23,7 +23,6 @@ from conary.lib.util import log
 from conary.lib import graph, util, api
 
 import openpgpfile
-from Crypto.PublicKey import DSA
 from openpgpfile import BadPassPhrase
 from openpgpfile import KeyNotFound
 from openpgpfile import num_getRelPrime
@@ -86,6 +85,15 @@ class OpenPGPKey(object):
                     trustRegex = trustRegex)
         self.signatures = sorted(sigs.values(), key = lambda x: x.signer)
 
+    def getType(self):
+        return openpgpfile.key_type(self.cryptoKey)
+
+    def isRSA(self):
+        return self.getType() == 'RSA'
+
+    def isDSA(self):
+        return self.getType() == 'DSA'
+
     def getTrustLevel(self):
         return self.trustLevel
 
@@ -102,7 +110,7 @@ class OpenPGPKey(object):
         return self.timestamp
 
     def signString(self, data):
-        if isinstance(self.cryptoKey,(DSA.DSAobj_c, DSA.DSAobj)):
+        if self.isDSA():
             K = self.cryptoKey.q + 1
             while K > self.cryptoKey.q:
                 K = num_getRelPrime(self.cryptoKey.q)
@@ -121,9 +129,9 @@ class OpenPGPKey(object):
         key that signed the data.
 
         @param data: the data that has been signed
-	@type data: strint
-	@param sig: the digital signature to verify
-	@type sig: 4-tuple (fingerprint, timestamp, signature, K)
+        @type data: strint
+        @param sig: the digital signature to verify
+        @type sig: 4-tuple (fingerprint, timestamp, signature, K)
         @rtype int
         """
         # this function was not designed to throw an exception at this level
@@ -255,10 +263,18 @@ class OpenPGPKeyFileCache(OpenPGPKeyCache):
         """
         # if we have this key cached, return it immediately
         if keyId in self.publicDict:
+            if self.publicDict[keyId] is None:
+                raise _KeyNotFound(keyId)
+
             return self.publicDict[keyId]
 
         # otherwise search for it
-        key = self._getPublicKey(keyId, label = label, warn = warn)
+        try:
+            key = self._getPublicKey(keyId, label = label, warn = warn)
+        except _KeyNotFound:
+            self.publicDict[keyId] = None
+            raise
+
         # Everything is trusted for now
         if self.callback.cfg and self.callback.cfg.trustThreshold > 0:
             krc = lambda x: self._getPublicKey(x, label=label, warn=warn)
@@ -623,4 +639,3 @@ class Trust(object):
             trust[node] = (ntlev, ntamt, tramt)
 
         return gt.edges[nodeIdx]
-

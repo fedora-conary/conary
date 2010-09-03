@@ -21,9 +21,8 @@ import os
 import sys
 import types
 
-from conary.lib import util, log, graph
+from conary.lib import util, log, graph, sha1helper
 from conary.build import action, errors, filter, trovefilter
-
 
 # buckets (enum -- but may possibly work someday as bitmask for policy
 # that could run more than once in different contexts)
@@ -96,14 +95,14 @@ class BasePolicy(action.RecipeAction):
         if exceptions:
             if not self.exceptions:
                 self.exceptions = []
-            if type(exceptions) in (list, tuple, set):
+            if type(exceptions) in (list, set): # Not tuple: CNY-3437
                 self.exceptions.extend(exceptions)
                 if not allowUnusedFilters:
                     for item in exceptions:
                         if not callable(item):
                             self.unusedFilters['exceptions'].add(item)
             else:
-                self.exceptions.append(exceptions)
+                self.exceptions.append(exceptions) # PathSet here
                 if not allowUnusedFilters and not callable(exceptions):
                     self.unusedFilters['exceptions'].add(exceptions)
         subtrees = keywords.pop('subtrees', None)
@@ -120,14 +119,14 @@ class BasePolicy(action.RecipeAction):
             self.inclusions = []
 
         if inclusions:
-            if isinstance(inclusions, (tuple, list, set)):
+            if isinstance(inclusions, (list, set)): # Not tuple: CNY-3437
                 self.inclusions.extend(inclusions)
                 if not allowUnusedFilters:
                     for item in inclusions:
                         if not callable(item):
                             self.unusedFilters['inclusions'].add(item)
             else:
-                self.inclusions.append(inclusions)
+                self.inclusions.append(inclusions) # PathSet here
                 if not allowUnusedFilters and not callable(inclusions):
                     self.unusedFilters['inclusions'].add(inclusions)
 
@@ -235,7 +234,7 @@ class Policy(BasePolicy):
     derived packages.  C{True} causes C{doFile} to be called for
     all files found, regardless of whether they are in the
     parent version, and C{False} causes C{doFile} to be called
-    only for files that are new or have changed timestamps.
+    only for files that are new or have changed.
     Note that if C{filetree} is C{policy.PACKAGE}, unchanged
     file contents will lead to unchanged timestamps.
     """
@@ -249,19 +248,19 @@ class Policy(BasePolicy):
         'use': None,
         'exceptions': None,
         'inclusions': None,
-	'subtrees': None,
+        'subtrees': None,
     }
 
     def __init__(self, recipe, **keywords):
-	"""
-	@keyword exceptions: Optional argument; regexp(s) specifying
-	files to ignore while taking the policy action.  It will be
-	interpolated against recipe macros before being used.
-	@type exceptions: None, filter string/tuple, or
-	tuple/list of filter strings/tuples
-	@keyword use: Optional argument; Use flag(s) telling whether
-	to actually perform the action.
-	@type use: None, Use flag, or tuple/list of Use flags
+        """
+        @keyword exceptions: Optional argument; regexp(s) specifying
+        files to ignore while taking the policy action.  It will be
+        interpolated against recipe macros before being used.
+        @type exceptions: None, filter string/tuple, or
+        tuple/list of filter strings/tuples
+        @keyword use: Optional argument; Use flag(s) telling whether
+        to actually perform the action.
+        @type use: None, Use flag, or tuple/list of Use flags
         @keyword subtree: Subtree to which to limit the policy, or it
         it already is limited (invariantsubtrees), then additional
         subtrees to consider.
@@ -271,12 +270,12 @@ class Policy(BasePolicy):
         C{FileFilter}s to include within the general limitation.
         @type inclusions: C{FileFilter} strings, C{FileFilter} tuples,
         or list (not tuple) of C{FileFilter} strings or C{FileFilter} tuples.
-	"""
-	# enforce abstract base class status
-	assert(self.__class__ is not Policy)
+        """
+        # enforce abstract base class status
+        assert(self.__class__ is not Policy)
 
         BasePolicy.__init__(self, None, [], **keywords)
-	self.recipe = recipe
+        self.recipe = recipe
         if self.rootdir is None and self.filetree:
             self.rootdir = {
                 DESTDIR: '%(destdir)s',
@@ -298,9 +297,9 @@ class Policy(BasePolicy):
                 kwargs['rootdir'])
 
     def filterExpArgs(self, expression, name=None):
-	"""
-	@param expression: regular expression or tuple of
-	(regex, [setmode, [unsetmode]])
+        """
+        @param expression: regular expression or tuple of
+        (regex, [setmode, [unsetmode]])
         Creates arguments to filter.Filter.__init__
         """
         kwargs = {
@@ -315,7 +314,7 @@ class Policy(BasePolicy):
             return (expression, macros), kwargs
 
         if not isinstance(expression, list):
-	    expression = list(expression)
+            expression = list(expression)
 
         # this normally happens when code at a higher level
         # has a filterExp tuple in a list of items and does
@@ -352,15 +351,15 @@ class Policy(BasePolicy):
             unusedList.update(newUnused)
 
     def doProcess(self, recipe):
-	"""
-	Invocation instance
+        """
+        Invocation instance
         @param recipe: holds the recipe object, which is used for
-	the macro set and package objects.
+        the macro set and package objects.
         @return: None
         @rtype: None
-	"""
-	self.recipe = recipe
-	self.macros = recipe.macros
+        """
+        self.recipe = recipe
+        self.macros = recipe.macros
 
         if self.rootdir:
             self.rootdir = util.normpath(self.rootdir % self.macros)
@@ -371,52 +370,52 @@ class Policy(BasePolicy):
             # This policy does not handle derived packages
             return
 
-	if hasattr(self.__class__, 'preProcess'):
-	    self.preProcess()
+        if hasattr(self.__class__, 'preProcess'):
+            self.preProcess()
 
-	# is runtime check implemented?
-	if hasattr(self.__class__, 'test'):
-	    if not self.test():
-		return
+        # is runtime check implemented?
+        if hasattr(self.__class__, 'test'):
+            if not self.test():
+                return
 
-	# change self.use to be a simple flag
-	self.use = action.checkUse(self.use)
+        # change self.use to be a simple flag
+        self.use = action.checkUse(self.use)
 
-	# compile the exceptions
-	self.exceptionFilters = []
-	self.compileFilters(self.invariantexceptions, self.exceptionFilters)
-	if self.exceptions:
-	    if not isinstance(self.exceptions, (tuple, list)):
-		# turn a plain string into a sequence
-		self.exceptions = (self.exceptions,)
-	    self.compileFilters(self.exceptions, self.exceptionFilters, self.unusedFilters['exceptions'])
+        # compile the exceptions
+        self.exceptionFilters = []
+        self.compileFilters(self.invariantexceptions, self.exceptionFilters)
+        if self.exceptions:
+            if not isinstance(self.exceptions, (tuple, list, set)):
+                # turn a plain string into a sequence
+                self.exceptions = (self.exceptions,)
+            self.compileFilters(self.exceptions, self.exceptionFilters, self.unusedFilters['exceptions'])
 
-	# compile the inclusions
-	self.inclusionFilters = []
+        # compile the inclusions
+        self.inclusionFilters = []
         if self.invariantinclusions is None:
             self.compileFilters([], self.inclusionFilters)
         else:
             self.compileFilters(self.invariantinclusions, self.inclusionFilters)
-	if not self.inclusions:
-	    # an empty list, as opposed to None, means nothing is included
-	    if isinstance(self.inclusions, (tuple, list)):
-		return
-	else:
-	    if not isinstance(self.inclusions, (tuple, list)):
-		# turn a plain string into a sequence
-		self.inclusions = (self.inclusions,)
-	    self.compileFilters(self.inclusions, self.inclusionFilters, self.unusedFilters['inclusions'])
+        if not self.inclusions:
+            # an empty list, as opposed to None, means nothing is included
+            if isinstance(self.inclusions, (tuple, list, set)):
+                return
+        else:
+            if not isinstance(self.inclusions, (tuple, list, set)):
+                # turn a plain string into a sequence
+                self.inclusions = (self.inclusions,)
+            self.compileFilters(self.inclusions, self.inclusionFilters, self.unusedFilters['inclusions'])
 
-	# dispatch if/as appropriate
-	if self.use:
-	    self.do()
+        # dispatch if/as appropriate
+        if self.use:
+            self.do()
 
-	if hasattr(self.__class__, 'postProcess'):
-	    self.postProcess()
+        if hasattr(self.__class__, 'postProcess'):
+            self.postProcess()
 
     def do(self):
-	# calls doFile on all appropriate files -- can be overridden by
-	# subclasses
+        # calls doFile on all appropriate files -- can be overridden by
+        # subclasses
         if not self.filetree:
             return
 
@@ -428,12 +427,12 @@ class Policy(BasePolicy):
             return
 
         assert(self.filetree & DIR)
-	if self.subtrees:
-	    self.invariantsubtrees.extend(self.subtrees)
-	if not self.invariantsubtrees:
-	    self.invariantsubtrees.append('/')
-	for self.currentsubtree in self.invariantsubtrees:
-	    fullpath = (self.rootdir+self.currentsubtree) %self.macros
+        if self.subtrees:
+            self.invariantsubtrees.extend(self.subtrees)
+        if not self.invariantsubtrees:
+            self.invariantsubtrees.append('/')
+        for self.currentsubtree in self.invariantsubtrees:
+            fullpath = (self.rootdir+self.currentsubtree) %self.macros
             dirs = util.braceGlob(fullpath)
             for d in dirs:
                 if self.recursive:
@@ -444,36 +443,83 @@ class Policy(BasePolicy):
                         self.walkDir(None, d, os.listdir(d))
 
     def walkDir(self, ignore, dirname, names):
-	# chop off bit not useful for comparison
-	rootdirlen = len(self.rootdir)
-	path=dirname[rootdirlen:]
-	for name in names:
-	   thispath = util.normpath(path + os.sep + name)
-	   if self._pathAllowed(thispath):
-	       self.doFile(thispath)
+        # chop off bit not useful for comparison
+        rootdirlen = len(self.rootdir)
+        path=dirname[rootdirlen:]
+        for name in names:
+           thispath = util.normpath(path + os.sep + name)
+           if self._pathAllowed(thispath):
+               self.doFile(thispath)
 
-    def mtimeChanged(self, path):
+    FILE_MISSING = -1
+    FILE_UNCHANGED = 0
+    FILE_CHANGED = 1
+    FILE_NEW = 2
+    def fileChanged(self, path):
+        """
+        check to see if the file has changed
+        @param path: the path to check
+        @return: FILE_MISSING, FILE_CHANGED, FILE_UNCHANGED, FILE_NEW
+        @rtype: int
+        """
         newPath = util.joinPaths(self.macros.destdir, path)
         if not util.exists(newPath):
-            return True
-        oldMtime = self.recipe._derivedFiles.get(path, None)
-        try:
+            return self.FILE_MISSING
+
+        from conary.build.recipe import RECIPE_TYPE_CAPSULE
+        if self.recipe._recipeType == RECIPE_TYPE_CAPSULE:
+            if not os.path.isfile(newPath):
+                # for capsules we get everything but contents from
+                # the capsule header
+                return self.FILE_UNCHANGED
+
+            # For derived capsule recipes we use the exploder to provide the old
+            # sha1. For regular capsule recipes we use the capsuleFileSha1s map
+            # to provide the old sha1.
+            oldSha1=None
             if os.path.islink(newPath):
-                # symlinks are special, we compare the target of the link
-                # instead of the mtime
-                newMtime = os.readlink(newPath)
+                oldSha1 = os.readlink(newPath)
+            elif hasattr(self.recipe,'exploder'):
+                oldf = self.recipe.exploder.fileObjMap.get(path,None)
+                if oldf and oldf.hasContents:
+                    oldSha1 = oldf.contents.sha1()
             else:
-                newMtime = os.lstat(newPath).st_mtime
-            return oldMtime != newMtime
-        except:
-            return True
+                capPaths = self.recipe._getCapsulePathsForFile(path)
+                if not capPaths:
+                    return self.FILE_NEW
+                oldSha1 = self.recipe.capsuleFileSha1s[capPaths[0]][path]
+
+            if oldSha1:
+                if os.path.islink(newPath):
+                    newSha1 = os.readlink(newPath)
+                else:
+                    newSha1 = sha1helper.sha1FileBin(newPath)
+                if oldSha1 == newSha1:
+                    return self.FILE_UNCHANGED
+                return self.FILE_CHANGED
+            return self.FILE_NEW
+
+        oldMtime = self.recipe._derivedFiles.get(path, None)
+        if os.path.islink(newPath):
+            # symlinks are special, we compare the target of the link
+            # instead of the mtime
+            newMtime = os.readlink(newPath)
+        else:
+            newMtime = os.lstat(newPath).st_mtime
+        if oldMtime:
+            if oldMtime == newMtime:
+                return self.FILE_UNCHANGED
+            return self.FILE_CHANGED
+        return self.FILE_NEW
+    # for backwards compatiblity
+    mtimeChanged=fileChanged
 
     def policyInclusion(self, filespec):
         if (hasattr(self.recipe, '_isDerived')
             and self.recipe._isDerived == True
             and self.processUnmodified is False
             and filespec in self.recipe._derivedFiles
-            and not self.mtimeChanged(filespec)):
+            and not self.fileChanged(filespec)):
             # policy has elected not to handle unchanged files
             return False
         if not self.inclusions and self.invariantinclusions is None:
@@ -748,6 +794,29 @@ def loadPolicy(recipeObj, policySet = None, internalPolicyModules = (),
     # name -> policy classes
     policyNameMap = {}
 
+    # Load conary internal policy. Note that these are now loaded first, 
+    # so that pluggable policy may override internal policy.  Also note
+    # that the order of the internalPolicyModules list matters, as the
+    # *last* module of a given name which is loaded wins.  This is
+    # also true of pluggable policy, so the policyDirs config option must
+    # be carefully constructed in reverse order of preference.
+
+    import conary.build.destdirpolicy
+    import conary.build.derivedpolicy
+    import conary.build.derivedcapsulepolicy
+    import conary.build.infopolicy
+    import conary.build.packagepolicy
+    import conary.build.capsulepolicy
+    import conary.build.grouppolicy
+    for pt in internalPolicyModules:
+        m = sys.modules['conary.build.'+pt]
+        for symbolName in m.__dict__.keys():
+            policyCls = m.__dict__[symbolName]
+            if type(policyCls) is not classType:
+                continue
+            if symbolName[0] != '_' and issubclass(policyCls, basePolicy):
+                policyNameMap[symbolName] = policyCls
+
     # Load pluggable policy
     for policyDir in recipeObj.cfg.policyDirs:
         if not os.path.isdir(policyDir):
@@ -773,22 +842,6 @@ def loadPolicy(recipeObj, policySet = None, internalPolicyModules = (),
                 if symbolName[0].isupper() and issubclass(policyCls,
                         basePolicy):
                     policyNameMap[symbolName] = policyCls
-
-    # Load conary internal policy
-    import conary.build.destdirpolicy
-    import conary.build.derivedpolicy
-    import conary.build.infopolicy
-    import conary.build.packagepolicy
-    import conary.build.capsulepolicy
-    import conary.build.grouppolicy
-    for pt in internalPolicyModules:
-        m = sys.modules['conary.build.'+pt]
-        for symbolName in m.__dict__.keys():
-            policyCls = m.__dict__[symbolName]
-            if type(policyCls) is not classType:
-                continue
-            if symbolName[0] != '_' and issubclass(policyCls, basePolicy):
-                policyNameMap[symbolName] = policyCls
 
     # Enforce dependencies
     missingDeps = []

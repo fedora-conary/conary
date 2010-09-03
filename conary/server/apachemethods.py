@@ -243,6 +243,7 @@ def get(port, isSecure, repos, req, restHandler=None):
             totalSize = size
 
         req.content_type = "application/x-conary-change-set"
+        req.set_content_length(totalSize)
         for (path, size, isChangeset, preserveFile) in items:
             if isChangeset:
                 cs = FileContainer(util.ExtendedFile(path, buffering=False))
@@ -285,7 +286,7 @@ def putFile(port, isSecure, repos, req):
     path = repos.tmpPath + "/" + req.args + "-in"
     size = os.stat(path).st_size
     if size != 0:
-	return apache.HTTP_UNAUTHORIZED
+        return apache.HTTP_UNAUTHORIZED
 
     retcode = apache.OK
     f = open(path, "w+")

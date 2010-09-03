@@ -12,7 +12,14 @@
 # full details.
 #
 
-import base64, cPickle, itertools, os, tempfile, urllib, urllib2, urlparse
+import cPickle
+import itertools
+import os
+import tempfile
+import time
+import urllib
+import urllib2
+import urlparse
 
 from conary import constants, conarycfg, rpmhelper, trove, versions
 from conary.lib import digestlib, sha1helper, tracelog, util
@@ -419,21 +426,6 @@ class ChangesetFilter(BaseProxy):
         BaseProxy.__init__(self, cfg, basicUrl)
         self.csCache = cache
 
-    def _cvtJobEntry(self, authToken, jobEntry):
-        (name, (old, oldFlavor), (new, newFlavor), mbsolute) = jobEntry
-
-        newVer = self.toVersion(new)
-
-        if old == 0:
-            l = (name, (None, None),
-                       (self.toVersion(new), self.toFlavor(newFlavor)),
-                       absolute)
-        else:
-            l = (name, (self.toVersion(old), self.toFlavor(oldFlavor)),
-                       (self.toVersion(new), self.toFlavor(newFlavor)),
-                       absolute)
-        return l
-
     @staticmethod
     def _getChangeSetVersion(clientVersion):
         # Determine the changeset version based on the client version
@@ -487,7 +479,7 @@ class ChangesetFilter(BaseProxy):
             trvNewFlavor = tcs.getNewFlavor()
             if ti.flags.isMissing():
                 # this was a missing trove for which we
-                # synthesized a removed trove object. 
+                # synthesized a removed trove object.
                 # The client would have a much easier time
                 # updating if we just made it a regular trove.
                 missingOldVersion = tcs.getOldVersion()
@@ -580,11 +572,16 @@ class ChangesetFilter(BaseProxy):
                 "Unable to produce changeset version %s "
                 "with upstream server %s" % (neededCsVersion, wireCsVersion))
 
-        changeSetList = self._getNeededChangeSets(caller,
-            authToken, verPath, chgSetList, serverVersion,
-            getCsVersion, wireCsVersion, neededCsVersion,
-            recurse, withFiles, withFileContents, excludeAutoSource,
-            mirrorMode, infoOnly)
+        try:
+            changeSetList = self._getNeededChangeSets(caller,
+                authToken, verPath, chgSetList, serverVersion,
+                getCsVersion, wireCsVersion, neededCsVersion,
+                recurse, withFiles, withFileContents, excludeAutoSource,
+                mirrorMode, infoOnly)
+        finally:
+            if self.csCache:
+                # In case we missed releasing some of the locks
+                self.csCache.resetLocks()
 
         if not infoOnly:
             (fd, path) = tempfile.mkstemp(dir = self.cfg.tmpDir,
@@ -594,7 +591,7 @@ class ChangesetFilter(BaseProxy):
             f = os.fdopen(fd, 'w')
 
             for csInfo in changeSetList:
-                # the hard-coded 1 means it's a changeset and needs to be walked 
+                # the hard-coded 1 means it's a changeset and needs to be walked
                 # looking for files to include by reference
                 f.write("%s %d 1 %d\n" % (csInfo.path, csInfo.size,
                 csInfo.cached))
@@ -738,8 +735,14 @@ class ChangesetFilter(BaseProxy):
             # We have no cache, so don't even bother
             return changeSetList
 
-        for jobIdx, (rawJob, fingerprint) in \
-                    enumerate(itertools.izip(chgSetList, fingerprints)):
+        # We need to order by fingerprint first
+        # This prevents deadlocks from occurring - as long as different
+        # processes acquire locks in the same order, we should be fine
+        orderedData = sorted(
+            enumerate(itertools.izip(chgSetList, fingerprints)),
+            key = lambda x: x[1][1])
+
+        for jobIdx, (rawJob, fingerprint) in orderedData:
             # if we have both a cs fingerprint and a cache, then we will
             # cache the cs for this job
             cachable = bool(fingerprint)
@@ -748,7 +751,11 @@ class ChangesetFilter(BaseProxy):
 
             # look up the changeset in the cache, oldest to newest
             for iterV in verPath:
-                csInfo = self.csCache.get((fingerprint, iterV))
+                # We will only lock the last version (wireCsVersion)
+                # Everything else gets derived from it, and is fast to convert
+                shouldLock = (iterV == verPath[-1])
+                csInfo = self.csCache.get((fingerprint, iterV),
+                    shouldLock = shouldLock)
                 if csInfo:
                     # Found in the cache (possibly with an older version)
                     csInfo.fingerprint = fingerprint
@@ -857,18 +864,19 @@ class ChangesetFilter(BaseProxy):
                             absOldChangeSetMap)
                         (fd, tmppath) = tempfile.mkstemp(dir = self.cfg.tmpDir,
                                                          suffix = ".ccs-temp")
-                        f = os.fdopen(fd, "w")
-                        size = cs.appendToFile(f)
-                        f.close()
-                        csInfo.size = size
+                        os.unlink(tmppath)
+                        fobj = os.fdopen(fd, "w+")
+                        csInfo.size = cs.appendToFile(fobj)
+                        csInfo.rawSize = fobj.tell()
                         csInfo.fingerprint = fprint
+                        fobj.seek(0)
 
                         # Cache the changeset
                         csPath = self.csCache.set(
                             (csInfo.fingerprint, csInfo.version),
-                            (csInfo, file(tmppath), size))
+                            (csInfo, fobj, csInfo.rawSize))
+                        fobj.close()
                         csInfo.path = csPath
-                        os.unlink(tmppath)
                         # save csInfo
                         changeSetList[idx] = csInfo
                     # At the end of this step, we have all our changesets
@@ -1063,6 +1071,8 @@ class ChangesetFilter(BaseProxy):
                 oldChangeset = absOldChangeSetMap[oldTrv]
                 oldTrvCs = oldChangeset.getNewTroveVersion(*oldTrv)
                 oldTrove = trove.Trove(oldTrvCs)
+                newTrove = oldTrove.copy()
+                newTrove.applyChangeSet(trvCs)
             else:
                 oldChangeset = None
                 oldTrvCs = None
@@ -1097,9 +1107,7 @@ class ChangesetFilter(BaseProxy):
                     # the old version too.
                     if path is None:
                         # relative changeset, so grab path from the new trove
-                        trv = oldTrove.copy()
-                        trv.applyChangeSet(trvCs)
-                        path = trv.getFile(pathId)[0]
+                        path = newTrove.getFile(pathId)[0]
 
                     fileObj = self._getFileObject(pathId, fileId, oldTrove,
                         oldChangeset, newCs)
@@ -1274,7 +1282,9 @@ class SimpleRepositoryFilter(ChangesetFilter):
     def __init__(self, cfg, basicUrl, repos):
         if cfg.changesetCacheDir:
             util.mkdirChain(cfg.changesetCacheDir)
-            csCache = ChangesetCache(datastore.DataStore(cfg.changesetCacheDir))
+            csCache = ChangesetCache(
+                    datastore.DataStore(cfg.changesetCacheDir),
+                    cfg.changesetCacheLogFile)
         else:
             csCache = None
 
@@ -1306,7 +1316,8 @@ class ProxyRepositoryServer(ChangesetFilter):
 
     def __init__(self, cfg, basicUrl):
         util.mkdirChain(cfg.changesetCacheDir)
-        csCache = ChangesetCache(datastore.DataStore(cfg.changesetCacheDir))
+        csCache = ChangesetCache(datastore.DataStore(cfg.changesetCacheDir),
+                cfg.changesetCacheLogFile)
 
         util.mkdirChain(cfg.proxyContentsDir)
         self.contents = datastore.DataStore(cfg.proxyContentsDir)
@@ -1555,10 +1566,11 @@ class ProxyRepositoryServer(ChangesetFilter):
                                       integrityCheck = False)
 
 class ChangesetCache(object):
-    __slots__ = ['dataStore']
 
-    def __init__(self, dataStore):
+    def __init__(self, dataStore, logPath=None):
         self.dataStore = dataStore
+        self.logPath = logPath
+        self.locksMap = {}
 
     def hashKey(self, key):
         (fingerPrint, csVersion) = key
@@ -1568,56 +1580,103 @@ class ChangesetCache(object):
         (csInfo, inF, sizeLimit) = value
 
         csPath = self.hashKey(key)
+        dataPath = csPath + '.data'
         csDir = os.path.dirname(csPath)
         util.mkdirChain(csDir)
-        (fd, csTmpPath) = tempfile.mkstemp(dir = csDir,
-                                           suffix = '.ccs-new')
-        outF = os.fdopen(fd, "w")
-        util.copyfileobj(inF, outF, sizeLimit = sizeLimit)
-        # closes the underlying fd opened by mkstemp
-        outF.close()
 
-        (fd, dataTmpPath) = tempfile.mkstemp(dir = csDir,
-                                             suffix = '.data-new')
-        data = os.fdopen(fd, 'w')
-        data.write(csInfo.pickle())
-        # closes the underlying fd
-        data.close()
+        csObj = self.locksMap.get(csPath)
+        if csObj is None:
+            # We did not get a lock for it
+            csObj = util.AtomicFile(csPath, tmpsuffix = '.ccs-new')
 
-        os.rename(csTmpPath, csPath)
-        os.rename(dataTmpPath, csPath + '.data')
+        written = util.copyfileobj(inF, csObj, sizeLimit=sizeLimit)
+        if sizeLimit is not None and written != sizeLimit:
+            raise errors.RepositoryError("Changeset was truncated in transit "
+                    "(expected %d bytes, got %d bytes for subchangeset)" %
+                    (sizeLimit, written))
+
+        csInfoObj = util.AtomicFile(dataPath, tmpsuffix = '.data-new')
+        csInfoObj.write(csInfo.pickle())
+
+        csInfoObj.commit()
+        csObj.commit()
+        # If we locked the cache file, we need to no longer track it
+        self.locksMap.pop(csPath, None)
+
+        self._log('WRITE', key, size=sizeLimit)
 
         return csPath
 
-    def get(self, key):
+    def get(self, key, shouldLock = True):
         csPath = self.hashKey(key)
         csVersion = key[1]
         dataPath = csPath + '.data'
-        if not (os.path.exists(csPath) and os.path.exists(dataPath)):
-            # Not in the cache
+
+        lockfile = util.LockedFile(csPath)
+        util.mkdirChain(os.path.dirname(csPath))
+        fileObj = lockfile.open(shouldLock=shouldLock)
+
+        dataFile = util.fopenIfExists(dataPath, "r")
+
+        # Use XOR - if one is None and one is not, we need to regenerate
+        if (fileObj is not None) ^ (dataFile is not None):
+            # We have csPath but not dataPath, or the other way around
+            if not shouldLock:
+                return None
+            # Get rid of csPath - no other process can produce it because
+            # we're holding the lock
+            util.removeIfExists(csPath)
+            util.removeIfExists(dataPath)
+            # Unlock
+            lockfile.close()
+            # Try again
+            fileObj = lockfile.open()
+
+        if fileObj is None:
+            if shouldLock:
+                # We got the lock on csPath
+                self.locksMap[csPath] = lockfile
+            self._log('MISS', key)
             return None
 
-        # touch to refresh atime; try/except protects against race
-        # with someone removing the entry during the time it took
-        # you to read this comment
-        try:
-            fd = os.open(csPath, os.O_RDONLY)
-            os.close(fd)
-        except OSError:
-            pass
+        # touch to refresh atime
+        # This makes sure tmpwatch will not remove this file while we are
+        # reading it (which would not hurt this process, but would invalidate
+        # a perfectly good cache entry)
+        for fobj in [ fileObj, dataFile ]:
+            fobj.read(1)
+            fobj.seek(0)
 
         try:
-            data = open(dataPath)
-            csInfo = ChangeSetInfo(pickled = data.read())
-            data.close()
-        except IOError:
+            csInfo = ChangeSetInfo(pickled = dataFile.read())
+            dataFile.close()
+        except IOError, err:
+            self._log('MISS', key, errno=err.errno)
             return None
 
         csInfo.path = csPath
         csInfo.cached = True
         csInfo.version = csVersion
 
+        self._log('HIT', key)
+
         return csInfo
+
+    def resetLocks(self):
+        self.locksMap.clear()
+
+    def _log(self, status, key, **kwargs):
+        """Log a HIT/MISS/WRITE to file."""
+        if self.logPath is None:
+            return
+        now = time.time()
+        msecs = (now - long(now)) * 1000
+        extra = ''.join(' %s=%r' % (x, y) for (x, y) in kwargs.items())
+        rec = '%s,%03d %s-%d %s%s\n' % (
+                time.strftime('%F %T', time.localtime(now)), msecs,
+                key[0], key[1], status, extra)
+        open(self.logPath, 'a').write(rec)
+
 
 def redirectUrl(authToken, url):
     # return the url to use for the final server

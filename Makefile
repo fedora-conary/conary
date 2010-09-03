@@ -14,8 +14,9 @@
 
 all: subdirs
 
-export VERSION = 2.1.9
 export TOPDIR = $(shell pwd)
+export VERSION = 2.1.22
+export CHANGESET = $(shell ./scripts/hg-version.sh)
 export DISTDIR = $(TOPDIR)/conary-$(VERSION)
 export prefix = /usr
 export lib = $(shell uname -m | sed -r '/x86_64|ppc64|s390x|sparc64/{s/.*/lib64/;q};s/.*/lib/')
@@ -64,6 +65,7 @@ archive:
 
 version:
 	sed -i 's/@NEW@/$(VERSION)/g' NEWS
+	sed -i 's/@NEW@/$(VERSION)/g' ./doc/PROTOCOL.versions
 	$(MAKE) -C extra VERSION=$(VERSION)
 
 show-version:

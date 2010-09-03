@@ -69,21 +69,21 @@ class _filterSpec(policy.Policy):
     bucket = policy.PACKAGE_CREATION
     processUnmodified = False
     def __init__(self, *args, **keywords):
-	self.extraFilters = []
-	policy.Policy.__init__(self, *args, **keywords)
+        self.extraFilters = []
+        policy.Policy.__init__(self, *args, **keywords)
 
     def updateArgs(self, *args, **keywords):
-	"""
-	Call derived classes (C{ComponentSpec} or C{PackageSpec}) as::
-	    ThisClass('<name>', 'filterexp1', 'filterexp2')
-	where C{filterexp} is either a regular expression or a
-	tuple of C{(regexp[, setmodes[, unsetmodes]])}
-	"""
-	if args:
-	    theName = args[0]
-	    for filterexp in args[1:]:
-		self.extraFilters.append((theName, filterexp))
-	policy.Policy.updateArgs(self, **keywords)
+        """
+        Call derived classes (C{ComponentSpec} or C{PackageSpec}) as::
+            ThisClass('<name>', 'filterexp1', 'filterexp2')
+        where C{filterexp} is either a regular expression or a
+        tuple of C{(regexp[, setmodes[, unsetmodes]])}
+        """
+        if args:
+            theName = args[0]
+            for filterexp in args[1:]:
+                self.extraFilters.append((theName, filterexp))
+        policy.Policy.updateArgs(self, **keywords)
 
 
 class _addInfo(policy.Policy):
@@ -97,68 +97,68 @@ class _addInfo(policy.Policy):
         ('PackageSpec', policy.REQUIRED_PRIOR),
     )
     keywords = {
-	'included': {},
-	'excluded': {}
+        'included': {},
+        'excluded': {}
     }
 
     def updateArgs(self, *args, **keywords):
-	"""
-	Call as::
-	    C{I{ClassName}(I{info}, I{filterexp})}
-	or::
-	    C{I{ClassName}(I{info}, exceptions=I{filterexp})}
-	where C{I{filterexp}} is either a regular expression or a
-	tuple of C{(regexp[, setmodes[, unsetmodes]])}
-	"""
-	if args:
-	    args = list(args)
-	    info = args.pop(0)
-	    if args:
+        """
+        Call as::
+            C{I{ClassName}(I{info}, I{filterexp})}
+        or::
+            C{I{ClassName}(I{info}, exceptions=I{filterexp})}
+        where C{I{filterexp}} is either a regular expression or a
+        tuple of C{(regexp[, setmodes[, unsetmodes]])}
+        """
+        if args:
+            args = list(args)
+            info = args.pop(0)
+            if args:
                 if not self.included:
                     self.included = {}
-		if info not in self.included:
-		    self.included[info] = []
-		self.included[info].extend(args)
-	    elif 'exceptions' in keywords:
-		# not the usual exception handling, this is an exception
+                if info not in self.included:
+                    self.included[info] = []
+                self.included[info].extend(args)
+            elif 'exceptions' in keywords:
+                # not the usual exception handling, this is an exception
                 if not self.excluded:
                     self.excluded = {}
-		if info not in self.excluded:
-		    self.excluded[info] = []
-		self.excluded[info].append(keywords.pop('exceptions'))
+                if info not in self.excluded:
+                    self.excluded[info] = []
+                self.excluded[info].append(keywords.pop('exceptions'))
             else:
                 raise TypeError, 'no paths provided'
-	policy.Policy.updateArgs(self, **keywords)
+        policy.Policy.updateArgs(self, **keywords)
 
     def doProcess(self, recipe):
         # for filters
-	self.rootdir = self.rootdir % recipe.macros
+        self.rootdir = self.rootdir % recipe.macros
 
-	# instantiate filters
-	d = {}
-	for info in self.included:
+        # instantiate filters
+        d = {}
+        for info in self.included:
             newinfo = info % recipe.macros
-	    l = []
-	    for item in self.included[info]:
-		l.append(filter.Filter(item, recipe.macros))
-	    d[newinfo] = l
-	self.included = d
+            l = []
+            for item in self.included[info]:
+                l.append(filter.Filter(item, recipe.macros))
+            d[newinfo] = l
+        self.included = d
 
-	d = {}
-	for info in self.excluded:
+        d = {}
+        for info in self.excluded:
             newinfo = info % recipe.macros
-	    l = []
-	    for item in self.excluded[info]:
-		l.append(filter.Filter(item, recipe.macros))
-	    d[newinfo] = l
-	self.excluded = d
+            l = []
+            for item in self.excluded[info]:
+                l.append(filter.Filter(item, recipe.macros))
+            d[newinfo] = l
+        self.excluded = d
 
-	policy.Policy.doProcess(self, recipe)
+        policy.Policy.doProcess(self, recipe)
 
     def doFile(self, path):
-	fullpath = self.recipe.macros.destdir+path
-	if not util.isregular(fullpath) and not os.path.islink(fullpath):
-	    return
+        fullpath = self.recipe.macros.destdir+path
+        if not util.isregular(fullpath) and not os.path.islink(fullpath):
+            return
         self.runInfo(path)
 
     def runInfo(self, path):
@@ -412,12 +412,12 @@ class ComponentSpec(_filterSpec):
                     pkgargs = list(itertools.chain((package,), args[1:]))
                     self.recipe.PackageSpec(*pkgargs)
 
-	_filterSpec.updateArgs(self, *args, **keywords)
+        _filterSpec.updateArgs(self, *args, **keywords)
 
     def doProcess(self, recipe):
-	compFilters = []
-	self.macros = recipe.macros
-	self.rootdir = self.rootdir % recipe.macros
+        compFilters = []
+        self.macros = recipe.macros
+        self.rootdir = self.rootdir % recipe.macros
 
         self.loadFilterDirs()
 
@@ -437,12 +437,12 @@ class ComponentSpec(_filterSpec):
 
             compFilters.append(filteritem)
 
-	# by default, everything that hasn't matched a filter pattern yet
-	# goes in the catchall component ('runtime' by default)
-	compFilters.append(filter.Filter('.*', self.macros, name=self.catchall))
+        # by default, everything that hasn't matched a filter pattern yet
+        # goes in the catchall component ('runtime' by default)
+        compFilters.append(filter.Filter('.*', self.macros, name=self.catchall))
 
-	# pass these down to PackageSpec for building the package
-	recipe.PackageSpec(compFilters=compFilters)
+        # pass these down to PackageSpec for building the package
+        recipe.PackageSpec(compFilters=compFilters)
 
 
     def loadFilterDirs(self):
@@ -523,7 +523,7 @@ class ComponentSpec(_filterSpec):
                       ' specification file', fullpath)
             return
         filters = m.__dict__['filters']
-        
+
         if filters and len(filters) > 1 and type(filters[1]) not in (list,
                                                                      tuple):
             self.error('invalid expression in %s: filters specification'
@@ -630,19 +630,19 @@ class PackageSpec(_filterSpec):
             else:
                 self.pkgFilters.append(filteritem)
 
-	# by default, everything that hasn't matched a pattern in the
-	# main package filter goes in the package named recipe.name
-	self.pkgFilters.append(filter.Filter('.*', self.macros, name=recipe.name))
+        # by default, everything that hasn't matched a pattern in the
+        # main package filter goes in the package named recipe.name
+        self.pkgFilters.append(filter.Filter('.*', self.macros, name=recipe.name))
 
-	# OK, all the filters exist, build an autopackage object that
-	# knows about them
-	recipe.autopkg = buildpackage.AutoBuildPackage(
-	    self.pkgFilters, self.compFilters, recipe)
+        # OK, all the filters exist, build an autopackage object that
+        # knows about them
+        recipe.autopkg = buildpackage.AutoBuildPackage(
+            self.pkgFilters, self.compFilters, recipe)
         self.autopkg = recipe.autopkg
 
     def do(self):
         # Walk capsule contents ignored by doFile
-        for filePath, capsulePath, componentName in self.recipe._iterCapsulePaths():
+        for filePath, _, componentName in self.recipe._iterCapsulePaths():
             realPath = self.destdir + filePath
             if util.exists(realPath):
                 # Files that do not exist on the filesystem (devices)
@@ -650,9 +650,9 @@ class PackageSpec(_filterSpec):
                 self.autopkg.addFile(filePath, realPath, componentName)
         # Walk normal files
         _filterSpec.do(self)
-        
+
     def doFile(self, path):
-	# all policy classes after this require that the initial tree is built
+        # all policy classes after this require that the initial tree is built
         if not self.recipe._getCapsulePathsForFile(path):
             realPath = self.destdir + path
             self.autopkg.addFile(path, realPath)
@@ -722,9 +722,9 @@ class InitialContents(policy.Policy):
         self.recipe.Config(exceptions=args, allowUnusedFilters = True)
 
     def doFile(self, filename):
-	fullpath = self.macros.destdir + filename
+        fullpath = self.macros.destdir + filename
         recipe = self.recipe
-	if os.path.isfile(fullpath) and util.isregular(fullpath):
+        if os.path.isfile(fullpath) and util.isregular(fullpath):
             self.info(filename)
             f = recipe.autopkg.pathMap[filename]
             f.flags.isInitialContents(True)
@@ -783,18 +783,18 @@ class Transient(policy.Policy):
     )
 
     invariantinclusions = [
-	r'..*\.py(c|o)$',
+        r'..*\.py(c|o)$',
         r'..*\.elc$',
         r'%(userinfodir)s/',
         r'%(groupinfodir)s'
     ]
 
     def doFile(self, filename):
-	fullpath = self.macros.destdir + filename
-	if os.path.isfile(fullpath) and util.isregular(fullpath):
+        fullpath = self.macros.destdir + filename
+        if os.path.isfile(fullpath) and util.isregular(fullpath):
             recipe = self.recipe
             f = recipe.autopkg.pathMap[filename]
-	    f.flags.isTransient(True)
+            f.flags.isTransient(True)
             if f.flags.isConfig() or f.flags.isInitialContents():
                 self.error(
                     '%s is marked as both a transient file and'
@@ -839,10 +839,10 @@ class TagDescription(policy.Policy):
     def doFile(self, path):
         if self.recipe._getCapsulePathsForFile(path):
             return
-	fullpath = self.macros.destdir + path
-	if os.path.isfile(fullpath) and util.isregular(fullpath):
+        fullpath = self.macros.destdir + path
+        if os.path.isfile(fullpath) and util.isregular(fullpath):
             self.info('conary tag file: %s', path)
-	    self.recipe.autopkg.pathMap[path].tags.set("tagdescription")
+            self.recipe.autopkg.pathMap[path].tags.set("tagdescription")
 
 
 class TagHandler(policy.Policy):
@@ -878,10 +878,10 @@ class TagHandler(policy.Policy):
     def doFile(self, path):
         if self.recipe._getCapsulePathsForFile(path):
             return
-	fullpath = self.macros.destdir + path
-	if os.path.isfile(fullpath) and util.isregular(fullpath):
+        fullpath = self.macros.destdir + path
+        if os.path.isfile(fullpath) and util.isregular(fullpath):
             self.info('conary tag handler: %s', path)
-	    self.recipe.autopkg.pathMap[path].tags.set("taghandler")
+            self.recipe.autopkg.pathMap[path].tags.set("taghandler")
 
 
 class TagSpec(_addInfo):
@@ -921,16 +921,16 @@ class TagSpec(_addInfo):
         ('PackageSpec', policy.REQUIRED_PRIOR),
     )
     def doProcess(self, recipe):
-	self.tagList = []
+        self.tagList = []
         self.buildReqsComputedForTags = set()
         self.suggestBuildRequires = set()
-	# read the system and %(destdir)s tag databases
-	for directory in (recipe.macros.destdir+'/etc/conary/tags/',
-			  '/etc/conary/tags/'):
-	    if os.path.isdir(directory):
-		for filename in os.listdir(directory):
-		    path = util.joinPaths(directory, filename)
-		    self.tagList.append(tags.TagFile(path, recipe.macros, True))
+        # read the system and %(destdir)s tag databases
+        for directory in (recipe.macros.destdir+'/etc/conary/tags/',
+                          '/etc/conary/tags/'):
+            if os.path.isdir(directory):
+                for filename in os.listdir(directory):
+                    path = util.joinPaths(directory, filename)
+                    self.tagList.append(tags.TagFile(path, recipe.macros, True))
         self.fullReqs = self.recipe._getTransitiveBuildRequiresNames()
         _addInfo.doProcess(self, recipe)
 
@@ -966,36 +966,36 @@ class TagSpec(_addInfo):
             return
         excludedTags = {}
         for tag in self.included:
-	    for filt in self.included[tag]:
-		if filt.match(path):
+            for filt in self.included[tag]:
+                if filt.match(path):
                     isExcluded = False
                     if tag in self.excluded:
-		        for filt in self.excluded[tag]:
+                        for filt in self.excluded[tag]:
                             if filt.match(path):
                                 s = excludedTags.setdefault(tag, set())
                                 s.add(path)
                                 isExcluded = True
                                 break
                     if not isExcluded:
-		        self.markTag(tag, tag, path)
+                        self.markTag(tag, tag, path)
 
-	for tag in self.tagList:
-	    if tag.match(path):
-		if tag.name:
-		    name = tag.name
-		else:
-		    name = tag.tag
+        for tag in self.tagList:
+            if tag.match(path):
+                if tag.name:
+                    name = tag.name
+                else:
+                    name = tag.tag
                 isExcluded = False
-		if tag.tag in self.excluded:
-		    for filt in self.excluded[tag.tag]:
-			# exception handling is per-tag, so handled specially
-			if filt.match(path):
+                if tag.tag in self.excluded:
+                    for filt in self.excluded[tag.tag]:
+                        # exception handling is per-tag, so handled specially
+                        if filt.match(path):
                             s = excludedTags.setdefault(name, set())
                             s.add(path)
                             isExcluded = True
-			    break
+                            break
                 if not isExcluded:
-		    self.markTag(name, tag.tag, path, tag)
+                    self.markTag(name, tag.tag, path, tag)
         if excludedTags:
             for tag in excludedTags:
                 self.info('ignoring tag match for %s: %s',
@@ -1046,13 +1046,13 @@ class MakeDevices(policy.Policy):
     )
 
     def __init__(self, *args, **keywords):
-	self.devices = []
-	policy.Policy.__init__(self, *args, **keywords)
+        self.devices = []
+        policy.Policy.__init__(self, *args, **keywords)
 
     def updateArgs(self, *args, **keywords):
-	"""
-	MakeDevices(path, devtype, major, minor, owner, group, mode=0400)
-	"""
+        """
+        MakeDevices(path, devtype, major, minor, owner, group, mode=0400)
+        """
         if args:
             args = list(args)
             l = len(args)
@@ -1101,14 +1101,14 @@ class setModes(policy.Policy):
         ('ExcludeDirectories', policy.CONDITIONAL_SUBSEQUENT),
     )
     def __init__(self, *args, **keywords):
-	self.sidbits = {}
-	self.userbits = {}
-	policy.Policy.__init__(self, *args, **keywords)
+        self.sidbits = {}
+        self.userbits = {}
+        policy.Policy.__init__(self, *args, **keywords)
 
     def updateArgs(self, *args, **keywords):
-	"""
-	setModes(path(s), [sidbits=int], [userbits=int])
-	"""
+        """
+        setModes(path(s), [sidbits=int], [userbits=int])
+        """
         sidbits = keywords.pop('sidbits', None)
         userbits = keywords.pop('userbits', None)
         for path in args:
@@ -1119,15 +1119,15 @@ class setModes(policy.Policy):
                 self.recipe.WarnWriteable(
                     exceptions=re.escape(path).replace('%', '%%'),
                     allowUnusedFilters = True)
-	policy.Policy.updateArgs(self, **keywords)
+        policy.Policy.updateArgs(self, **keywords)
 
     def doFile(self, path):
         if self.recipe._getCapsulePathsForFile(path):
             return
         newmode = oldmode = self.recipe.autopkg.pathMap[path].inode.perms()
-	if path in self.userbits:
+        if path in self.userbits:
             newmode = (newmode & 077077) | self.userbits[path]
-	if path in self.sidbits and self.sidbits[path]:
+        if path in self.sidbits and self.sidbits[path]:
             newmode |= self.sidbits[path]
             self.info('suid/sgid: %s mode 0%o', path, newmode & 07777)
         if newmode != oldmode:
@@ -1335,14 +1335,13 @@ class ExcludeDirectories(policy.Policy):
         # temporarily do nothing for capsules, we might do something later
         if self.recipe._getCapsulePathsForFile(path):
             return
+        fullpath = self.recipe.macros.destdir + os.sep + path
+        s = os.lstat(fullpath)
+        mode = s[stat.ST_MODE]
 
-	fullpath = self.recipe.macros.destdir + os.sep + path
-	s = os.lstat(fullpath)
-	mode = s[stat.ST_MODE]
-
-	if mode & 0777 != 0755:
+        if mode & 0777 != 0755:
             self.info('excluding directory %s with mode %o', path, mode&0777)
-	elif not os.listdir(fullpath):
+        elif not os.listdir(fullpath):
             d = self.recipe.autopkg.pathMap[path]
             if d.inode.owner.freeze() != 'root':
                 self.info('not excluding empty directory %s'
@@ -1357,7 +1356,7 @@ class ExcludeDirectories(policy.Policy):
             # to continue to exist on the filesystem to potentially confuse
             # other policy actions... see CNP-18
             os.rmdir(fullpath)
-	self.recipe.autopkg.delFile(path)
+        self.recipe.autopkg.delFile(path)
 
 
 class ByDefault(policy.Policy):
@@ -1438,11 +1437,11 @@ class _UserGroup(policy.Policy):
     processUnmodified = True
 
     def setUserGroupDep(self, path, info, depClass):
-	componentMap = self.recipe.autopkg.componentMap
-	if path not in componentMap:
-	    return
-	pkg = componentMap[path]
-	f = pkg.getFile(path)
+        componentMap = self.recipe.autopkg.componentMap
+        if path not in componentMap:
+            return
+        pkg = componentMap[path]
+        f = pkg.getFile(path)
         if path not in pkg.requiresMap:
             pkg.requiresMap[path] = deps.DependencySet()
         pkg.requiresMap[path].addDep(depClass, deps.Dependency(info, []))
@@ -1484,48 +1483,48 @@ class Ownership(_UserGroup):
     """
 
     def __init__(self, *args, **keywords):
-	self.filespecs = []
+        self.filespecs = []
         self.systemusers = ('root',)
         self.systemgroups = ('root',)
-	policy.Policy.__init__(self, *args, **keywords)
+        policy.Policy.__init__(self, *args, **keywords)
 
     def updateArgs(self, *args, **keywords):
-	if args:
-	    for filespec in args[2:]:
-		self.filespecs.append((filespec, args[0], args[1]))
-	policy.Policy.updateArgs(self, **keywords)
+        if args:
+            for filespec in args[2:]:
+                self.filespecs.append((filespec, args[0], args[1]))
+        policy.Policy.updateArgs(self, **keywords)
 
     def doProcess(self, recipe):
-	# we must NEVER take ownership from the filesystem
-	assert(not self.exceptions)
-	self.rootdir = self.rootdir % recipe.macros
-	self.fileFilters = []
-	for (filespec, user, group) in self.filespecs:
-	    self.fileFilters.append(
-		(filter.Filter(filespec, recipe.macros),
+        # we must NEVER take ownership from the filesystem
+        assert(not self.exceptions)
+        self.rootdir = self.rootdir % recipe.macros
+        self.fileFilters = []
+        for (filespec, user, group) in self.filespecs:
+            self.fileFilters.append(
+                (filter.Filter(filespec, recipe.macros),
                  user %recipe.macros,
                  group %recipe.macros))
-	del self.filespecs
-	policy.Policy.doProcess(self, recipe)
+        del self.filespecs
+        policy.Policy.doProcess(self, recipe)
 
     def doFile(self, path):
         if self.recipe._getCapsulePathsForFile(path):
             return
 
-	pkgfile = self.recipe.autopkg.pathMap[path]
+        pkgfile = self.recipe.autopkg.pathMap[path]
         pkgOwner = pkgfile.inode.owner()
         pkgGroup = pkgfile.inode.group()
         bestOwner = pkgOwner
         bestGroup = pkgGroup
-	for (f, owner, group) in self.fileFilters:
-	    if f.match(path):
+        for (f, owner, group) in self.fileFilters:
+            if f.match(path):
                 bestOwner, bestGroup = owner, group
-		break
+                break
 
-	if bestOwner != pkgOwner:
-	    pkgfile.inode.owner.set(bestOwner)
-	if bestGroup != pkgGroup:
-	    pkgfile.inode.group.set(bestGroup)
+        if bestOwner != pkgOwner:
+            pkgfile.inode.owner.set(bestOwner)
+        if bestGroup != pkgGroup:
+            pkgfile.inode.group.set(bestGroup)
 
         if bestOwner and bestOwner not in self.systemusers:
             self.setUserGroupDep(path, bestOwner, deps.UserInfoDependencies)
@@ -1537,35 +1536,36 @@ class _Utilize(_UserGroup):
     Pure virtual base class for C{UtilizeUser} and C{UtilizeGroup}
     """
     def __init__(self, *args, **keywords):
-	self.filespecs = []
-	policy.Policy.__init__(self, *args, **keywords)
+        self.filespecs = []
+        policy.Policy.__init__(self, *args, **keywords)
 
     def updateArgs(self, *args, **keywords):
-	"""
-	call as::
-	  UtilizeFoo(item, filespec(s)...)
-	List them in order, most specific first, ending with most
-	general; the filespecs will be matched in the order that
-	you provide them.
-	"""
-	if args:
-	    for filespec in args[1:]:
-		self.filespecs.append((filespec, args[0]))
-	policy.Policy.updateArgs(self, **keywords)
+        """
+        call as::
+          UtilizeFoo(item, filespec(s)...)
+        List them in order, most specific first, ending with most
+        general; the filespecs will be matched in the order that
+        you provide them.
+        """
+        item = args[0] % self.recipe.macros
+        if args:
+            for filespec in args[1:]:
+                self.filespecs.append((filespec, item))
+        policy.Policy.updateArgs(self, **keywords)
 
     def doProcess(self, recipe):
-	self.rootdir = self.rootdir % recipe.macros
-	self.fileFilters = []
-	for (filespec, item) in self.filespecs:
-	    self.fileFilters.append(
-		(filter.Filter(filespec, recipe.macros), item))
-	del self.filespecs
-	policy.Policy.doProcess(self, recipe)
+        self.rootdir = self.rootdir % recipe.macros
+        self.fileFilters = []
+        for (filespec, item) in self.filespecs:
+            self.fileFilters.append(
+                (filter.Filter(filespec, recipe.macros), item))
+        del self.filespecs
+        policy.Policy.doProcess(self, recipe)
 
     def doFile(self, path):
-	for (f, item) in self.fileFilters:
-	    if f.match(path):
-		self._markItem(path, item)
+        for (f, item) in self.fileFilters:
+            if f.match(path):
+                self._markItem(path, item)
         return
 
     def _markItem(self, path, item):
@@ -1718,7 +1718,7 @@ class ComponentRequires(policy.Policy):
             'config': frozenset(('runtime', 'lib', 'devellib', 'devel')),
         }
         self.overridesMap = {}
-	policy.Policy.__init__(self, *args, **keywords)
+        policy.Policy.__init__(self, *args, **keywords)
 
     def updateArgs(self, *args, **keywords):
         d = args[0]
@@ -1863,7 +1863,22 @@ class _dependency(policy.Policy):
         self.bootstrapPythonFlags = None
         self.bootstrapSysPath = []
         self.bootstrapPerlIncPath = []
-        
+        self.removeFlagsByDependencyClass = None # pre-transform
+        self.removeFlagsByDependencyClassMap = {}
+
+    def updateArgs(self, *args, **keywords):
+        removeFlagsByDependencyClass = keywords.pop(
+            'removeFlagsByDependencyClass', None)
+        if removeFlagsByDependencyClass is not None:
+            clsName, ignoreFlags = removeFlagsByDependencyClass
+            cls = deps.dependencyClassesByName[clsName]
+            l = self.removeFlagsByDependencyClassMap.setdefault(cls, [])
+            if isinstance(ignoreFlags, (list, set, tuple)):
+                l.append(set(ignoreFlags))
+            else:
+                l.append(re.compile(ignoreFlags))
+        policy.Policy.updateArgs(self, **keywords)
+
     def preProcess(self):
         self.CILPolicyRE = re.compile(r'.*mono/.*/policy.*/policy.*\.config$')
         self.legalCharsRE = re.compile('[.0-9A-Za-z_+-/]')
@@ -2130,7 +2145,7 @@ class _dependency(policy.Policy):
                                   main, provided.getName()[0],
                                   sorted(list(requiredSet-providedSet)),
                                   pathString)
-                    
+
                 curClass = deps.SonameDependencies
                 flags.extend((x, deps.FLAG_SENSE_REQUIRED) for x in abi[1])
                 dep = deps.Dependency(main, flags)
@@ -2184,7 +2199,7 @@ class _dependency(policy.Policy):
                 fullpath = os.path.normpath(
                     os.path.dirname(fullpath)+'/'+contents)
         return fullpath[len(destdir):], fullpath
-        
+
     def _symlinkMagic(self, path, fullpath, macros, m=None):
         "Recurse through symlinks and get the final path and magic"
         path, _ = self._recurseSymlink(path, macros.destdir, fullpath=fullpath)
@@ -2448,7 +2463,7 @@ class Provides(_dependency):
     discovered.  Provisions that begin with C{file} are files, those that
     start with C{soname:} are sonames, and those that start with C{abi:}
     are ABIs.  Other prefixes are reserved.
-    
+
     Soname provisions are normally discovered automatically; they need
     to be provided manually only in two cases:
       - If a shared library was not built with a soname at all.
@@ -2496,14 +2511,14 @@ class Provides(_dependency):
     filetree = policy.PACKAGE
 
     invariantexceptions = (
-	'%(docdir)s/',
+        '%(docdir)s/',
     )
 
     dbDepCacheClass = _DatabaseDepCache
 
     def __init__(self, *args, **keywords):
         _dependency.__init__(self, *args, **keywords)
-	self.provisions = []
+        self.provisions = []
         self.sonameSubtrees = set()
         self.sysPath = None
         self.monodisPath = None
@@ -2514,13 +2529,13 @@ class Provides(_dependency):
         self.perlIncPath = None
         self.pythonSysPathMap = {}
         self.exceptDeps = []
-	policy.Policy.__init__(self, *args, **keywords)
+        policy.Policy.__init__(self, *args, **keywords)
         self.depCache = self.dbDepCacheClass(self._getDb())
 
     def updateArgs(self, *args, **keywords):
-	if args:
-	    for filespec in args[1:]:
-		self.provisions.append((filespec, args[0]))
+        if args:
+            for filespec in args[1:]:
+                self.provisions.append((filespec, args[0]))
         sonameSubtrees = keywords.pop('sonameSubtrees', None)
         if sonameSubtrees:
             if type(sonameSubtrees) in (list, tuple):
@@ -2547,8 +2562,10 @@ class Provides(_dependency):
         bootstrapPerlIncPath = keywords.pop('_bootstrapPerlIncPath', None)
         if bootstrapPerlIncPath is not None:
             self.bootstrapPerlIncPath = bootstrapPerlIncPath
+        if keywords.get('removeFlagsByDependencyClass', None):
+            self.error('removeFlagsByDependencyClass not currently implemented for Provides (CNY-3443)')
 
-        policy.Policy.updateArgs(self, **keywords)
+        _dependency.updateArgs(self, **keywords)
 
     def preProcess(self):
         macros = self.macros
@@ -2560,10 +2577,10 @@ class Provides(_dependency):
         if self.bootstrapPerlIncPath:
             self.bootstrapPerlIncPath = [x % macros for x in self.bootstrapPerlIncPath]
         self.rootdir = self.rootdir % macros
-	self.fileFilters = []
+        self.fileFilters = []
         self.binDirs = frozenset(
             x % macros for x in [
-            '%(bindir)s', '%(sbindir)s', 
+            '%(bindir)s', '%(sbindir)s',
             '%(essentialbindir)s', '%(essentialsbindir)s',
             '%(libexecdir)s', ])
         self.noProvDirs = frozenset(
@@ -2579,10 +2596,10 @@ class Provides(_dependency):
             except sre_constants.error, e:
                 self.error('Bad regular expression %s for file spec %s: %s', rE, fE, e)
         self.exceptDeps= exceptDeps
-	for filespec, provision in self.provisions:
+        for filespec, provision in self.provisions:
             self.fileFilters.append(
                 (filter.Filter(filespec, macros), provision % macros))
-	del self.provisions
+        del self.provisions
         _dependency.preProcess(self)
 
 
@@ -2759,7 +2776,7 @@ class Provides(_dependency):
             sys.path = []
             sys.prefix = destdir + sys.prefix
             sys.exec_prefix = destdir + sys.exec_prefix
-            site.PREFIXES=[sys.prefix, sys.exec_prefix]  
+            site.PREFIXES=[sys.prefix, sys.exec_prefix]
             site.addsitepackages(None)
             systemPaths.update(self._stripDestDir(sys.path, destdir))
 
@@ -2954,21 +2971,29 @@ class Provides(_dependency):
         else:
             internalJavaDepMap = self.recipe._internalJavaDepMap
 
+        if hasattr(self.recipe, '_internalJavaProvides'):
+            internalProvides = self.recipe._internalJavaProvides
+        else:
+            # We need to cache the internal java provides, otherwise we do too
+            # much work for each file (CNY-3372)
+            self.recipe._internalJavaProvides = internalProvides = set()
+            for opath, ofiles in internalJavaDepMap.items():
+                internalProvides.update(x[0] for x in ofiles.values()
+                    if x[0] is not None)
+            # Now drop internal provides from individual class requires
+
+            for opath, ofiles in internalJavaDepMap.items():
+                for oclassName, (oclassProv, oclassReqSet) in ofiles.items():
+                    if oclassReqSet is None:
+                        continue
+                    oclassReqSet.difference_update(internalProvides)
+
         reqs = set()
         if self._isJava(m, 'requires'):
             # Extract this file's requires
             reqs.update(m.contents['requires'])
             # Remove the ones that are satisfied internally
-            # First, compute the list of all internal provides
-            internalProvides = set()
-            for opath, ofiles in internalJavaDepMap.items():
-                internalProvides.update(x[0] for x in ofiles.values()
-                    if x[0] is not None)
             reqs.difference_update(internalProvides)
-            # Now drop these internal provides from individual class requires
-            for opath, ofiles in internalJavaDepMap.items():
-                for oclassName, (oclassProv, oclassReqSet) in ofiles.items():
-                    oclassReqSet.difference_update(internalProvides)
 
         # For now, we are only trimming the provides (and requires) for
         # classes for which the requires are not satisfied, neither internally
@@ -3186,7 +3211,7 @@ class Requires(_addInfo, _dependency):
     Demonstrates using C{r.Requires} to specify a manual requirement of the
     file C{%(sbindir)s/sendmail} to the  C{:runtime} component of package
     C{mailbase}.
-    
+
     C{r.Requires('file: %(sbindir)s/sendmail', '%(datadir)s/squirrelmail/index.php')}
 
     Specifies that conary should require the file C{%(sbindir)s/sendmail} to
@@ -3215,7 +3240,7 @@ class Requires(_addInfo, _dependency):
     filetree = policy.PACKAGE
 
     invariantexceptions = (
-	'%(docdir)s/',
+        '%(docdir)s/',
     )
 
     dbDepCacheClass = _DatabaseDepCache
@@ -3310,6 +3335,7 @@ class Requires(_addInfo, _dependency):
             self.recipe._reqExceptDeps = []
         self.recipe._reqExceptDeps.extend(self.exceptDeps)
 
+        _dependency.updateArgs(self, *args, **keywords)
         _addInfo.updateArgs(self, *args, **keywords)
 
     def preProcess(self):
@@ -3365,9 +3391,9 @@ class Requires(_addInfo, _dependency):
                 self._addELFRequirements(path, m, pkgFiles)
 
         # now go through explicit requirements
-	for info in self.included:
-	    for filt in self.included[info]:
-		if filt.match(path):
+        for info in self.included:
+            for filt in self.included[info]:
+                if filt.match(path):
                     self._markManualRequirement(info, path, pkgFiles, m)
 
         # now check for automatic dependencies besides ELF
@@ -3488,7 +3514,7 @@ class Requires(_addInfo, _dependency):
 
         def _canonicalRPATH(rpath, glob=False):
             # normalize all elements of RPATH
-            l = [ os.path.normpath(x) for x in rpath.split(':') ]
+            l = [ util.normpath(x) for x in rpath.split(':') ] # CNY-3425
             # prune system paths and relative paths from RPATH
             l = [ x for x in l
                   if x not in self.systemLibPaths and x.startswith('/') ]
@@ -3583,7 +3609,7 @@ class Requires(_addInfo, _dependency):
             sys.path = [destdir + pythonDir]
             sys.prefix = destdir + sys.prefix
             sys.exec_prefix = destdir + sys.exec_prefix
-            site.PREFIXES=[sys.prefix, sys.exec_prefix]  
+            site.PREFIXES=[sys.prefix, sys.exec_prefix]
             site.addsitepackages(None)
             systemPaths = sys.path + systemPaths
 
@@ -3639,7 +3665,7 @@ class Requires(_addInfo, _dependency):
     def _addPythonRequirements(self, path, fullpath, pkgFiles, script=False):
         destdir = self.recipe.macros.destdir
         destDirLen = len(destdir)
-        
+
         (sysPath, pythonModuleFinder, pythonVersion
         )= self._getPythonRequiresSysPath(path)
 
@@ -3697,7 +3723,7 @@ class Requires(_addInfo, _dependency):
                 # a python file not found in sys.path will not have been
                 # provided, so we must not depend on it either
                 return
-            if not (depPath.endswith('.py') or depPath.endswith('.pyc') or 
+            if not (depPath.endswith('.py') or depPath.endswith('.pyc') or
                     depPath.endswith('.so')):
                 # Not something we provide, so not something we can
                 # require either.  Drop it and go on.  We have seen
@@ -3832,7 +3858,7 @@ class Requires(_addInfo, _dependency):
                         if util.exists(prefix+candidate):
                             return candidate
             return None
-        
+
         for depEntry in depEntries:
             depEntryPath = _getDepEntryPath(depEntry)
             if depEntryPath is None:
@@ -3988,6 +4014,17 @@ class Requires(_addInfo, _dependency):
             flagindex = info.index('(')
             flags = set(info[flagindex+1:-1].split() + list(flags))
             info = info.split('(')[0]
+
+        # CNY-3443
+        if depClass in self.removeFlagsByDependencyClassMap:
+            flags = set(flags)
+            for ignoreItem in self.removeFlagsByDependencyClassMap[depClass]:
+                if isinstance(ignoreItem, set):
+                    ignoreFlags = ignoreItem
+                else:
+                    ignoreFlags = set(f for f in flags if ignoreItem.match(f))
+                flags -= ignoreFlags
+
         if flags:
             flags = [ (x, deps.FLAG_SENSE_REQUIRED) for x in flags ]
 
@@ -4108,12 +4145,12 @@ class Flavor(policy.Policy):
     filetree = policy.PACKAGE
 
     def preProcess(self):
-	self.libRe = re.compile(
+        self.libRe = re.compile(
             '^(%(libdir)s'
             '|/%(lib)s'
             '|%(x11prefix)s/%(lib)s'
             '|%(krbprefix)s/%(lib)s)(/|$)' %self.recipe.macros)
-	self.libReException = re.compile('^/usr/(lib|%(lib)s)/(python|ruby).*$')
+        self.libReException = re.compile('^/usr/(lib|%(lib)s)/(python|ruby).*$')
         self.baseIsnset = use.Arch.getCurrentArch()._name
         self.baseArchFlavor = use.Arch.getCurrentArch()._toDependency()
         self.archFlavor = use.createFlavor(None, use.Arch._iterUsed())
@@ -4147,11 +4184,11 @@ class Flavor(policy.Policy):
         return False
 
     def doFile(self, path):
-	autopkg = self.recipe.autopkg
-	pkg = autopkg.findComponent(path)
+        autopkg = self.recipe.autopkg
+        pkg = autopkg.findComponent(path)
         if pkg is None:
             return
-	f = pkg.getFile(path)
+        f = pkg.getFile(path)
         m = self.recipe.magic[path]
         if m and m.name == 'ELF' and 'isnset' in m.contents:
             isnset = m.contents['isnset']
@@ -4173,11 +4210,11 @@ class Flavor(policy.Policy):
         else:
             return
 
-	flv = deps.Flavor()
+        flv = deps.Flavor()
         flv.addDep(deps.InstructionSetDependency, deps.Dependency(isnset, []))
         # get the Arch.* dependencies
-        # set the flavor for the file to match that discovered in the 
-        # magic - but do not let that propagate up to the flavor of 
+        # set the flavor for the file to match that discovered in the
+        # magic - but do not let that propagate up to the flavor of
         # the package - instead the package will have the flavor that
         # it was cooked with.  This is to avoid unnecessary or extra files
         # causing the entire package from being flavored inappropriately.
@@ -4447,8 +4484,8 @@ class reportExcessBuildRequires(policy.Policy):
     filetree = policy.NO_FILES
 
     def __init__(self, *args, **keywords):
-	self.found = set()
-	policy.Policy.__init__(self, *args, **keywords)
+        self.found = set()
+        policy.Policy.__init__(self, *args, **keywords)
 
     def updateArgs(self, *args, **keywords):
         for arg in args:
@@ -4463,7 +4500,7 @@ class reportExcessBuildRequires(policy.Policy):
         # for some reason that the buildRequires enforcement policy
         # doesn't yet support, and don't warn that all of the listed
         # buildRequires might be excessive.
-	if self.found and self.recipe._logFile:
+        if self.found and self.recipe._logFile:
             r = self.recipe
             def getReqNames(key):
                 return set(x.split('=')[0] for x in r._recipeRequirements[key])
@@ -4538,8 +4575,8 @@ class reportMissingBuildRequires(policy.Policy):
     filetree = policy.NO_FILES
 
     def __init__(self, *args, **keywords):
-	self.errors = set()
-	policy.Policy.__init__(self, *args, **keywords)
+        self.errors = set()
+        policy.Policy.__init__(self, *args, **keywords)
 
     def updateArgs(self, *args, **keywords):
         for arg in args:
@@ -4549,7 +4586,7 @@ class reportMissingBuildRequires(policy.Policy):
                 self.errors.add(arg)
 
     def do(self):
-	if self.errors and self.recipe._logFile:
+        if self.errors and self.recipe._logFile:
             self.recipe._logFile.reportMissingBuildRequires(
                 sorted(list(self.errors)))
 
@@ -4565,20 +4602,20 @@ class reportErrors(policy.Policy, policy.GroupPolicy):
     groupError = False
 
     def __init__(self, *args, **keywords):
-	self.errors = []
-	policy.Policy.__init__(self, *args, **keywords)
+        self.errors = []
+        policy.Policy.__init__(self, *args, **keywords)
 
     def updateArgs(self, *args, **keywords):
-	"""
-	Called once, with printf-style arguments, for each warning.
-	"""
-	self.errors.append(args[0] %tuple(args[1:]))
+        """
+        Called once, with printf-style arguments, for each warning.
+        """
+        self.errors.append(args[0] %tuple(args[1:]))
         groupError = keywords.pop('groupError', None)
         if groupError is not None:
             self.groupError = groupError
 
     def do(self):
-	if self.errors:
+        if self.errors:
             msg = self.groupError and 'Group' or 'Package'
             raise policy.PolicyError, ('%s Policy errors found:\n%%s' % msg) \
                     % "\n".join(self.errors)

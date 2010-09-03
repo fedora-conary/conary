@@ -23,7 +23,6 @@ import socket
 import time
 import urllib
 import urllib2
-import re
 import copy
 
 from conary.lib import log
@@ -32,44 +31,45 @@ from conary.lib import util
 from conary import callbacks
 from conary.build.mirror import Mirror
 from conary.conaryclient.callbacks import FetchCallback, ChangesetCallback
-
+from conary.repository import transport
 
 NETWORK_SCHEMES = ('http', 'https', 'ftp', 'mirror')
 
-NEGATIVE_CACHE_TTL = 60*60 # The TTL for negative cache entries (seconds)
+NEGATIVE_CACHE_TTL = 60 * 60  # The TTL for negative cache entries (seconds)
+
 
 class laUrl(object):
+
     def __init__(self, urlString, parent=None, extension=None):
         urlString = urllib.unquote(urlString)
 
         # unfortunately urllib doesn't support unknown schemes so we have them
         # parsed as http
-        for x in ('mirror','multiurl','lookaside'):
+        for x in ('mirror', 'multiurl', 'lookaside'):
             x += '://'
             if urlString.startswith(x):
                 savedScheme = x
-                urlString = urlString.replace(x,'http://',1)
+                urlString = urlString.replace(x, 'http://', 1)
                 break
         else:
             savedScheme = None
 
         (self.scheme, self.user, self.passwd, self.host, self.port,
-         self.path, self.params, self.fragment ) = util.urlSplit(urlString)
+         self.path, self.params, self.fragment) = util.urlSplit(urlString)
 
         if savedScheme:
             self.scheme = savedScheme[:-3]
 
-        self.parent=parent
+        if parent:
+            self.path = os.sep.join((self.path, parent.path))
+            self.path = self.path.replace('//', '/')
+            self.extension = parent.extension
+        self.parent = parent
         assert self.parent is not self
-        self.extension=extension
+        self.extension = extension
 
-    def asStr(self,noAuth=False,quoted=False):
-        if self.parent:
-            suffix = self.parent._getCumulativePath()
-            path = os.path.normpath(os.sep.join((self.path, suffix)))
-        else:
-            path = self.path
-
+    def asStr(self, noAuth=False, quoted=False):
+        path = self.path
         if self.extension:
             path += '.' + self.extension
 
@@ -77,71 +77,78 @@ class laUrl(object):
             path = urllib.quote(path)
 
         if noAuth:
-            return util.urlUnsplit( (self.scheme, None, None,
+            return util.urlUnsplit((self.scheme, None, None,
                                      self.host, self.port, path,
-                                     self.params, self.fragment) )
-        return util.urlUnsplit( (self.scheme, self.user, self.passwd,
+                                     self.params, self.fragment))
+        return util.urlUnsplit((self.scheme, self.user, self.passwd,
                                  self.host, self.port, path,
-                                 self.params, self.fragment) )
+                                 self.params, self.fragment))
+
     def __str__(self):
         return self.asStr()
 
-    def filePath(self,useParentPath=True):
-        suffix = None
+    def __repr__(self):
+        return "<%s.%s instance at %#x; url=%s>" % (
+            self.__class__.__module__, self.__class__.__name__,
+            id(self), self.asStr())
+
+    def getHostAndPath(self, useParentPath=True):
         if self.parent and useParentPath:
-            suffix = self.parent._getCumulativePath()
-        if suffix:
-            path = os.path.normpath(os.sep.join((self.path, suffix)))
-        else:
-            path = self.path
+            return self.parent.getHostAndPath()
+
+        host = self.host
+        if self.port:
+            host = self.host + ":" + str(self.port)
+        path = self.path + (self.params and '?%s'
+                            % self.params or '')
+        fragment = self.fragment
+
+        return (host, path, fragment)
+
+    def filePath(self, useParentPath=True):
+        (host, path, fragment) = self.getHostAndPath(useParentPath)
+
         if self.extension:
             path += '.' + self.extension
+        if fragment:
+            path += "#" + fragment
 
+        path = path.replace('/../', '/_../')
         if path[0] == '/':
-            return os.path.join('/',self.host,path[1:])
-        elif self.host:
-            return os.path.join('/',self.host,path)
+            path = path[1:]
 
+        if host:
+            return os.path.join('/', host, path)
         return path
 
     def explicit(self):
-        return self.scheme not in [ 'mirror', 'multiurl']
+        return self.scheme not in ['mirror', 'multiurl']
 
-    def _getCumulativePath(self):
-        ppath=None
-        if self.parent:
-            ppath = self.parent._getCumulativePath()
 
-        if self.path:
-            if ppath:
-                return os.path.normpath(os.sep.join((self.path,ppath)))
-            else:
-                return self.path
-        return ppath
-
-def checkRefreshFilter( refreshFilter, url):
+def checkRefreshFilter(refreshFilter, url):
     if not refreshFilter:
         return False
-    if refreshFilter( str(url) ):
+    if refreshFilter(str(url)):
         return True
-    if refreshFilter( os.path.basename(url.path) ):
+    if refreshFilter(os.path.basename(url.path)):
         return True
     return False
 
-# some recipes reach into Conary internals here, and have references
-# to searchAll
+
 def searchAll(cfg, repCache, name, location, srcdirs, autoSource=False,
               httpHeaders={}, localOnly=False):
+    #some recipes reach into Conary internals here, and have references
+    #to searchAll
+
     return findAll(cfg, repCache, name, location, srcdirs, autoSource,
                    httpHeaders, localOnly, allowNone=True)
 
 
-
-# bw compatible findAll method.
 def findAll(cfg, repCache, name, location, srcdirs, autoSource=False,
             httpHeaders={}, localOnly=False, guessName=None, suffixes=None,
             allowNone=False, refreshFilter=None, multiurlMap=None,
-            unifiedSourcePath = None):
+            unifiedSourcePath=None):
+    # this is a bw compatible findAll method.
     if guessName:
         name = name + guessName
     ff = FileFinder(recipeName=location, repositoryCache=repCache,
@@ -154,7 +161,7 @@ def findAll(cfg, repCache, name, location, srcdirs, autoSource=False,
             searchMethod = ff.SEARCH_LOCAL_ONLY
         else:
             # BW COMPATIBLE HACK - since we know we aren't actually searching
-            # srcdirs since they're empty, we take this to mean 
+            # srcdirs since they're empty, we take this to mean
             # repository only.
             searchMethod = ff.SEARCH_REPOSITORY_ONLY
     elif autoSource:
@@ -162,17 +169,18 @@ def findAll(cfg, repCache, name, location, srcdirs, autoSource=False,
     else:
         searchMethod = ff.SEARCH_ALL
 
-
     results = ff.fetch(name, suffixes=suffixes, archivePath=unifiedSourcePath,
                        allowNone=allowNone, searchMethod=searchMethod,
                        headers=httpHeaders, refreshFilter=refreshFilter)
     return results[1]
 
-# backwards compatible fetchURL method
+
 def fetchURL(cfg, name, location, httpHeaders={}, guessName=None, mirror=None):
+    #this is a backwards compatible fetchURL method
     repCache = RepositoryCache(None, cfg=cfg)
     ff = FileFinder(recipeName=location, repositoryCache=repCache,
                     cfg=cfg)
+
     try:
         url = laUrl(name)
         return ff.searchNetworkSources(url, headers=httpHeaders)
@@ -187,7 +195,7 @@ class FileFinder(object):
     SEARCH_LOCAL_ONLY = 2
 
     def __init__(self, recipeName, repositoryCache, localDirs=None,
-                 multiurlMap=None, refreshFilter=None, mirrorDirs = None,
+                 multiurlMap=None, refreshFilter=None, mirrorDirs=None,
                  cfg=None):
         self.cfg = cfg
         self.recipeName = recipeName
@@ -202,8 +210,9 @@ class FileFinder(object):
         self.noproxyFilter = util.noproxyFilter()
 
     def fetch(self, urlStr, suffixes=None, archivePath=None, headers=None,
-              allowNone=False, searchMethod=0, # SEARCH_ALL
+              allowNone=False, searchMethod=0,  # SEARCH_ALL
               refreshFilter=None):
+
         urlList = self._getPathsToSearch(urlStr, suffixes)
         for url in urlList:
             try:
@@ -222,10 +231,10 @@ class FileFinder(object):
 
     def _fetch(self, url, archivePath, searchMethod, headers=None,
                refreshFilter=None):
-        if isinstance(url,str):
+        if isinstance(url, str):
             url = laUrl(url)
 
-        refresh = checkRefreshFilter(refreshFilter,url)
+        refresh = checkRefreshFilter(refreshFilter, url)
         if searchMethod == self.SEARCH_LOCAL_ONLY:
             self.searchFilesystem(url)
             return
@@ -235,7 +244,7 @@ class FileFinder(object):
             elif refresh:
                 self.searchNetworkSources(url, headers)
             self.searchRepository(url)
-        else: #SEARCH_ALL
+        else:  # SEARCH_ALL
             self.searchFilesystem(url)
             if archivePath:
                 self.searchArchive(archivePath, url)
@@ -243,18 +252,19 @@ class FileFinder(object):
                 self.searchNetworkSources(url, headers)
             self.searchRepository(url)
             self.searchLocalCache(url)
-            self.searchNetworkSources(url,headers)
+            self.searchNetworkSources(url, headers)
 
     def searchRepository(self, url):
         if self.repCache.hasFilePath(url):
-            log.info('found %s in repository', url.asStr(noAuth=True) )
+            log.info('found %s in repository', url.asStr(noAuth=True))
             path = self.repCache.cacheFilePath(self.recipeName, url)
             raise PathFound(path, True)
 
-    def searchLocalCache(self,  url):
+    def searchLocalCache(self, url):
         # exact match first, then look for cached responses from other servers
         path = self.repCache.getCacheEntry(self.recipeName, url)
-        if path: raise PathFound(path, False)
+        if path:
+            raise PathFound(path, False)
 
     def searchFilesystem(self, url):
         if url.filePath() == '/':
@@ -265,7 +275,7 @@ class FileFinder(object):
             raise PathFound(path, False)
 
     def searchArchive(self, archiveName, url):
-        path =  self.repCache.getArchiveCacheEntry(archiveName, url)
+        path = self.repCache.getArchiveCacheEntry(archiveName, url)
         if path:
             raise PathFound(path, True)
 
@@ -274,7 +284,7 @@ class FileFinder(object):
             return
 
         # check for negative cache entries to avoid spamming servers
-        negativePath =  self.repCache.checkNegativeCache(self.recipeName, url)
+        negativePath = self.repCache.checkNegativeCache(self.recipeName, url)
         if negativePath:
             log.warning('not fetching %s (negative cache entry %s exists)',
                         url, negativePath)
@@ -300,8 +310,8 @@ class FileFinder(object):
 
         if url.scheme == 'multiurl':
             multiKey = os.path.dirname(url.filePath())[1:]
-            urlObjList = [ laUrl(x,parent=url)
-                           for x in self.multiurlMap[multiKey] ]
+            urlObjList = [laUrl(x, parent=url)
+                          for x in self.multiurlMap[multiKey]]
         else:
             urlObjList = [url]
 
@@ -309,7 +319,7 @@ class FileFinder(object):
         for ou in urlObjList:
             if ou.scheme == 'mirror':
                 for u in Mirror(self.mirrorDirs, ou.host):
-                    mu = laUrl(u,parent=ou)
+                    mu = laUrl(u, parent=ou)
                     newUrlObjList.append(mu)
             else:
                 newUrlObjList.append(ou)
@@ -320,12 +330,12 @@ class FileFinder(object):
             for url in urlObjList:
                 for suffix in suffixes:
                     newurl = copy.copy(url)
-                    newurl.extension=suffix
+                    newurl.extension = suffix
                     newUrlObjList.append(newurl)
             urlObjList = newUrlObjList
         return urlObjList
 
-    class BasicPasswordManager(object):
+    class BasicPasswordManager(urllib2.HTTPPasswordMgr):
         # password manager class for urllib2 that handles exactly 1 password
         def __init__(self):
             self.user = ''
@@ -336,46 +346,51 @@ class FileFinder(object):
             self.passwd = passwd
 
         def find_user_password(self, *args, **kw):
-            return self.user, self.passwd
+            if self.user:
+                return self.user, self.passwd
+            return (None, None)
 
     def _fetchUrl(self, url, headers):
-        retries = 0
+        if isinstance(url, str):
+            url = laUrl(url)
+
+        retries = 3
+        if self.cfg.proxy and not self.noproxyFilter.bypassProxy(url.host):
+            retries = 7
         inFile = None
-        while retries < 5:
+        for i in range(retries):
             try:
                 # set up a handler that tracks cookies to handle
                 # sites like Colabnet that want to set a session cookie
                 cj = cookielib.LWPCookieJar()
-                passwdMgr = self.BasicPasswordManager()
+                opener = urllib2.build_opener(urllib2.HTTPCookieProcessor(cj))
+
+                # add password handler if needed
+                if url.user:
+                    url.passwd = url.passwd or ''
+                    passwdMgr = self.BasicPasswordManager()
+                    passwdMgr.add_password(url.user, url.passwd)
+                    opener.add_handler(
+                        urllib2.HTTPBasicAuthHandler(passwdMgr))
+
+                # add proxy and proxy password handler if needed
                 if self.cfg.proxy and \
                         not self.noproxyFilter.bypassProxy(url.host):
                     proxyPasswdMgr = urllib2.HTTPPasswordMgr()
-                    opener = urllib2.build_opener(
-                        urllib2.HTTPCookieProcessor(cj),
-                        urllib2.HTTPBasicAuthHandler(passwdMgr),
-                        urllib2.ProxyBasicAuthHandler(proxyPasswdMgr),
-                        urllib2.ProxyHandler(self.cfg.proxy)
-                        )
-                else:
-                    proxyPasswdMgr = None
-                    opener = urllib2.build_opener(
-                        urllib2.HTTPCookieProcessor(cj),
-                        urllib2.HTTPBasicAuthHandler(passwdMgr),
-                        )
-
-                urlStr = url.asStr(noAuth=True,quoted=True)
-                if url.user:
-                    url.passwd = url.passwd or ''
-                    passwdMgr.add_password(url.user, url.passwd)
-
-                if proxyPasswdMgr:
                     for v in self.cfg.proxy.values():
                         pUrl = laUrl(v[1])
                         if pUrl.user:
                             pUrl.passwd = pUrl.passwd or ''
                             proxyPasswdMgr.add_password(
-                                None, pUrl.asStr(noAuth=True,quoted=True),
+                                None, pUrl.asStr(noAuth=True, quoted=True),
                                 url.user, url.passwd)
+
+                    opener.add_handler(
+                        urllib2.ProxyBasicAuthHandler(proxyPasswdMgr))
+                    opener.add_handler(
+                        urllib2.ProxyHandler(self.cfg.proxy))
+
+                urlStr = url.asStr(noAuth=True, quoted=True)
                 req = urllib2.Request(urlStr, headers=headers)
                 inFile = opener.open(req)
                 if not urlStr.startswith('ftp://'):
@@ -396,7 +411,7 @@ class FileFinder(object):
             except socket.error, err:
                 num, msg = err
                 if num == errno.ECONNRESET:
-                    log.info('Connection Reset by FTP server'
+                    log.info('Connection Reset by server'
                              'while retrieving %s.'
                              '  Retrying in 10 seconds.', urlStr, msg)
                     time.sleep(10)
@@ -419,12 +434,13 @@ class FileFinder(object):
                     return None
         return inFile
 
+
 class RepositoryCache(object):
 
     def __init__(self, repos, refreshFilter=None, cfg=None):
-	self.repos = repos
+        self.repos = repos
         self.refreshFilter = refreshFilter
-	self.nameMap = {}
+        self.nameMap = {}
         self.cacheMap = {}
         self.quiet = False
         self._basePath = self.downloadRatedLimit = None
@@ -444,29 +460,29 @@ class RepositoryCache(object):
 
     basePath = property(_getBasePath)
 
-    def addFileHash(self, troveName, troveVersion, pathId, path, fileId,
-                    fileVersion, sha1, mode):
-	self.nameMap[path] = (troveName, troveVersion, pathId, path, fileId,
-                              fileVersion, sha1, mode)
+    def addFileHash(self, filePath, troveName, troveVersion, pathId, path,
+                    fileId, fileVersion, sha1, mode):
+        self.nameMap[filePath] = (troveName, troveVersion, pathId, path,
+                                  fileId, fileVersion, sha1, mode)
 
     def hasFilePath(self, url):
         if self.refreshFilter:
-            if checkRefreshFilter(self.refreshFilter,url):
+            if checkRefreshFilter(self.refreshFilter, url):
                 return False
         return url.filePath() in self.nameMap
 
     def cacheFilePath(self, cachePrefix, url):
-	cachePath = self.getCachePath(cachePrefix, url)
+        cachePath = self.getCachePath(cachePrefix, url)
         util.mkdirChain(os.path.dirname(cachePath))
 
         if url.filePath() in self.cacheMap:
             # don't check sha1 twice
             return self.cacheMap[url.filePath()]
-	(troveName, troveVersion, pathId, troveFile, fileId,
+        (troveName, troveVersion, pathId, troveFile, fileId,
          troveFileVersion, sha1, mode) = self.nameMap[url.filePath()]
         sha1Cached = None
         cachedMode = None
-	if os.path.exists(cachePath):
+        if os.path.exists(cachePath):
             sha1Cached = sha1helper.sha1FileBin(cachePath)
         if sha1Cached != sha1:
             if sha1Cached:
@@ -482,7 +498,7 @@ class RepositoryCache(object):
                 csCallback = ChangesetCallback()
 
             f = self.repos.getFileContents(
-                [ (fileId, troveFileVersion) ], callback = csCallback)[0].get()
+                [(fileId, troveFileVersion)], callback=csCallback)[0].get()
             util.copyfileobj(f, open(cachePath, "w"))
             fileObj = self.repos.getFileVersion(
                 pathId, fileId, troveFileVersion)
@@ -492,7 +508,7 @@ class RepositoryCache(object):
         if mode != cachedMode:
             os.chmod(cachePath, mode)
         self.cacheMap[url.filePath()] = cachePath
-	return cachePath
+        return cachePath
 
     def addFileToCache(self, cachePrefix, url, infile, contentLength):
         # cache needs to be hierarchical to avoid collisions, thus we
@@ -512,9 +528,9 @@ class RepositoryCache(object):
 
             wrapper = callbacks.CallbackRateWrapper(callback, callback.fetch,
                                                     contentLength)
-            total = util.copyfileobj(infile, f, bufSize=BLOCKSIZE,
-                                     rateLimit = self.downloadRateLimit,
-                                     callback = wrapper.callback)
+            util.copyfileobj(infile, f, bufSize=BLOCKSIZE,
+                             rateLimit=self.downloadRateLimit,
+                             callback=wrapper.callback)
 
             f.close()
             infile.close()
@@ -540,19 +556,19 @@ class RepositoryCache(object):
         return os.sep.join((self.basePath, cachePrefix))
 
     def getCachePath(self, cachePrefix, url, negative=False):
-        if isinstance(url,str):
-            url=laUrl(url)
+        if isinstance(url, str):
+            url = laUrl(url)
         cacheDir = self.getCacheDir(cachePrefix, negative=negative)
         cachePath = os.sep.join((cacheDir, url.filePath(not negative)))
         return os.path.normpath(cachePath)
 
     def clearCacheDir(self, cachePrefix, negative=False):
-        negativeCachePath = self.getCacheDir(cachePrefix, negative = negative)
-        util.rmtree(os.path.dirname(negativeCachePath), ignore_errors = True)
+        negativeCachePath = self.getCacheDir(cachePrefix, negative=negative)
+        util.rmtree(os.path.dirname(negativeCachePath), ignore_errors=True)
 
     def createNegativeCacheEntry(self, cachePrefix, url):
-        if isinstance(url,str):
-            url=laUrl(url)
+        if isinstance(url, str):
+            url = laUrl(url)
         cachePath = self.getCachePath(cachePrefix, url, negative=True)
         util.mkdirChain(os.path.dirname(cachePath))
         open(cachePath, 'w+')
@@ -586,7 +602,6 @@ class RepositoryCache(object):
         return self.getCachePath(contentsPrefix,
                                  os.path.join(trailingPath, url.filePath()))
 
-
     def getArchiveCacheEntry(self, archiveName, url):
         fullPath = self.getArchiveCachePath(archiveName, url)
         if os.path.exists(fullPath):
@@ -594,6 +609,7 @@ class RepositoryCache(object):
 
 
 class PathFound(Exception):
+
     def __init__(self, path, isFromRepos):
         self.path = path
         self.isFromRepos = isFromRepos
