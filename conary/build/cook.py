@@ -2413,6 +2413,8 @@ def _callSetup(cfg, recipeObj, recordCalls=True):
         del tb, lastRecipeFrame
         raise CookError('%s:%s:\n %s: %s' % (filename, linenum, err.__class__.__name__, err))
 
+    return rv
+
 def _copyForwardTroveMetadata(repos, troveList, recipeObj):
     """
         Copies forward metadata from a previous build of this package
