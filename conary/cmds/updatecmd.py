@@ -27,7 +27,7 @@ from conary.lib import log
 from conary.lib import util
 from conary.local import database
 from conary.repository import changeset, filecontainer
-from conary.conaryclient import cmdline
+from conary.conaryclient import cmdline, modelupdate
 from conary.conaryclient.cmdline import parseTroveSpec
 
 # FIXME client should instantiated once per execution of the command line
@@ -624,29 +624,23 @@ def _updateTroves(cfg, applyList, **kwargs):
 
     try:
         if model:
-            from conary.conaryclient import modelupdate
+            changeSetList = kwargs.get('fromChangesets', [])
             tc = modelupdate.SystemModelTroveCache(client.getDatabase(),
                                                    client.getRepos(),
                                                    callback = callback,
                                                    changeSetList =
-                                                      kwargs['fromChangesets'])
+                                                        changeSetList)
             tcPath = cfg.root + '/var/lib/conarydb/modelcache'
-            import time
-            start = time.time()
             if loadTroveCache:
-                log.info("loading modelcache")
                 if os.path.exists(tcPath):
+                    log.info("loading %s", tcPath)
                     tc.load(tcPath)
-                log.info("done %.2f", time.time() - start)
-            ts = client.systemModelGraph(
-                            model, changeSetList = kwargs['fromChangesets'])
+            ts = client.systemModelGraph( model, changeSetList = changeSetList)
             suggMap = client._updateFromTroveSetGraph(updJob, ts, tc,
-                                  fromChangesets = kwargs['fromChangesets'])
+                                            fromChangesets = changeSetList)
             if tc.cacheModified():
-                log.info("saving modelcache")
-                start = time.time()
+                log.info("saving %s", tcPath)
                 tc.save(tcPath)
-                log.info("done %.2f", time.time() - start)
         else:
             suggMap = client.prepareUpdateJob(updJob, applyList, **kwargs)
     except:
