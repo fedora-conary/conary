@@ -18,7 +18,7 @@ from conary.build import defaultrecipes
 from conary.build import lookaside
 from conary.build import policy
 from conary.build.recipe import Recipe, RECIPE_TYPE_GROUP, loadMacros
-from conary.build.errors import RecipeFileError, CookError, GroupPathConflicts
+from conary.build.errors import RecipeFileError, CookError
 from conary.build.errors import GroupDependencyFailure, GroupCyclesError
 from conary.build.errors import GroupAddAllError, GroupImplicitReplaceError
 from conary.build.errors import GroupUnmatchedReplaces, GroupUnmatchedRemoves
@@ -2136,7 +2136,7 @@ def buildGroups(recipeObj, cfg, repos, callback, troveCache=None):
         @param repos: Repository object (why do we need this and a troveCache)
         @type repos: netclient.NetworkRepositoryClient
         @param troveCache: Caching repository object
-        @type repos: troveSource
+        @type troveCache: troveSource
         @param callback: Callback for progress information
         @type callback: callbacks.CookCallback
     """
@@ -2298,8 +2298,7 @@ def buildGroups(recipeObj, cfg, repos, callback, troveCache=None):
 
     if unmatchedGlobalReplaceSpecs:
         log.warning(GroupUnmatchedGlobalReplaces(unmatchedGlobalReplaceSpecs))
-    if groupsWithConflicts:
-        raise GroupPathConflicts(groupsWithConflicts, recipeObj.getGroupDict())
+    recipeObj.PathConflicts(_groupsWithConflicts=groupsWithConflicts)
 
 
 def findTrovesForGroups(searchSource, defaultSource, groupList, replaceSpecs,
