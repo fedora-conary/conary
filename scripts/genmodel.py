@@ -84,7 +84,7 @@ modelupdate.SysModelFindAction = TrackFindAction
 
 def buildJobs(client, cache, model):
     print "====== Candidate model " + "=" * 55
-    print "\t" + "\n\t".join(x[:-1] for x in model.iterFormat())
+    print "\t" + "\n\t".join(model.iterFormat())
 
     TrackFindAction.findMap = {}
     updJob = client.newUpdateJob()
@@ -97,6 +97,10 @@ def orderByPackage(jobList):
     installMap = {}
     eraseMap = {}
     for job in jobList:
+        if trove.troveIsGroup(job[0]) and job[1][0] is None:
+            # skip groups we've decided to install
+            continue
+
         assert(not trove.troveIsFileSet(job[0]))
         assert(not trove.troveIsGroup(job[0]))
 
@@ -156,6 +160,107 @@ def getAnswer(question):
     sys.stdout.flush()
     return raw_input()
 
+def findParent(client, path, grpName, latest = False):
+    releaseTroves = list(client.getDatabase().iterTrovesByPath(path))
+    assert(len(releaseTroves) == 1)
+
+    possibleGroupList = client.getRepos().getTroveReferences(
+            releaseTroves[0].getVersion().trailingLabel().getHost(),
+            [ releaseTroves[0].getNameVersionFlavor() ] )[0]
+
+    possibleGroupList = sorted(
+            [ x for x in possibleGroupList if x[0] == grpName ],
+            groupDataCompare)
+
+    if latest:
+        return possibleGroupList[-1]
+
+    return possibleGroupList[0]
+
+def groupDataCompare(tup1, tup2):
+    ver1 = tup1[1]
+    ver2 = tup2[1]
+
+    return cmp(ver1.trailingRevision().getVersion(),
+               ver2.trailingRevision().getVersion())
+
+def initialForesightModel(installedTroves, model):
+    allGroupTups = [ x for x in installedTroves
+                        if trove.troveIsGroup(x[0]) ]
+    allGroupTroves = db.getTroves(allGroupTups)
+    mainLabels = set()
+
+    # simplistic, but we can't have loops in groups so good enough
+    groupTroves = []
+    for trv in allGroupTroves:
+        # look for groups first, and eliminate groups which are included in
+        # the other groups we find
+        includedElsewhere = False
+        for otherTrv in allGroupTroves:
+            if (otherTrv.isStrongReference(*trv.getNameVersionFlavor()) and
+                   otherTrv.includeTroveByDefault(*trv.getNameVersionFlavor())):
+                includedElsewhere = True
+                break
+
+        if not includedElsewhere:
+            groupTroves.append(trv)
+
+    trv = None
+    if ('group-gnome-dist' in [ x[0] for x in allGroupTups ]):
+        trv = [ x for x in allGroupTroves
+                    if x.getName() == 'group-gnome-dist' ][0]
+    elif ('group-kde-dist' in [ x[0] for x in allGroupTups ]):
+        trv = [ x for x in allGroupTroves
+                    if x.getName() == 'group-kde-dist' ][0]
+    if trv:
+        model.appendToSearchPath(systemmodel.SearchTrove(
+                item = TroveSpec('group-world', fmtVer(trv.getVersion()),
+                                 str(trv.getFlavor()) ) ) )
+        if 'x86_64' in str(trv.getFlavor()):
+            model.appendToSearchPath(systemmodel.SearchTrove(
+                    item = TroveSpec('group-world', fmtVer(trv.getVersion()),
+                                     'is:x86' ) ))
+        mainLabels.add(trv.getVersion().trailingLabel().asString())
+
+    for trv in groupTroves:
+        model.appendTroveOp(systemmodel.InstallTroveOperation(
+                item = [ TroveSpec(trv.getName(),
+                                   fmtVer(trv.getVersion()),
+                                   str(trv.getFlavor())) ] ))
+
+    return mainLabels
+
+def initialRedHatModel(client, model):
+    groupOs = findParent(client, "/etc/redhat-release", "group-os")
+    groupRpath = findParent(client, "/usr/bin/conary", "group-rpath-packages",
+			    latest = True)
+    mainLabels = set()
+
+    model.appendToSearchPath(systemmodel.SearchTrove(
+                                item = TroveSpec(groupRpath[0],
+                                                 fmtVer(groupRpath[1]),
+                                                 str(groupRpath[2]))))
+    mainLabels.add(groupRpath[1].trailingLabel().asString())
+    model.appendToSearchPath(systemmodel.SearchTrove(
+                                item = TroveSpec(groupOs[0],
+                                                 fmtVer(groupOs[1]),
+                                                 str(groupOs[2]))))
+    mainLabels.add(groupOs[1].trailingLabel().asString())
+
+    if 'rhel' in groupOs[1].asString():
+        model.appendTroveOp(systemmodel.InstallTroveOperation(
+                item = [ TroveSpec("group-rhel-standard",
+                                   fmtVer(groupOs[1]),
+                                   str(groupOs[2])) ] ))
+    else:
+        model.appendTroveOp(systemmodel.InstallTroveOperation(
+                item = [ TroveSpec("group-standard",
+                                   fmtVer(groupOs[1]),
+                                   str(groupOs[2])) ] ))
+
+    print "\t" + "\n\t".join(model.iterFormat())
+
+    return mainLabels
 
 if __name__ == '__main__':
     #log.setVerbosity(log.INFO)
@@ -178,42 +283,24 @@ if __name__ == '__main__':
     installedTroves = dict( (tup, pinned) for (tup, pinned)
                                 in db.iterAllTroves(withPins = True) )
 
-    # look for groups first, and eliminate groups which are included in
-    # the other groups we find
-    allGroupTups = [ x for x in installedTroves if trove.troveIsGroup(x[0]) ]
-    allGroupTroves = db.getTroves(allGroupTups)
-
-    # simplistic, but we can't have loops in groups so good enough
-    groupTroves = []
-    for trv in allGroupTroves:
-        includedElsewhere = False
-        for otherTrv in allGroupTroves:
-            if (otherTrv.isStrongReference(*trv.getNameVersionFlavor()) and
-                   otherTrv.includeTroveByDefault(*trv.getNameVersionFlavor())):
-                includedElsewhere = True
-                break
-
-        if not includedElsewhere:
-            groupTroves.append(trv)
-
     model = systemmodel.SystemModelText(cfg)
-
-    if ('group-gnome-dist' in [ x[0] for x in allGroupTups ]):
-        trv = [ x for x in allGroupTroves
-                    if x.getName() == 'group-gnome-dist' ][0]
-        model.appendToSearchPath(systemmodel.SearchTrove(
-                item = TroveSpec('group-world', fmtVer(trv.getVersion()),
-                                 str(trv.getFlavor()) ) ) )
-        model.appendToSearchPath(systemmodel.SearchTrove(
-                item = TroveSpec('group-world', fmtVer(trv.getVersion()),
-                                 'is:x86' ) ))
-
-    for trv in groupTroves:
-        model.appendTroveOp(systemmodel.InstallTroveOperation(
-                item = [ TroveSpec(trv.getName(),
-                                   fmtVer(trv.getVersion()),
-                                   str(trv.getFlavor())) ] ))
-
+    if os.path.exists("/etc/redhat-release"):
+        mainLabels = initialRedHatModel(client, model)
+        componentPriorities = [ ( 'rpm', ),
+                                ( 'runtime', ),
+                                ( 'lib', ) ]
+    else:
+        mainLabels = initialForesightModel(installedTroves, model)
+        componentPriorities = [ ( 'runtime', 'doc' ),
+                                ( 'doc', ),
+                                ( 'runtime', ),
+                                ( 'user', 'group' ),
+                                ( 'user', ),
+                                ( 'group', ),
+                                ( 'devel', ),
+                                ( 'python', ),
+                                ( 'java', ),
+                                ( 'perl', ) ]
 
     allCandidates = []
     updatedModel = True
@@ -231,13 +318,7 @@ if __name__ == '__main__':
         updatedModel = False
 
         # look for packages to install/update
-        for priorityList in [ ( 'runtime', 'doc' ),
-                              ( 'doc', ),
-                              ( 'runtime', ),
-                              ( 'devel', ),
-                              ( 'python', ),
-                              ( 'java', ),
-                              ( 'perl', ) ]:
+        for priorityList in componentPriorities:
             for pkgTuple, jobList in installPackageMap.items():
                 componentSet = set( [ (pkgTuple[0] + ":" + x,
                                        pkgTuple[1], pkgTuple[2])
@@ -310,13 +391,21 @@ if __name__ == '__main__':
     searchTroveItems = []
     deferredItems = []
     specClass = None
+    searchOps = (systemmodel.UpdateTroveOperation,
+                 systemmodel.InstallTroveOperation)
+
+    searchTroveSpecs = itertools.chain(
+        *(op.item for op in model.systemItems if isinstance(op, searchOps))
+    )
+    searchNames = [x.name.split(':')[0] for x in searchTroveSpecs]
+    searchNameCount = dict((x, searchNames.count(x)) for x in set(searchNames))
 
     def emitDeferred(specClass, deferredItems):
         if deferredItems:
             # list() to copy
             finalModel.appendTroveOp(specClass(item=list(deferredItems)))
             deferredItems[:] = []
-        
+
     for op in model.systemItems:
         if specClass and specClass != op.__class__:
             # we can only combine items from the same class
@@ -324,25 +413,52 @@ if __name__ == '__main__':
 
         specClass = op.__class__
         newSpecs = []
-        simpleSpecs = [ TrackFindAction.findMap.get(spec, spec) for spec in op ]
-        for newSpec in simpleSpecs:
-            # any remaining versions belong by default in search items,
-            # so that they are snapshotted in an updateall like other
-            # items.  This will preserve the semantics of branch affinity
-            # relative to what would have happened in the old update model
-            if newSpec.version is not None:
+        simpleSpecs = [ (TrackFindAction.findMap.get(spec, spec), spec)
+                        for spec in op ]
+        for newSpec, spec in simpleSpecs:
+            # any remaining versions belong by default in search items
+            # if they did not come from the groups, so that they are
+            # snapshotted in an updateall like other items.  This will
+            # preserve the semantics of branch affinity relative to what
+            # would have happened in the old update model.  Note that
+            # what we really want to test for is whether the updates
+            # came in through the previous search path, but we do not
+            # have that information, so we assume that if they are on
+            # the mainLabels they came in through the search path that
+            # already exists and don't add another entry, but leave
+            # the fixed version for the user to clarify.  Local cooks
+            # don't really have anything to update to, so leave them
+            # alone.
+            if 'local@' in spec.version:
+                # never simplify any local versions
+                newSpecs.append(spec);
+            elif (specClass in searchOps
+                and newSpec.version is not None
+                and newSpec.version.split('/')[0] not in mainLabels):
                 searchTroveName = newSpec.name.split(':')[0]
                 searchTroveSpec = TroveSpec(searchTroveName,
-                            newSpec.version, newSpec.flavor)
+                                            spec.version, spec.flavor)
                 if searchTroveSpec not in searchTroveItems:
                     searchTroveItems.append(searchTroveSpec)
-                newSpecs.append(TroveSpec(newSpec.name, None, newSpec.flavor))
+
+                if searchNameCount.get(searchTroveName, 0) > 1:
+                    # if there is more than one of this name, assume they
+                    # might be differentiated by flavor
+                    flavor = spec.flavor
+                else:
+                    # use the simplified flavor
+                    flavor = newSpec.flavor
+
+                newSpecs.append(TroveSpec(newSpec.name,
+                    spec.version.split('/')[0], flavor))
+            else:
+                newSpecs.append(newSpec);
 
         if len(set([x.name.split(':')[0] for x in newSpecs+deferredItems])) > 1:
             # newSpecs has trove names not mentioned in deferredItems,
             # so do not combine
             emitDeferred(specClass, deferredItems)
-            
+
         deferredItems.extend(newSpecs)
 
         if set([':' in x.name for x in newSpecs]) != set((True,)):
@@ -362,22 +478,46 @@ if __name__ == '__main__':
             systemmodel.SearchTrove(item=searchItem))
 
     TrackFindAction.remap = False
-    finalJob, uJob = buildJobs(client, cache, model)
-    assert(finalJob == candidateJob)
+    finalJob, uJob = buildJobs(client, cache, finalModel)
+    assert(set(finalJob) == set(candidateJob))
 
-    print "----"
-    print "Final Model"
-    print "\t" + "\n\t".join(x[:-1] for x in finalModel.iterFormat())
+    # Add comments to the model itself
+    for commentline in (
+        'This file is an attempt to describe an existing system.',
+        'It is intended to describe the "meaning" of the installed system.',
+        '',
+        'After this file is installed as /etc/conary/system-model any',
+        'following conary update/install/erase operations will be done',
+        'by modifying this file, then building a representation of the',
+        'new desired state of your local system described in the modified',
+        'file, and then updating your system to that new state.',
+        '',
+        'It is reasonable to edit this file with a text editor.',
+        'Conary will preserve whole-line comments (like this one)',
+        'when it edits this file, so you may use comments to describe',
+        'the purpose of your modifications.',
+        '',
+        'After you edit this file, run the command',
+        '  conary sync',
+        'This command will move your system to the state you have',
+        'described by your edits to this file, or will tell you',
+        'about errors you have introduced so that you can fix them.',
+        '',
+        'The "search" lines are read in order.  For this reason, you',
+        'may see packages on "search" lines of their own before you',
+        'see the main groups that describe the core of your system.',
+        'This means that those packages will be preferred when you',
+        'search for them.  Troves that are installed',
+        '',
+        'The "install" and "update" lines are relative only to things',
+        'mentioned earlier in this model, not relative to what has been',
+        'previously installed on your system.',
+        '',
+        ):
+        finalModel.appendNoOpByText('# %s' % commentline, modified=False)
 
     if finalJob:
-        print
-        print "The following additional operations would be needed to make the"
-        print "system match the model, and would be applied to the system by "
-        print 'a "conary sync" operation:'
-
         from conary.cmds import updatecmd
-
-        # save the data in case we are going to email it
         sys.stdout.flush()
         outfd, outfn = tempfile.mkstemp()
         os.unlink(outfn)
@@ -394,11 +534,30 @@ if __name__ == '__main__':
         f = os.fdopen(outfd, 'r')
         jobData = f.read()
         f.close()
-        sys.stdout.write(jobData)
+        for commentline in [
+            'Some of the troves on this system are not represented in the',
+            'following model, most likely because they appear to have been',
+            'included only to satisfy dependencies.  Please review the',
+            'following data and edit the system model to represent the',
+            'troves that you wish to have installed on your system.',
+            '',
+            'The following additional operations would be needed to make the',
+            'system match the model, and would be applied to the system by ',
+            'a "conary sync" operation:'] + jobData.split('\n') + ['']:
+            finalModel.appendNoOpByText('# %s' % commentline, modified=False)
 
-    answer = getAnswer('Write model to disk? [y/N]: ')
+    print "----"
+    print "Final Model"
+    print "\t" + "\n\t".join(finalModel.iterFormat())
+
+
+    answer = getAnswer('Write model to disk? [y/N]:')
     if answer and answer[0].lower() == 'y':
-        smf = systemmodel.SystemModelFile(finalModel)
+        # SystemModelFile wants to parse -- don't let it, in case we are
+        # testing on a system that already has a model defined...
+        tempModel = systemmodel.SystemModelText(cfg)
+        smf = systemmodel.SystemModelFile(tempModel)
+        smf.model = finalModel
         try:
             smf.write()
             print 'model written to %s' % smf.fileName
