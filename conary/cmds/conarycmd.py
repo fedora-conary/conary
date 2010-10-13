@@ -975,7 +975,7 @@ class _UpdateCommand(ConaryCommand):
         model = systemmodel.SystemModelText(cfg)
         modelFile = systemmodel.SystemModelFile(model)
 
-        callback = updatecmd.UpdateCallback(cfg)
+        callback = updatecmd.UpdateCallback(cfg, modelFile=modelFile)
         if cfg.quiet:
             callback = callbacks.UpdateCallback()
         if argSet.has_key('quiet'):
@@ -1063,7 +1063,8 @@ class _UpdateCommand(ConaryCommand):
             if otherArgs[1] == 'sync' and len(otherArgs) > 2:
                 log.error('The "sync" command cannot take trove arguments with a system model')
                 return 1
-            if otherArgs[1] != 'sync' and modelFile.snapshotExists():
+            if (otherArgs[1] != 'sync' and modelFile.snapshotExists()
+                and kwargs['restartInfo'] is None):
                 log.error('The previous update was aborted; resume with "conary sync" or revert with "conary rollback 1"')
                 return 1
             if otherArgs[1] == 'migrate':
@@ -1181,12 +1182,14 @@ class UpdateAllCommand(_UpdateCommand):
 
     def runCommand(self, cfg, argSet, otherArgs):
         kwargs = { 'systemModel': False }
+        kwargs['restartInfo'] = argSet.pop('restart-info', None)
+
         model = systemmodel.SystemModelText(cfg)
         modelFile = systemmodel.SystemModelFile(model)
         if modelFile.exists():
             kwargs['systemModel'] = model
             kwargs['systemModelFile'] = modelFile
-            if modelFile.snapshotExists():
+            if modelFile.snapshotExists() and kwargs['restartInfo'] is None:
                 log.error('The previous update was aborted; resume with "conary sync" or revert with "conary rollback 1"')
                 return 1
 
@@ -1227,7 +1230,6 @@ class UpdateAllCommand(_UpdateCommand):
 
         kwargs['justDatabase'] = argSet.pop('just-db', False)
         kwargs['applyCriticalOnly'] = argSet.pop('apply-critical', False)
-        kwargs['restartInfo'] = argSet.pop('restart-info', None)
 
         kwargs['checkPathConflicts'] = \
                                 not argSet.pop('no-conflict-check', False)

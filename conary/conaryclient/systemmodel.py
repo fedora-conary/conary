@@ -17,9 +17,6 @@ file representation of the model.  This system model is written
 explicitly in terms of labels and versions, and is interpreted
 relative to system configuration items such as installLabelPath,
 flavor, pinTroves, excludeTroves, and so forth.
-
-If an installLabelPath is provided in the configuration, it is
-implicitly added to the end of the search path.
 """
 
 import os
@@ -34,17 +31,16 @@ from conary import conaryclient
 from conary import trovetup
 from conary import versions
 from conary.lib import log, util
-from conary.repository import searchsource
 
 # The schema for a system model is, roughly:
 #
 # searchPath := list of troveTuples|labels
 # systemItems := list of troveOperations
-# troveOperations := updateTroves | eraseTroves | installTroves | replaceTroves
+# troveOperations := updateTroves | eraseTroves | installTroves | patchTroves
 # updateTroves := list of troveTuples
 # eraseTroves := list of troveTuples
 # installTroves := list of troveTuples
-# replaceTroves := list of troveTuples
+# patchTroves := list of troveTuples
 
 
 def shellStr(s):
@@ -63,7 +59,7 @@ class _SystemModelItem:
         self.index = index
         assert(text is not None or item is not None)
         assert(not(text is None and item is None))
-        if item:
+        if item is not None:
             self.item = item
         else:
             self.parse(text=text)
@@ -105,6 +101,25 @@ class SearchLabel(SearchElement):
     def asString(self):
         return shellStr(str(self.item))
 
+class _TextItem(_SystemModelItem):
+    def parse(self, text):
+        self.item = text
+
+    def asString(self):
+        return self.item
+
+    def __repr__(self):
+        return "%s(text='%s', modified=%s, index=%s)" % (
+            str(self.__class__).split('.')[-1],
+            self.item, self.modified, self.index)
+
+class NoOperation(_TextItem):
+    'Represents comments and blank lines'
+    __str__ = _TextItem.asString
+
+class VersionOperation(_TextItem):
+    key = 'version'
+
 class TroveOperation(_SystemModelItem):
     def parse(self, text):
         if isinstance(text, str):
@@ -132,14 +147,14 @@ class EraseTroveOperation(TroveOperation):
 class InstallTroveOperation(TroveOperation):
     key = 'install'
 
-class ReplaceTroveOperation(TroveOperation):
-    key = 'replace'
+class PatchTroveOperation(TroveOperation):
+    key = 'patch'
 
 troveOpMap = {
     UpdateTroveOperation.key  : UpdateTroveOperation,
     EraseTroveOperation.key   : EraseTroveOperation,
     InstallTroveOperation.key : InstallTroveOperation,
-    ReplaceTroveOperation.key : ReplaceTroveOperation,
+    PatchTroveOperation.key   : PatchTroveOperation,
 }
 
 class SystemModel:
@@ -147,16 +162,23 @@ class SystemModel:
     # need to import this module when a model is provided
     SearchTrove = SearchTrove
     SearchLabel = SearchLabel
+    NoOperation = NoOperation
     UpdateTroveOperation = UpdateTroveOperation
     EraseTroveOperation = EraseTroveOperation
     InstallTroveOperation = InstallTroveOperation
-    ReplaceTroveOperation = ReplaceTroveOperation
+    PatchTroveOperation = PatchTroveOperation
+    VersionOperation = VersionOperation
 
     def __init__(self, cfg):
+        self.cfg = cfg
+        self.reset()
+
+    def reset(self):
         self.searchPath = []
         self.systemItems = []
+        self.noOps = []
         self.indexes = {}
-        self.cfg = cfg
+        self.version = None
         # Keep track of modifications that do not involve setting
         # an operation as modified
         self.modelModified = False
@@ -177,12 +199,28 @@ class SystemModel:
 
     def modified(self):
         return (self.modelModified or
-                bool([x for x in self.searchPath + self.systemItems
+                bool([x for x in self.searchPath + self.systemItems + self.noOps
                       if x.modified]))
+
+    def setVersion(self, item):
+        self.version = item
+        self._addIndex(item)
+
+    def getVersion(self):
+        if self.version is None:
+            return self.version
+        return self.version.asString()
 
     def appendToSearchPath(self, item):
         self.searchPath.append(item)
         self._addIndex(item)
+
+    def appendNoOperation(self, item):
+        self.noOps.append(item)
+        self._addIndex(item)
+
+    def appendNoOpByText(self, text, **kwargs):
+        self.appendNoOperation(NoOperation(text, **kwargs))
 
     def appendTroveOp(self, op, deDup=True):
         # First, remove trivially obvious duplication -- more
@@ -260,20 +298,19 @@ class SystemModelText(SystemModel):
         update troveSpec+
         erase troveSpec+
         install troveSpec+
-        replace troveSpec+
+        patch troveSpec+
 
     C{search} lines take a single troveSpec or label, which B{may} be
     enclosed in single or double quote characters.  Each C{search}
-    item B{appends} to the search path.  The C{installLabelPath}
-    configuration item is implicitly appended to the specified
-    C{searchPath}.
+    item B{appends} to the search path.  All C{search} lines must
+    precede any operations.
 
-    C{update}, C{erase}, C{install}, and C{replace} lines take
+    C{update}, C{erase}, C{install}, and C{patch} lines take
     one or more troveSpecs, which B{may} be enclosed in single
     or double quote characters, unless they contain characters
     that may be specially interpreted by a POSIX shell, in
     which case they B{must} be enclosed in quotes.  Each item
-    updated, installed, or replaced is C{prepended} to the search
+    updated, installed, or patched is C{prepended} to the search
     path used for C{subsequent} items, if it is not found explicitly
     via previous search path items.
 
@@ -286,10 +323,16 @@ class SystemModelText(SystemModel):
 
     def __init__(self, cfg):
         SystemModel.__init__(self, cfg)
+        self.reset()
+
+    def reset(self):
+        SystemModel.reset(self)
         self.commentLines = []
         self.filedata = []
 
     def parse(self, fileData=None, fileName='(internal)'):
+        self.reset()
+
         if fileData is not None:
             self.filedata = fileData
 
@@ -300,7 +343,7 @@ class SystemModelText(SystemModel):
                 # empty lines are handled just like comments, and empty
                 # lines and comments are always looked up in the
                 # unmodified filedata, so we store only the index
-                self.commentLines.append(index)
+                self.appendNoOpByText(line, modified=False, index=index)
                 continue
 
             # non-empty, non-comment lines must be parsed 
@@ -314,13 +357,15 @@ class SystemModelText(SystemModel):
                 if self.systemItems:
                     # If users provide a "search" line after a trove
                     # operation, they may expect it to be evaluated
-                    # later.  Warn them that this is not actually
-                    # going to happen.  (When adding "include", then
-                    # this warning should apply only to the outmost
-                    # file, not to included files.)
-                    log.warning('%s line %d:'
-                        ' "search %s" entry follows operations,'
-                        ' though it applies to earlier operations'
+                    # later.  This is not actually going to happen,
+                    # so raise an error.  (When adding "include",
+                    # include lines will be able to follow installs,
+                    # the search lines in an included model will apply
+                    # only within that model and not to the parent
+                    # model, and the same search ordering constraint
+                    # will apply within the model.)
+                    raise SystemModelError('%s line %d: "search %s":'
+                        ' search lines must precede all operations'
                         %(fileName, index, nouns))
                 # Handle it if quoted, but it doesn't need to be
                 nouns = ' '.join(shlex.split(nouns, comments=True))
@@ -331,6 +376,10 @@ class SystemModelText(SystemModel):
                     searchItem = SearchTrove(text=nouns,
                                              modified=False, index=index)
                 self.appendToSearchPath(searchItem)
+
+            elif verb == 'version':
+                self.setVersion(
+                    VersionOperation(text=line, modified=False, index=index))
 
             elif verb in troveOpMap:
                 self.appendTroveOpByName(verb,
@@ -347,43 +396,43 @@ class SystemModelText(SystemModel):
         '''
         Serialize the current model, including preserved comments.
         '''
-        commentLines = list(self.commentLines) # copy
-
         lastSearchLine = max([x.index for x in self.searchPath] + [0])
+        lastNoOpLine = max([x.index for x in self.noOps] + [0])
         lastOpLine = max([x.index for x in self.systemItems] + [0])
-        newSearchItems = [x for x in self.searchPath if x.index is None]
-        newOperations = [x for x in self.systemItems if x.index is None]
-        lastIndexLine = max(lastSearchLine, lastOpLine, max(commentLines + [0]))
+        # can only be one version
+        if self.version is not None:
+            verLine = self.version.index
+        else:
+            verLine = 0
+        lastIndexLine = max(lastSearchLine, lastOpLine, lastNoOpLine, verLine)
+
+        # First, emit all comments without an index as "header"
+        for item in (x for x in self.noOps if x.index is None):
+            yield str(item)
+        # Now, emit the version if it is new (has no index)
+        if self.version is not None and self.version.index is None:
+            yield str(self.version)
 
         for i in range(lastIndexLine+1):
-            # First, emit all prior comments in order
-            while commentLines and commentLines[0] <= i:
-                yield self.filedata[commentLines.pop(0)]
-
             if i in self.indexes:
-                # Next, emit all the specified lines
+                # Emit all the specified lines
                 for item in self.indexes[i]:
                     # normally, this list is one item long
                     if item.modified:
-                        yield str(item) + '\n'
+                        yield str(item)
                     else:
-                        yield self.filedata[i]
-                        # handle models lacking trailing newlines
-                        if self.filedata[i] and self.filedata[i][-1] != '\n':
-                            yield '\n'
+                        yield self.filedata[i].rstrip('\n')
 
             # Last, emit any remaining lines
             if i == lastSearchLine:
-                for item in (x for x in self.searchPath
-                             if x.index is None):
-                    yield str(item) + '\n'
+                for item in (x for x in self.searchPath if x.index is None):
+                    yield str(item)
             if i == lastOpLine:
-                for item in (x for x in self.systemItems
-                             if x.index is None):
-                    yield str(item) + '\n'
+                for item in (x for x in self.systemItems if x.index is None):
+                    yield str(item)
 
     def format(self):
-        return ''.join(self.iterFormat())
+        return '\n'.join([x for x in self.iterFormat()] + [''])
 
     def write(self, f):
         f.write(self.format())
@@ -415,22 +464,23 @@ class SystemModelFile(object):
     def exists(self):
         return util.exists(self.fileFullName)
 
-    def read(self):
-        if self.snapshotExists():
-            readFileName = self.snapFullName
-        else:
-            readFileName = self.fileFullName
-        self.model.filedata = open(readFileName, 'r').readlines()
-        return readFileName, self.model.filedata
+    def read(self, fileName=None):
+        if fileName is None:
+            if self.snapshotExists():
+                fileName = self.snapFullName
+            else:
+                fileName = self.fileFullName
+        self.model.filedata = open(fileName, 'r').readlines()
+        return self.model.filedata, fileName
 
-    def parse(self, fileData=None):
+    def parse(self, fileName=None, fileData=None):
         if fileData is None:
-            readFileName, _ = self.read()
+            fileData, _ = self.read(fileName=fileName)
         else:
-            readFileName = None
+            fileName = None
             self.model.filedata = fileData
         self.model.parse(fileData=self.model.filedata,
-                         fileName=readFileName)
+                         fileName=fileName)
 
     def write(self, fileName=None):
         '''
@@ -462,6 +512,15 @@ class SystemModelFile(object):
     def closeSnapshot(self):
         '''
         Indicate that a model has been fully applied to the system by
-        renaming the snapshot over the previous model file.
+        renaming the snapshot, if it exists, over the previous model file.
         '''
-        os.rename(self.snapFullName, self.fileFullName)
+        if self.snapshotExists():
+            os.rename(self.snapFullName, self.fileFullName)
+
+    def deleteSnapshot(self):
+        '''
+        Remove any snapshot without applying it to a system; normally
+        as part of rolling back a partially-applied update.
+        '''
+        if self.snapshotExists():
+            os.unlink(self.snapFullName)
