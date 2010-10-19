@@ -39,6 +39,7 @@ import tempfile
 import textwrap
 
 #conary imports
+from conary import trove
 from conary.errors import TroveNotFound
 from conary.build import action, errors
 from conary.lib import fixedglob, digestlib, log, util
@@ -3956,12 +3957,34 @@ class BuildMSI(BuildAction):
         description='Web application for demonstrating Windows packaging.')}
     """
 
+    APPLICATION_APP = 'app'
+    APPLICATION_WEBAPP = 'webApp'
+
+    APPLICATION_TYPES = (
+        APPLICATION_APP,
+        APPLICATION_WEBAPP,
+    )
+
     keywords = {
-        'dest': '%ProgramFiles%\%(name)s',
         'manufacturer': None,
         'description': None,
+        'applicationType': APPLICATION_APP,
+
+        # Option for both "app" and "webapp", mutually exclusive
+        # with webSiteDir.
+        'dest': None,
+
+        # Web Application flags
+        'defaultDocument': None,
+        'webSite': None,
+        'alias': None,
+        'webSiteDir': None,
+        'applicationName': None,
     }
-    keywordOrder = ('dest', 'manufacturer', 'description', )
+
+    keywordOrder = ('dest', 'manufacturer', 'description', 'applictionType',
+        'defaultDocument', 'webSite', 'alias', 'webSiteDir',
+        'applicationName', )
 
     supported_targets = (TARGET_WINDOWS, )
 
@@ -3971,6 +3994,10 @@ class BuildMSI(BuildAction):
         assert(len(args) == 1)
         self.archiveName = args[0]
 
+        if self.applicationType not in self.APPLICATION_TYPES:
+            raise TypeError, ('%s not a supported applicationType (suported '
+                'types: %s)' % (self.applicationType, self.APPLICATION_TYPES))
+
         if self.manufacturer is None:
             self.manufacturer = ''
         if self.description is None:
@@ -3979,13 +4006,30 @@ class BuildMSI(BuildAction):
         self.name = self.recipe.name
         self.version = self.recipe.version
 
+        self._checkArgs()
         self._checkVersion()
 
     def _checkVersion(self):
         parts = self.version.split('.')
         if len(parts) != 4 or not [ x.isdigit() for x in parts ]:
-            raise TypeError, ('MSI package versions must be a four integers '
-                'sepatated by \'.\' (ex. 1.2.3.4)')
+            raise TypeError, ('MSI package versions must be four integers '
+                'separated by "." (e.g. "1.2.3.4")')
+
+    def _checkArgs(self):
+        if self.applicationType == self.APPLICATION_APP:
+            self._requireArgs('dest', )
+        elif self.applicationType == self.APPLICATION_WEBAPP:
+            self._requireArgs('defaultDocument', 'webSite', 'alias',
+                'applicationName')
+            if not (bool(self.dest is None) ^ bool(self.webSiteDir is None)):
+                raise TypeError, 'Either "dest" or "webSiteDir" must be set'
+        self._requireArgs('manufacturer', )
+
+    def _requireArgs(self, *args):
+        for arg in args:
+            if getattr(self, arg) is None:
+                raise TypeError, ('"%s" is required for applications of type %s'
+                    % (arg, self.applicationType))
 
     def do(self, macros):
         """
@@ -3998,6 +4042,9 @@ class BuildMSI(BuildAction):
         # Get the full path to the archive.
         archivePath = action._expandOnePath(self.archiveName, macros)
         archiveName = os.path.basename(archivePath)
+
+        # Get component info from previous builds
+        componentInfo = self._getComponentInfo()
 
         # Get a connection to the build service
         wbsc = self._getWBSClient()
@@ -4016,6 +4063,7 @@ class BuildMSI(BuildAction):
         jobCfg.product.name = self.name
         jobCfg.product.manufacturer = self.manufacturer
         jobCfg.product.package.description = self.description
+        jobCfg.product.type = self.applicationType
 
         # FIXME: None of these values should need to be hard coded. They
         #        should be defaults in the Windows Build Service.
@@ -4023,9 +4071,30 @@ class BuildMSI(BuildAction):
         jobCfg.product.packageName = 'Setup'
         jobCfg.product.allUsers = 'true'
 
-        # Note: In the future there may be other types of applications that
-        #       are not 'app'.
-        jobCfg.product.app = dict(destDir=self.dest)
+        # Send component information
+        jobCfg.product.components = []
+        for uuid, path in componentInfo:
+            jobCfg.product.components.append(dict(
+                uuid=uuid,
+                path=path,
+            ), post=False)
+
+        # Application specific configuration
+        if self.applicationType == self.APPLICATION_APP:
+            jobCfg.product.app = dict(
+                destDir=self.dest % macros
+            )
+        elif self.applicationType == self.APPLICATION_WEBAPP:
+            jobCfg.product.webApp = dict(
+                defaultDocument=self.defaultDocument % macros,
+                webSite=self.webSite % macros,
+                alias=self.alias % macros,
+                applicationName=self.applicationName % macros,
+            )
+            if self.dest:
+                jobCfg.product.webApp.dest = self.dest % macros
+            else:
+                jobCfg.product.webApp.webSiteDir = self.webSiteDir % macros
 
         # Get the previous upgrade code if available.
         upgradeCode = self._getUpgradeCode()
@@ -4082,6 +4151,19 @@ class BuildMSI(BuildAction):
         self.recipe.winHelper.productCode = str(results.productCode)
         self.recipe.winHelper.upgradeCode = str(results.upgradeCode)
 
+        # FIXME: This is working around a bug in robj/xobj and may need to
+        #        change in the near future.
+        self.recipe.winHelper.components = [
+            (x.component.uuid.encode('utf-8'),
+             x.component.path.encode('utf-8'))
+            for x in results.package.components
+        ]
+
+        # Copy forward old info.
+        for comp in componentInfo:
+            if comp not in self.recipe.winHelper.components:
+                self.recipe.winHelper.components.append(comp)
+
     def _getWBSClient(self):
         """
         Get a connection to the Windows Build Service.
@@ -4102,12 +4184,11 @@ class BuildMSI(BuildAction):
         api = robj.connect(wbs)
         return api
 
-    def _getUpgradeCode(self):
+    def _getPreviousCapsuleInfo(self):
         """
-        If there is a previous version of this package, check for an update
-        guid in trove info.
-        @return an update guid if available, otherwise None
-        @rtype str or None
+        If there is a previous version of this package, retrieve the trove
+        capsule info.
+        @return capsule trove info or None
         """
 
         repos = self.recipe.getRepos()
@@ -4120,14 +4201,51 @@ class BuildMSI(BuildAction):
         except TroveNotFound:
             return None
 
+        capsuleInfo = repos.getTroveInfo(trove._TROVEINFO_TAG_CAPSULE,
+            ((name, version, flavor), ))
+
+        if capsuleInfo[0]:
+            return capsuleInfo[0]
+
+        return None
+
+    def _getUpgradeCode(self):
+        """
+        If there is a previous version of this package, check for an update
+        guid in trove info.
+        @return an update guid if available, otherwise None
+        @rtype str or None
+        """
+
+        capsuleInfo = self._getPreviousCapsuleInfo()
+        if not capsuleInfo:
+            return None
+
         # Check if there is an existing upgradeCode
-        trv = repos.getTrove(name, version, flavor)
-        upgradeCode = trv.troveInfo.capsule.msi.upgradeCode()
+        upgradeCode = capsuleInfo.msi.upgradeCode()
 
         if upgradeCode:
             return upgradeCode
 
         return None
+
+    def _getComponentInfo(self):
+        """
+        Check the previous version, if there is one, for any MSI component
+        informaiton.
+        """
+
+        capsuleInfo = self._getPreviousCapsuleInfo()
+        if not capsuleInfo:
+            return []
+
+        # Check for component information
+        componentInfo = capsuleInfo.msi.components
+
+        if not componentInfo:
+            return []
+
+        return [ (uuid(), path()) for uuid, path in componentInfo ]
 
     def _waitForJob(self, job, interval=1):
         """
@@ -4139,14 +4257,17 @@ class BuildMSI(BuildAction):
         """
 
         while str(job.status) not in ('Failed', 'Completed'):
-            time.sleep(1)
+            time.sleep(interval)
             log.info('Building MSI: %s %s%% done' % (job.status, job.progress))
             job.refresh()
 
+        # Report the WBS job log as part of the build log
+        jobLog = job.logs.read()
+        # Strip off binary bits on the font of the file
+        jobLog = jobLog[3:]
+        log.info('Windows Build Service job log:\n%s' % jobLog)
+
         if job.status == 'Failed':
-            jobLog = job.logs.read()
-            # Strip off binary bits on the font of the file
-            jobLog = jobLog[3:]
             raise RuntimeError, ('The Windows Build Service failed to build '
                 'the msi with the following error: %s\n%s'
                 % (job.message, jobLog))
