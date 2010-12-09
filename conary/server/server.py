@@ -49,7 +49,7 @@ from conary.lib import options
 from conary.lib import util
 from conary.lib.cfg import CfgBool, CfgInt, CfgPath
 from conary.lib.tracelog import initLog, logMe
-from conary.repository import changeset, errors, netclient
+from conary.repository import errors, netclient
 from conary.repository.netrepos import netserver, proxy
 from conary.repository.netrepos.proxy import ProxyRepositoryServer, ChangesetFileReader
 from conary.repository.netrepos.netserver import NetworkRepositoryServer
@@ -382,29 +382,6 @@ if SSL:
         sslCert, sslKey = cfg.sslCert, cfg.sslKey
         ctx.load_cert_chain(sslCert, sslKey)
         return ctx
-
-
-def _iterFileChunks(fobj):
-    """Yield chunks of data from the given file object."""
-    while True:
-        data = fobj.read(16384)
-        if not data:
-            break
-        yield data
-
-
-def _readNestedFile(name, tag, rawSize, subfile):
-    """Use with ChangeSet.dumpIter to handle external file references."""
-    if changeset.ChangedFileTypes.refr[4:] == tag[2:]:
-        # this is a reference to a compressed file in the contents store
-        path = subfile.read()
-        expandedSize = os.stat(path).st_size
-        tag = tag[0:2] + changeset.ChangedFileTypes.file[4:]
-        fobj = open(path, 'rb')
-        return tag, expandedSize, _iterFileChunks(fobj)
-    else:
-        # this is data from the changeset itself
-        return tag, rawSize, _iterFileChunks(subfile)
 
 
 class ServerConfig(netserver.ServerConfig):
