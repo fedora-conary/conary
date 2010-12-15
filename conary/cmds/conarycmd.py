@@ -56,6 +56,7 @@ from conary.cmds import verify
 from conary.lib import cfg,cfgtypes,log, openpgpfile, openpgpkey, options, util
 from conary.local import database
 from conary.conaryclient import cmdline
+from conary.conaryclient import cml
 from conary.conaryclient import systemmodel
 from conary.repository import trovesource
 
@@ -898,9 +899,13 @@ class _UpdateCommand(ConaryCommand):
                           'which will remain installed',
         'exact-flavors' : 'Only match troves whose flavors match exactly',
         'info'          : 'Display what update would have done',
+        'ignore-model'  : (VERBOSE_HELP,
+                           'Do not use the system-model file, even if present'),
         'model'         : 'Display the new model that would have been applied',
         'model-graph'   : (VERBOSE_HELP,
                            'Write graph of model to specified file'),
+        'model-trace'   : (VERBOSE_HELP,
+                           'Display model actions involving specified troves'),
         'no-deps'       : 'Do not raise errors due to dependency failures',
         'no-recurse'    : (VERBOSE_HELP, 
                            'Do not install/erase children of specified trove'),
@@ -949,8 +954,10 @@ class _UpdateCommand(ConaryCommand):
         d["keep-journal"] = NO_PARAM            # don't document this
         d["keep-required"] = NO_PARAM
         d["info"] = '-i', NO_PARAM
+        d["ignore-model"] = NO_PARAM
         d["model"] = NO_PARAM
         d["model-graph"] = ONE_PARAM
+        d["model-trace"] = MULT_PARAM
         d["no-deps"] = NO_PARAM
         d["no-recurse"] = NO_PARAM
         d["no-resolve"] = NO_PARAM
@@ -975,7 +982,7 @@ class _UpdateCommand(ConaryCommand):
 
     def runCommand(self, cfg, argSet, otherArgs):
         kwargs = { 'systemModel': False }
-        model = systemmodel.SystemModelText(cfg)
+        model = cml.CML(cfg)
         modelFile = systemmodel.SystemModelFile(model)
 
         callback = updatecmd.UpdateCallback(cfg, modelFile=modelFile)
@@ -1024,8 +1031,10 @@ class _UpdateCommand(ConaryCommand):
                                 not argSet.pop('no-conflict-check', False)
         kwargs['justDatabase'] = argSet.pop('just-db', False)
         kwargs['info'] = argSet.pop('info', False)
+        ignoreModel = argSet.pop('ignore-model', False)
         kwargs['model'] = argSet.pop('model', False)
         kwargs['modelGraph'] = argSet.pop('model-graph', None)
+        kwargs['modelTrace'] = argSet.pop('model-trace', None)
         kwargs['keepExisting'] = argSet.pop('keep-existing',
             otherArgs[1] == 'install') # install implies --keep-existing
         kwargs['keepJournal'] = argSet.pop('keep-journal', False)
@@ -1043,7 +1052,7 @@ class _UpdateCommand(ConaryCommand):
         #
         kwargs['syncChildren'] = False
         kwargs['syncUpdate'] = False
-        if not modelFile.exists():
+        if ignoreModel or not modelFile.exists():
             # this argument handling does not make sense for a modeled system
             kwargs.pop('model')
             if otherArgs[1] == 'sync':
@@ -1063,7 +1072,7 @@ class _UpdateCommand(ConaryCommand):
 
         if argSet: return self.usage()
 
-        if modelFile.exists():
+        if modelFile.exists() and not ignoreModel:
             if otherArgs[1] == 'sync' and len(otherArgs) > 2:
                 log.error('The "sync" command cannot take trove arguments with a system model')
                 return 1
@@ -1084,6 +1093,9 @@ class _UpdateCommand(ConaryCommand):
             if 'sync' in kwargs and kwargs['sync']:
                 log.error('The --sync-to-parents argument cannot be used with a system model')
                 return 1
+            if otherArgs[1] == 'patch':
+                kwargs['patchSpec'] = otherArgs[2:]
+                otherArgs[2:] = []
             retval = updatecmd.doModelUpdate(cfg,
                 model, modelFile, otherArgs[2:], **kwargs)
         elif len(otherArgs) >= 3:
@@ -1103,6 +1115,12 @@ class InstallCommand(_UpdateCommand):
     commands = [ "install" ]
     help = 'Install software on the system'
 _register(InstallCommand)
+
+
+class PatchCommand(_UpdateCommand):
+    commands = [ "patch" ]
+    help = 'Patch software on the system'
+_register(PatchCommand)
 
 
 class EraseCommand(_UpdateCommand):
@@ -1169,8 +1187,10 @@ class UpdateAllCommand(_UpdateCommand):
         argDef["info"] = '-i', NO_PARAM
         argDef["just-db"] = NO_PARAM
         argDef["keep-required"] = NO_PARAM
+        argDef["ignore-model"] = NO_PARAM
         argDef["model"] = NO_PARAM
         argDef["model-graph"] = ONE_PARAM
+        argDef["model-trace"] = MULT_PARAM
         argDef["no-conflict-check"] = NO_PARAM
         argDef["no-deps"] = NO_PARAM
         argDef["no-resolve"] = NO_PARAM
@@ -1189,9 +1209,9 @@ class UpdateAllCommand(_UpdateCommand):
         kwargs = { 'systemModel': False }
         kwargs['restartInfo'] = argSet.pop('restart-info', None)
 
-        model = systemmodel.SystemModelText(cfg)
+        model = cml.CML(cfg)
         modelFile = systemmodel.SystemModelFile(model)
-        if modelFile.exists():
+        if modelFile.exists() and not argSet.pop('ignore-model', False):
             kwargs['systemModel'] = model
             kwargs['systemModelFile'] = modelFile
             if modelFile.snapshotExists() and kwargs['restartInfo'] is None:
@@ -1200,6 +1220,7 @@ class UpdateAllCommand(_UpdateCommand):
 
         kwargs['model'] = argSet.pop('model', False)
         kwargs['modelGraph'] = argSet.pop('model-graph', None)
+        kwargs['modelTrace'] = argSet.pop('model-trace', None)
 
         noRestart = kwargs['noRestart'] = argSet.pop('no-restart', False)
         if noRestart and cfg.root == '/':

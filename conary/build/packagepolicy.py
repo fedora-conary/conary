@@ -27,6 +27,7 @@ import sys
 
 from conary import files, trove
 from conary.build import buildpackage, filter, policy, recipe, tags, use
+from conary.build import smartform
 from conary.deps import deps
 from conary.lib import elf, magic, util, pydeps, fixedglob, graph
 from conary.local import database
@@ -975,6 +976,47 @@ class TagSpec(_addInfo):
             self.recipe.reportMissingBuildRequires(self.suggestBuildRequires)
 
 
+class Properties(policy.Policy):
+    """
+    NAME
+    ====
+    B{C{r.Properties()}} - Read property definition files
+
+    SYNOPSIS
+    ========
+    C{r.Properties(I{exceptions=filterexp})}
+
+    DESCRIPTION
+    ===========
+    The C{r.Properties()} policy automatically parses iconfig property
+    definition files, making the properties available for configuration
+    management with iconfig.
+    """
+    bucket = policy.PACKAGE_CREATION
+    processUnmodified = True
+    invariantinclusions = [ r'%(prefix)s/lib/iconfig/properties/.*\.iprop' ]
+    requires = (
+        # We need to know what component files have been assigned to
+        ('PackageSpec', policy.REQUIRED_PRIOR),
+    )
+
+    def doFile(self, path):
+        fullpath = self.recipe.macros.destdir + path
+        if not os.path.isfile(fullpath) or not util.isregular(fullpath):
+            return
+
+        componentMap = self.recipe.autopkg.componentMap
+        if path not in componentMap:
+            return
+        main, comp = componentMap[path].getName().split(':')
+
+        xml = open(fullpath).read()
+        xmldata = smartform.SmartFormFieldParser(xml)
+
+        self.recipe._addProperty(trove._PROPERTY_TYPE_SMARTFORM,
+            main, comp, xmldata.name, xml, xmldata.default)
+
+
 class MakeDevices(policy.Policy):
     """
     NAME
@@ -1789,6 +1831,7 @@ class _dependency(policy.Policy):
         self.bootstrapPythonFlags = None
         self.bootstrapSysPath = []
         self.bootstrapPerlIncPath = []
+        self.pythonFlagNamespace = None
         self.removeFlagsByDependencyClass = None # pre-transform
         self.removeFlagsByDependencyClassMap = {}
 
@@ -1971,13 +2014,19 @@ class _dependency(policy.Policy):
                 flags.add(dirName[6:])
             if foundLib and foundVer:
                 break
+        if self.pythonFlagNamespace:
+            flags = set('%s:%s' %(self.pythonFlagNamespace, x) for x in flags)
+
         return flags
 
     def _stringIsPythonVersion(self, s):
         return not set(s).difference(set('.0123456789'))
 
     def _getPythonVersionFromFlags(self, flags):
+        nameSpace = self.pythonFlagNamespace
         for flag in flags:
+            if nameSpace and flag.startswith(nameSpace):
+                flag = flag[len(nameSpace):]
             if self._stringIsPythonVersion(flag):
                 return 'python'+flag
 
@@ -2316,17 +2365,14 @@ class _dependency(policy.Policy):
             pythonPath = [m.contents['interpreter']]
         else:
             pythonVersion = self._getPythonVersionFromPath(path, None)
+            # After PATH, fall back to %(bindir)s.  If %(bindir)s should be
+            # preferred, it needs to be earlier in the PATH.  Include 
+            # unversioned python as a last resort for confusing cases.
+            shellPath = os.environ.get('PATH', '').split(':') + [ '%(bindir)s' ]
+            pythonPath = []
             if pythonVersion:
-                # After %(bindir)s, fall back to /usr/bin so that package
-                # modifications do not break the search for system python
-                # Include unversioned as a last resort for confusing
-                # cases.
-                pythonPath = [ '%(bindir)s/' + pythonVersion,
-                               '/usr/bin/' + pythonVersion,
-                               '%(bindir)s/python',
-                               '/usr/bin/python', ]
-            else:
-                pythonPath = [ '/usr/bin/python' ]
+                pythonPath = [ os.path.join(x, pythonVersion) for x in shellPath ]
+            pythonPath.extend([ os.path.join(x, 'python') for x in shellPath ])
 
         for pathElement in pythonPath:
             pythonDestPath = ('%(destdir)s'+pathElement) %macros
@@ -2475,6 +2521,9 @@ class Provides(_dependency):
                 self.exceptDeps.append(exceptDeps)
         # The next three are called only from Requires and should override
         # completely to make sure the policies are in sync
+        pythonFlagNamespace = keywords.pop('_pythonFlagNamespace', None)
+        if pythonFlagNamespace is not None:
+            self.pythonFlagNamespace = pythonFlagNamespace
         bootstrapPythonFlags = keywords.pop('_bootstrapPythonFlags', None)
         if bootstrapPythonFlags is not None:
             self.bootstrapPythonFlags = bootstrapPythonFlags
@@ -2496,6 +2545,8 @@ class Provides(_dependency):
                                             for x in self.bootstrapPythonFlags)
         if self.bootstrapSysPath:
             self.bootstrapSysPath = [x % macros for x in self.bootstrapSysPath]
+        if self.pythonFlagNamespace is not None:
+            self.pythonFlagNamespace = self.pythonFlagNamespace % macros
         if self.bootstrapPerlIncPath:
             self.bootstrapPerlIncPath = [x % macros for x in self.bootstrapPerlIncPath]
         self.rootdir = self.rootdir % macros
@@ -3168,6 +3219,7 @@ class Requires(_addInfo, _dependency):
         self.bootstrapPythonFlags = set()
         self.bootstrapSysPath = []
         self.bootstrapPerlIncPath = []
+        self.pythonFlagNamespace = None
         self.sonameSubtrees = set()
         self._privateDepMap = {}
         self.rpathFixup = []
@@ -3223,6 +3275,10 @@ class Requires(_addInfo, _dependency):
             # pass full set to Provides to share the exact same data
             self.recipe.Provides(
                 _bootstrapSysPath=self.bootstrapSysPath)
+        pythonFlagNamespace = keywords.pop('pythonFlagNamespace', None)
+        if pythonFlagNamespace is not None:
+            self.pythonFlagNamespace = pythonFlagNamespace
+            self.recipe.Provides(_pythonFlagNamespace=pythonFlagNamespace)
         bootstrapPerlIncPath = keywords.pop('bootstrapPerlIncPath', None)
         if bootstrapPerlIncPath:
             if type(bootstrapPerlIncPath) in (list, tuple):
@@ -3278,6 +3334,8 @@ class Requires(_addInfo, _dependency):
         self.bootstrapPythonFlags = set(x % macros
                                         for x in self.bootstrapPythonFlags)
         self.bootstrapSysPath = [x % macros for x in self.bootstrapSysPath]
+        if self.pythonFlagNamespace is not None:
+            self.pythonFlagNamespace = self.pythonFlagNamespace % macros
         self.bootstrapPerlIncPath = [x % macros for x in self.bootstrapPerlIncPath]
 
         # anything that any buildreqs have caused to go into ld.so.conf
@@ -3571,7 +3629,7 @@ class Requires(_addInfo, _dependency):
 
             # generate site-packages list for destdir
             # (look in python base directory first)
-            pythonDir = os.popen("""python -c 'import os,sys; print sys.modules["os"].__file__'""").read().strip()
+            pythonDir = os.popen("""%s -c 'import os,sys; print sys.modules["os"].__file__'""" % pythonPath).read().strip()
 
             sys.path = [destdir + pythonDir]
             sys.prefix = destdir + sys.prefix
@@ -3847,8 +3905,11 @@ class Requires(_addInfo, _dependency):
             return
 
         macros = self.recipe.macros
-        self.perlPath, perlIncPath, _ = self._getperl(macros, self.recipe)
-        self.perlIncArgs = ' '.join('-I'+x for x in perlIncPath)
+        self.perlPath, perlIncPath, perlDestInc = self._getperl(macros, self.recipe)
+        if perlDestInc:
+            self.perlIncArgs = perlDestInc
+        else:
+            self.perlIncArgs = ' '.join('-I'+x for x in perlIncPath)
 
     def _getPerlReqs(self, path, fullpath):
         if self.perlReqs is None:

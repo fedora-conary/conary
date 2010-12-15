@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2004-2009 rPath, Inc.
+# Copyright (c) 2010 rPath, Inc.
 #
 # This program is distributed under the terms of the Common Public License,
 # version 1.0. A copy of this license should have been distributed with this
@@ -290,6 +290,8 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
                 self.callLog.log(remoteIp, authToken, methodname, orderedArgs,
                                  kwArgs, exception = e,
                                  latency = time.time() - start)
+        elif isinstance(e, HiddenException):
+            exceptionOverride = e.forReturn
 
         if isinstance(e, sqlerrors.DatabaseLocked):
             exceptionOverride = errors.RepositoryLocked()
@@ -1993,6 +1995,7 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
         self.db.analyze("tmpFileId")
         q = """
         SELECT DISTINCT tmpFileId.itemId, TroveFiles.instanceId,
+            TroveInfo.changed,
             TroveInfo.data,
             Dirnames.dirname,
             Basenames.basename,
@@ -2010,11 +2013,12 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
         WHERE FileStreams.stream IS NOT NULL
           AND UserGroupInstancesCache.userGroupId IN (%(roleids)s)
         AND TroveInfo.infoType = ?
+        ORDER BY TroveInfo.changed
         """ % { 'roleids' : ", ".join("%d" % x for x in roleIds) }
         cu.execute(q, trove._TROVEINFO_TAG_CAPSULE)
         fileIdCapsuleList = []
         instanceIds = set()
-        for (i, instanceId, data, dirname, basename, fileSha1) in cu:
+        for (i, instanceId, changed, data, dirname, basename, fileSha1) in cu:
             fileId = uniqIdList[i]
             trvCapsule = trove.TroveCapsule()
             trvCapsule.thaw(data)
@@ -3170,11 +3174,50 @@ class NetworkRepositoryServer(xmlshims.NetworkConvertors):
         return ret
 
     @accessReadOnly
+    def getTimestamps(self, authToken, clientVersion, nameVersionList):
+        """
+        Returns : separated list of timestamps for the versions in
+        a list of (name, version) tuples. Note that the flavor is excluded
+        here, as the timestamps are necessarily the same for all flavors
+        of a (name, version) pair. Timestamps are not considered privledged
+        information, so no permission checking is performed. An int value of
+        zero is returned for (name, version) paris which are not found in the
+        repository.
+        """
+        self.log(2, nameVersionList)
+        cu = self.db.cursor()
+
+        schema.resetTable(cu, "tmpNVF")
+        self.db.bulkload("tmpNVF",
+                     [ [i,] + tup for i, tup in enumerate(nameVersionList) ],
+                     ["idx","name","version" ],
+                     start_transaction=False)
+
+        cu.execute("""
+            SELECT tmpNVF.idx, Nodes.timeStamps FROM tmpNVF
+            JOIN Items ON
+                tmpNVF.name = Items.item
+            JOIN Versions ON
+                tmpNVF.version = Versions.version
+            JOIN Nodes ON
+                Items.itemId = Nodes.itemId AND
+                Versions.versionId = Nodes.versionId
+        """)
+
+        results = [ 0 ] * len(nameVersionList)
+        for (idx, timeStamps) in cu:
+            results[idx] = timeStamps
+
+        return results
+
+    @accessReadOnly
     def getDepsForTroveList(self, authToken, clientVersion, troveList,
                             provides = True, requires = True):
         """
         Returns list of (provides, requires) for troves. For troves which
-        are missing or we do not have access to, None is returned.
+        are missing or we do not have access to, {} is returned. Empty
+        strings are returned for for provides if provides parameter is
+        False; same for requires.
         """
         self.log(2, troveList)
         cu = self.db.cursor()
@@ -3531,6 +3574,10 @@ class ClosedRepositoryServer(xmlshims.NetworkConvertors):
 
     def reset(self):
         pass
+
+    def reopen(self):
+        pass
+
 
 class HiddenException(Exception):
 

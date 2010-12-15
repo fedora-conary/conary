@@ -1311,7 +1311,6 @@ res_init = misc.res_init
 sha1Uncompress = misc.sha1Uncompress
 fchmod = misc.fchmod
 fopenIfExists = misc.fopenIfExists
-structFlock = misc.structFlock
 
 def _LazyFile_reopen(method):
     """Decorator to perform the housekeeping of opening/closing of fds"""
@@ -2048,7 +2047,18 @@ def convertPackageNameToClassName(pkgname):
 class LZMAFile:
 
     def read(self, limit = 4096):
-        return os.read(self.infd, limit)
+        # Read exactly the specified amount of bytes. Since the underlying
+        # file descriptor is a pipe, os.read may return with fewer than
+        # expected bytes, so we need to iterate
+        buffers = []
+        pos = 0
+        while pos < limit:
+            buf = os.read(self.infd, limit - pos)
+            if not buf:
+                break
+            buffers.append(buf)
+            pos += len(buf)
+        return ''.join(buffers)
 
     def close(self):
         if self.childpid:
@@ -2061,7 +2071,7 @@ class LZMAFile:
 
     def __init__(self, fileobj = None):
         self.executable = None
-        for executable, args in (('xz', ('-dc',)), ('unlzma', ())):
+        for executable, args in (('xz', ('-dc',)), ('unlzma', ('-dc',))):
             for pathElement in os.getenv('PATH', '').split(os.path.pathsep):
                 fullpath = os.sep.join((pathElement, executable))
                 if os.path.exists(fullpath):
@@ -2078,13 +2088,25 @@ class LZMAFile:
         if self.childpid == 0:
             try:
                 os.close(self.infd)
+                if isinstance(fileobj, gzip.GzipFile):
+                    # We can't rely on the underlying file descriptor to feed
+                    # correct data.
+                    # This should really be made to use the read() method of
+                    # fileobj
+                    f = tempfile.TemporaryFile()
+                    copyfileobj(fileobj, f)
+                    f.seek(0)
+                    fileobj.close()
+                    fileobj = f
                 os.close(0)
                 os.close(1)
+
                 fd = fileobj.fileno()
                 # this undoes any buffering
                 os.lseek(fd, fileobj.tell(), 0)
+
                 os.dup2(fd, 0)
-                os.close(fd)
+                fileobj.close() # This closes fd
                 os.dup2(outfd, 1)
                 os.close(outfd)
                 os.execv(self.executable, commandLine)
@@ -2322,10 +2344,6 @@ class LockedFile(object):
     """
     __slots__ = ('fileName', 'lockFileName', '_lockfobj', '_tmpfobj')
 
-    # python 2.4 defines SEEK_SET in posixfile, which is deprecated
-    SEEK_SET = 0
-    WRLOCK = structFlock(fcntl.F_WRLCK, SEEK_SET, 0, 0, None)
-
     def __init__(self, fileName):
         self.fileName = fileName
         self.lockFileName = self.fileName + '.lck'
@@ -2353,7 +2371,7 @@ class LockedFile(object):
         self._lockfobj = open(self.lockFileName, "w")
 
         # Attempt to lock file in write mode
-        fcntl.fcntl(self._lockfobj, fcntl.F_SETLKW, self.WRLOCK)
+        fcntl.lockf(self._lockfobj, fcntl.LOCK_EX)
         # If we got this far, we now have the lock. Check if the data file was
         # created
         fobj = fopenIfExists(self.fileName, "r")
@@ -2817,3 +2835,12 @@ def statFile(pathOrFile, missingOk=False, inodeOnly=False):
         return (st.st_dev, st.st_ino)
     else:
         return (st.st_dev, st.st_ino, st.st_size, st.st_mtime, st.st_ctime)
+
+
+def iterFileChunks(fobj):
+    """Yield chunks of data from the given file object."""
+    while True:
+        data = fobj.read(16384)
+        if not data:
+            break
+        yield data

@@ -287,7 +287,9 @@ class AbstractTroveSource:
     def getPathHashesForTroveList(self, troveList):
         raise NotImplementedError
 
-    def getDepsForTroveList(self, troveList):
+    def getDepsForTroveList(self, troveList, provides = True, requires = True):
+        # provides/requires are hints only; implementations may return
+        # both if preferred
         raise NotImplementedError
 
 # constants mostly stolen from netrepos/netserver
@@ -1201,7 +1203,7 @@ class ChangesetFilesTroveSource(SearchableTroveSource):
         for info in troveList:
             cs = self.troveCsMap.get(info, None)
             if cs is None:
-                retList.append(None)
+                retList.append(-1)
                 continue
 
             trvCs = cs.getNewTroveVersion(*info)
@@ -1210,19 +1212,17 @@ class ChangesetFilesTroveSource(SearchableTroveSource):
 
         return retList
 
-    def getDepsForTroveList(self, troveList):
+    def getDepsForTroveList(self, troveList, provides = True, requires = True):
         # returns a list of (prov, req) pairs
         retList = []
 
         for info in troveList:
             cs = self.troveCsMap.get(info, None)
             if cs is None:
-                # this isn't supported, and raises NotimplementedException
-                return SearchableTroveSource.getDepsForTroveList(self,
-                                                                 troveList)
-
-            trvCs = cs.getNewTroveVersion(*info)
-            retList.append((trvCs.getProvides(), trvCs.getRequires()))
+                retList.append(None)
+            else:
+                trvCs = cs.getNewTroveVersion(*info)
+                retList.append((trvCs.getProvides(), trvCs.getRequires()))
 
         return retList
 
@@ -1626,7 +1626,8 @@ class SourceStack(object):
 
         return results
 
-    def getDepsForTroveList(self, troveInfoList):
+    def getDepsForTroveList(self, troveInfoList, provides = True,
+                            requires = True):
         results = [ None ] * len(troveInfoList)
         for source in self.sources:
             need = [ (i, troveInfo) for i, (troveInfo, depTuple) in

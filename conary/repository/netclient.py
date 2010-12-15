@@ -214,33 +214,37 @@ class _Method(xmlrpclib._Method, xmlshims.NetworkConvertors):
             exceptionName = result[0]
             exceptionArgs = result[1]
             exceptionKwArgs = result[2]
-
-        if exceptionName == "TroveIntegrityError" and len(exceptionArgs) > 1:
-            # old repositories give TIE w/ no trove information or with a
-            # string error message. exceptionArgs[0] is that message if
-            # exceptionArgs[1] is not set or is empty.
-            raise errors.TroveIntegrityError(error=exceptionArgs[0],
-                                        *self.toTroveTup(exceptionArgs[1]))
-        elif not hasattr(errors, exceptionName):
-            raise errors.UnknownException(exceptionName, exceptionArgs)
-        else:
-            exceptionClass = getattr(errors, exceptionName)
-
-            if hasattr(exceptionClass, 'demarshall'):
-                args, kwArgs = exceptionClass.demarshall(self, exceptionArgs,
-                                                         exceptionKwArgs)
-                raise exceptionClass(*args, **kwArgs)
-
-            for klass, marshall in errors.simpleExceptions:
-                if exceptionName == marshall:
-                    raise klass(exceptionArgs[0])
-            raise errors.UnknownException(exceptionName, exceptionArgs)
+        raise unmarshalException(exceptionName, exceptionArgs, exceptionKwArgs)
 
     def __getattr__(self, name):
         # Don't invoke methods that start with __
         if name.startswith('__'):
             raise AttributeError(name)
         return xmlrpclib._Method.__getattr__(self, name)
+
+
+def unmarshalException(exceptionName, exceptionArgs, exceptionKwArgs):
+    conv = xmlshims.NetworkConvertors()
+    if exceptionName == "TroveIntegrityError" and len(exceptionArgs) > 1:
+        # old repositories give TIE w/ no trove information or with a
+        # string error message. exceptionArgs[0] is that message if
+        # exceptionArgs[1] is not set or is empty.
+        return errors.TroveIntegrityError(error=exceptionArgs[0],
+                                    *conv.toTroveTup(exceptionArgs[1]))
+    elif not hasattr(errors, exceptionName):
+        return errors.UnknownException(exceptionName, exceptionArgs)
+    else:
+        exceptionClass = getattr(errors, exceptionName)
+
+        if hasattr(exceptionClass, 'demarshall'):
+            args, kwArgs = exceptionClass.demarshall(conv, exceptionArgs,
+                                                     exceptionKwArgs)
+            raise exceptionClass(*args, **kwArgs)
+
+        for klass, marshall in errors.simpleExceptions:
+            if exceptionName == marshall:
+                return klass(exceptionArgs[0])
+        return errors.UnknownException(exceptionName, exceptionArgs)
 
 class ServerProxy(util.ServerProxy):
 
@@ -2765,7 +2769,41 @@ class NetworkRepositoryClient(xmlshims.NetworkConvertors,
         return [ base64.decodestring(x) for x in
                     self.c[host].getNewPGPKeys(mark) ]
 
-    def getDepsForTroveList(self, troveList):
+    def getTimestamps(self, troveList):
+        # partialTroveList is a list of (name, version) or
+        # (name, version, flavor) tuples. result is a parallel list of
+        # versions with timestamp information included. if any timestamps
+        # cannot be found on a repository, None is returned for those
+        # elements.
+        byServer = {}
+        for (i, troveTup) in enumerate(troveList):
+            l = byServer.setdefault(troveTup[1].getHost(), [])
+            l.append((i, troveTup[0:2]))
+
+        partialOnly = False
+        results = [ None ] * len(troveList)
+        for host, l in byServer.iteritems():
+            if self.c[host].getProtocolVersion() < 70:
+                partialOnly = True
+                continue
+
+            tl = [ (x[1][0], self.fromVersion(x[1][1]) ) for x in l ]
+            hostResult = self.c[host].getTimestamps(tl)
+
+            for ((idx, troveTup), timeStamps) in itertools.izip(l, hostResult):
+                if timeStamps == 0:
+                    results[idx] = None
+                else:
+                    results[idx] = troveList[idx][1].copy()
+                    results[idx].setTimeStamps(
+                                 [ float(x) for x in timeStamps.split(':') ])
+
+        if partialOnly:
+            raise PartialResultsError(results)
+
+        return results
+
+    def getDepsForTroveList(self, troveList, provides = True, requires = True):
         # for old servers, UnsupportedCallError is raised, and the caller
         # is expected to handle it. we do it this way because the outer
         # layers often want to cache a complete trove in this case instead
@@ -2785,10 +2823,18 @@ class NetworkRepositoryClient(xmlshims.NetworkConvertors,
             tl = [ (x[1][0], self.fromVersion(x[1][1]),
                              self.fromFlavor(x[1][2]))
                    for x in l ]
-            result = self.c[host].getDepsForTroveList(tl)
+            result = self.c[host].getDepsForTroveList(tl, provides = provides,
+                                                      requires = requires)
 
+            provSet = None
+            reqSet = None
             for ((idx, troveTup), (prov, req)) in itertools.izip(l, result):
-                results[idx] = (self.toDepSet(prov), self.toDepSet(req))
+                if provides:
+                    provSet = self.toDepSet(prov)
+                if requires:
+                    reqSet = self.toDepSet(req)
+
+                results[idx] = (provSet, reqSet)
 
         if partialOnly:
             raise PartialResultsError(results)

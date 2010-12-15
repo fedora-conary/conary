@@ -1,7 +1,7 @@
 #!/usr/bin/python
 # -*- mode: python -*-
 #
-# Copyright (c) 2004-2009 rPath, Inc.
+# Copyright (c) 2010 rPath, Inc.
 #
 # This program is distributed under the terms of the Common Public License,
 # version 1.0. A copy of this license should have been distributed with this
@@ -49,10 +49,9 @@ from conary.lib import options
 from conary.lib import util
 from conary.lib.cfg import CfgBool, CfgInt, CfgPath
 from conary.lib.tracelog import initLog, logMe
-from conary.repository import changeset, errors, netclient
-from conary.repository.filecontainer import FileContainer
+from conary.repository import errors, netclient
 from conary.repository.netrepos import netserver, proxy
-from conary.repository.netrepos.proxy import ProxyRepositoryServer
+from conary.repository.netrepos.proxy import ProxyRepositoryServer, ChangesetFileReader
 from conary.repository.netrepos.netserver import NetworkRepositoryServer
 from conary.server import schema
 from conary.web import webauth
@@ -92,17 +91,6 @@ class HttpRequests(SimpleHTTPRequestHandler):
         return path
 
     def do_GET(self):
-        def _writeNestedFile(outF, name, tag, size, f, netRepos, sizeCb):
-            if changeset.ChangedFileTypes.refr[4:] == tag[2:]:
-                sha1, size = f.read().split(' ')
-                size = int(size)
-                path = netRepos.repos.repos.contentsStore.hashToPath(sha1)
-                f = open(path)
-                tag = tag[0:2] + changeset.ChangedFileTypes.file[4:]
-
-            sizeCb(size, tag)
-            bytes = util.copyfileobj(f, outF)
-
         if (self.restHandler and self.path.startswith(self.restUri)):
             self.restHandler.handle(self, self.path)
             return
@@ -120,62 +108,19 @@ class HttpRequests(SimpleHTTPRequestHandler):
                 # handle CNY-1142
                 self.send_error(400)
                 return None
-            urlPath = posixpath.normpath(urllib.unquote(self.path))
-            localName = self.tmpDir + "/" + queryString + "-out"
-            if os.path.realpath(localName) != localName:
+            csfr = ChangesetFileReader(self.tmpDir)
+            items = csfr.getItems(queryString)
+            if items is None:
                 self.send_error(404)
                 return None
-
-            if localName.endswith(".cf-out"):
-                try:
-                    f = open(localName, "r")
-                except IOError:
-                    self.send_error(404)
-                    return None
-
-                os.unlink(localName)
-
-                items = []
-                totalSize = 0
-                for l in f.readlines():
-                    (path, size, isChangeset, preserveFile) = l.split()
-                    size = int(size)
-                    isChangeset = int(isChangeset)
-                    preserveFile = int(preserveFile)
-                    totalSize += size
-                    items.append((path, size, isChangeset, preserveFile))
-                f.close()
-                del f
-            else:
-                try:
-                    size = os.stat(localName).st_size;
-                except OSError:
-                    self.send_error(404)
-                    return None
-                items = [ (localName, size, 0, 0) ]
-                totalSize = size
+            totalSize = sum(x[1] for x in items)
 
             self.send_response(200)
             self.send_header("Content-type", "application/octet-stream")
             self.send_header("Content-Length", str(totalSize))
             self.end_headers()
 
-            for path, size, isChangeset, preserveFile in items:
-                if isChangeset:
-                    cs = FileContainer(util.ExtendedFile(path,
-                                                         buffering = False))
-                    cs.dump(self.wfile.write,
-                            lambda name, tag, size, f, sizeCb:
-                                _writeNestedFile(self.wfile, name, tag, size, f,
-                                                 self.netRepos, sizeCb))
-
-                    del cs
-                else:
-                    f = open(path)
-                    util.copyfileobj(f, self.wfile)
-
-                if not preserveFile:
-                    os.unlink(path)
+            csfr.writeItems(items, self.wfile)
         else:
             self.send_error(501)
 
@@ -437,6 +382,7 @@ if SSL:
         sslCert, sslKey = cfg.sslCert, cfg.sslKey
         ctx.load_cert_chain(sslCert, sslKey)
         return ctx
+
 
 class ServerConfig(netserver.ServerConfig):
 

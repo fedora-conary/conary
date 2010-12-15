@@ -160,6 +160,9 @@ class RpmCapsuleOperation(SingleCapsuleOperation):
         # force the nss modules to be loaded from outside of any chroot
         pwd.getpwall()
 
+        # Create lockdir early since RPM 4.3.3-32 won't do it.
+        util.mkdirChain(os.path.join(self.root, 'var/lock/rpm'))
+
         ts = rpm.TransactionSet(self.root, rpm._RPMVSF_NOSIGNATURES)
 
         installNvras = set()
@@ -518,7 +521,10 @@ class RpmCapsuleOperation(SingleCapsuleOperation):
                                    ignoreMissing = True)
 
 def rpmExpandMacro(str):
-    rawRpmModulePath = rpm._rpm.__file__
+    if getattr(rpm, '_rpm', ''):
+        rawRpmModulePath = rpm._rpm.__file__
+    else:
+        rawRpmModulePath = rpm.__file__
     sonames = [ x[1] for x in elf.inspect(rawRpmModulePath)[0]
                     if x[0] == 'soname']
     rpmLibs = [ x for x in sonames if re.match('librpm[-\.].*so', x) ]
