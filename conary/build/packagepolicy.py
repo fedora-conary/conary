@@ -426,7 +426,7 @@ class ComponentSpec(_filterSpec):
                                           self.derivedFilters,
                                           self.configFilters,
                                           self.baseFilters):
-            if not isinstance(filteritem, filter.Filter):
+            if not isinstance(filteritem, (filter.Filter, filter.PathSet)):
                 name = filteritem[0] % self.macros
                 assert(name != 'source')
                 args, kwargs = self.filterExpArgs(filteritem[1:], name=name)
@@ -613,7 +613,7 @@ class PackageSpec(_filterSpec):
         # can change the package to which a file is assigned
         for filteritem in itertools.chain(self.extraFilters,
                                           self.derivedFilters):
-            if not isinstance(filteritem, filter.Filter):
+            if not isinstance(filteritem, (filter.Filter, filter.PathSet)):
                 name = filteritem[0] % self.macros
                 if not trove.troveNameIsValid(name):
                     self.error('%s is not a valid package name', name)
@@ -2131,7 +2131,12 @@ class _dependency(policy.Policy):
                                   pathString)
 
                 curClass = deps.SonameDependencies
-                flags.extend((x, deps.FLAG_SENSE_REQUIRED) for x in abi[1])
+                for flag in abi[1]:
+                    if flag == 'Linux':
+                        flags.append(('SysV', deps.FLAG_SENSE_REQUIRED))
+                    else:
+                        flags.append((flag, deps.FLAG_SENSE_REQUIRED))
+
                 dep = deps.Dependency(main, flags)
 
             elif depClass == 'abi':

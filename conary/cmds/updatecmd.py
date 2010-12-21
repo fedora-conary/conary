@@ -502,9 +502,10 @@ def doModelUpdate(cfg, sysmodel, modelFile, otherArgs, **kwargs):
         defArgs = [x for x in otherArgs
                     if not (x.startswith('+') or x.startswith('-'))]
 
-        # find any default arguments that represent changesets
+        # find any default arguments that represent changesets to
+        # install/update
         for defArg in list(defArgs):
-            if util.exists(defArg):
+            if kwargs['updateByDefault'] and os.path.isfile(defArg):
                 try:
                     cs = changeset.ChangeSetFromFile(defArg)
                     fromChangesets.append((cs, defArg))
@@ -519,7 +520,7 @@ def doModelUpdate(cfg, sysmodel, modelFile, otherArgs, **kwargs):
             rmArgs += defArgs
 
         if rmArgs:
-            sysmodel.appendTroveOpByName('erase', text=rmArgs)
+            sysmodel.appendOpByName('erase', text=rmArgs)
 
         updateName = { False: 'update',
                        True: 'install' }[kwargs['keepExisting']]
@@ -577,10 +578,10 @@ def doModelUpdate(cfg, sysmodel, modelFile, otherArgs, **kwargs):
                     for x in disallowedChangesets))
 
         if addArgs:
-            sysmodel.appendTroveOpByName(updateName, text=addArgs)
+            sysmodel.appendOpByName(updateName, text=addArgs)
 
         if patchArgs:
-            sysmodel.appendTroveOpByName('patch', text=patchArgs)
+            sysmodel.appendOpByName('patch', text=patchArgs)
 
 
         kwargs['fromChangesets'] = [x[0] for x in fromChangesets]
@@ -678,7 +679,7 @@ def _updateTroves(cfg, applyList, **kwargs):
                                                    callback = callback,
                                                    changeSetList =
                                                         changeSetList)
-            tcPath = cfg.root + '/var/lib/conarydb/modelcache'
+            tcPath = cfg.root + cfg.dbPath + '/modelcache'
             if loadTroveCache:
                 if os.path.exists(tcPath):
                     log.info("loading %s", tcPath)
@@ -970,7 +971,9 @@ def updateAll(cfg, **kwargs):
     if restartInfo:
         util.rmtree(restartInfo, ignore_errors=True)
 
-def changePins(cfg, troveStrList, pin = True):
+def changePins(cfg, troveStrList, pin = True,
+               systemModel = None, systemModelFile = None,
+               callback = None):
     client = conaryclient.ConaryClient(cfg)
     client.checkWriteableRoot()
     troveList = []
@@ -980,6 +983,10 @@ def changePins(cfg, troveStrList, pin = True):
         troveList += troves
 
     client.pinTroves(troveList, pin = pin)
+
+    if systemModel and systemModelFile and not pin:
+        doModelUpdate(cfg, systemModel, systemModelFile, [], callback=callback)
+
 
 def revert(cfg):
     conaryclient.ConaryClient.revertJournal(cfg)

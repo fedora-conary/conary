@@ -130,6 +130,12 @@ Creates a local changeset, which represents the changes made on the
 local system to \fItrovename\fP, relative to the package as it is
 represented in the repository.
 .TP
+.B pin/unpin [+/-]\fItrovename\fP[=\fRversion][\fI<flavor>\fP]\fP+
+Pin / unpin all instances of \fItrovename\fP (or only a specified
+\fIversion\fP) on the local system.  In system model mode, after
+unpinning, a "conary sync" operation is then run, in order to keep
+the system in sync with the system model.
+.TP
 .B rblist
 Lists available rollbacks.
 .TP
@@ -290,10 +296,9 @@ autoResolve flag in conaryrc, \-\-no-resolve
 is the default behavior.
 .TP
 .B \-\-no-restart
-Do not restart Conary after applying a critical update.
-This option is only useful in the context of installing troves in
-a chroot, therefore it requires the \fB\-\-root \fI<root>\fR option
-to be used.
+Do not restart Conary after applying a critical update. It is implied whenever
+an alternate root is provided using the \fB\-\-root \fI<root>\fR option
+or through a configuration file.
 .TP
 .B \-\-replace-files
 Equivalent to specifying \fB\-\-replace\-managed\-files\fR,
