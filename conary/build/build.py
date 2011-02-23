@@ -4100,12 +4100,12 @@ class BuildMSI(BuildAction):
             platform = 'x64'
         else:
             platform = 'x86'
-        jobCfg.product.platform = platform
+        jobCfg.product.package.platform = platform
 
         # Send component information
-        jobCfg.product.components = []
+        jobCfg.product.package.components = []
         for uuid, path in componentInfo:
-            jobCfg.product.components.append(dict(
+            jobCfg.product.package.components.append(dict(
                 uuid=uuid,
                 path=path,
             ), post=False)
@@ -4179,9 +4179,14 @@ class BuildMSI(BuildAction):
         self.recipe.winHelper = WindowsHelper()
         self.recipe.winHelper.productName = self.name
         self.recipe.winHelper.version = self.version
-        self.recipe.winHelper.platform = platform
         self.recipe.winHelper.productCode = str(results.productCode)
         self.recipe.winHelper.upgradeCode = str(results.upgradeCode)
+
+        # If we are talking to a WBS that exposes output MSI info, use it.
+        if 'msi' in results.elements:
+            self.recipe.winHelper.platform = str(results.msi.platform)
+        else:
+            self.recipe.winHelper.platform = platform
 
         self.recipe.winHelper.components = [
             (x.uuid.encode('utf-8'), x.path.encode('utf-8'))
