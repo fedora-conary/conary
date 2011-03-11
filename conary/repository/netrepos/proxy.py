@@ -98,6 +98,7 @@ class ProxyCaller:
                 raise errors.InsufficientPermission
 
             raise
+        self._lastProxy = self._transport.usedProxy
 
         if args[0] < 60:
             # strip off useAnonymous flag
@@ -132,6 +133,7 @@ class ProxyCaller:
     def __init__(self, url, proxy, transport):
         self.url = url
         self.proxy = proxy
+        self._lastProxy = None
         self._transport = transport
 
 
@@ -217,6 +219,8 @@ class RepositoryCaller(xmlshims.NetworkConvertors):
         self.remoteIp = remoteIp
         self.rawUrl = rawUrl
         self.isSecure = isSecure
+        self.lastProxy = None
+
 
 class RepositoryCallFactory:
 
@@ -946,12 +950,14 @@ class ChangesetFilter(BaseProxy):
                 recurse, withFiles, withFileContents, excludeAutoSource,
                 mirrorMode, infoOnly)
             for neededHere in neededList ]
+        forceProxy = caller._lastProxy
 
         for (url, csInfoList), neededHere in zip(urlInfoList, neededList):
             if url is None:
                 # Only size information was received; nothing further needed
                 continue
-            self._cacheChangeSet(url, neededHere, csInfoList, changeSetList)
+            self._cacheChangeSet(url, neededHere, csInfoList, changeSetList,
+                    forceProxy)
 
         # hash versions to quickly find the index in verPath
         verHash = dict((csVer, idx) for (idx, csVer) in enumerate(verPath))
@@ -1043,9 +1049,11 @@ class ChangesetFilter(BaseProxy):
             csNoInjection.append((i, trvJobTup))
         return csWithInjection, csNoInjection
 
-    def _cacheChangeSet(self, url, neededHere, csInfoList, changeSetList):
+    def _cacheChangeSet(self, url, neededHere, csInfoList, changeSetList,
+            forceProxy):
         try:
-            inF = transport.ConaryURLOpener(proxyMap=self.proxyMap).open(url)
+            inF = transport.ConaryURLOpener(proxyMap=self.proxyMap).open(url,
+                    forceProxy=forceProxy)
         except transport.TransportError, e:
             raise errors.RepositoryError(str(e))
 
