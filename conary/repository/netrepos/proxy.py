@@ -1016,7 +1016,8 @@ class ChangesetFilter(BaseProxy):
             for x in extraFiles ]
         url, sizes = caller.getFileContents(clientVersion, fileList)
         url = self._localUrl(url)
-        self._saveFileContents(fileList, url, sizes)
+        self._saveFileContents(fileList, url, sizes,
+                forceProxy=caller._lastProxy)
         newCs = changeset.ChangeSet()
         for pathId, path, fileId, fileVersion, fileObj in extraFiles:
             cachedPath = self.contents.hashToPath(
@@ -1583,12 +1584,13 @@ class FileCachingChangesetFilter(BaseCachingChangesetFilter):
             (url, sizes) = caller.getFileContents(
                     clientVersion, neededFiles, False)
             url = self._localUrl(url)
-            self._saveFileContents(neededFiles, url, sizes)
+            self._saveFileContents(neededFiles, url, sizes,
+                    forceProxy=caller._lastProxy)
 
         url, sizes = self._saveFileContentsChangeset(clientVersion, fileList)
         return url, sizes
 
-    def _saveFileContents(self, fileList, url, sizes):
+    def _saveFileContents(self, fileList, url, sizes, forceProxy):
         # insure that the size is an integer -- protocol version
         # 44 returns a string to avoid XML-RPC marshal limits
         sizes = [ int(x) for x in sizes ]
@@ -1604,7 +1606,8 @@ class FileCachingChangesetFilter(BaseCachingChangesetFilter):
             dest = util.ExtendedFile(tmpPath, "w+", buffering = False)
             os.close(fd)
             os.unlink(tmpPath)
-            inUrl = transport.ConaryURLOpener(proxyMap=self.proxyMap).open(url)
+            inUrl = transport.ConaryURLOpener(proxyMap=self.proxyMap).open(url,
+                    forceProxy=forceProxy)
             size = util.copyfileobj(inUrl, dest)
             inUrl.close()
             dest.seek(0)
@@ -1742,7 +1745,8 @@ class ProxyRepositoryServer(Memcache, FileCachingChangesetFilter):
         dest = util.ExtendedFile(tmpPath, "w+", buffering = False)
         os.close(fd)
         os.unlink(tmpPath)
-        inUrl = transport.ConaryURLOpener(proxyMap=self.proxyMap).open(url)
+        inUrl = transport.ConaryURLOpener(proxyMap=self.proxyMap).open(url,
+                forceProxy=caller._lastProxy)
         size = util.copyfileobj(inUrl, dest)
         inUrl.close()
         dest.seek(0)
@@ -1836,7 +1840,8 @@ class CachingRepositoryServer(FileCachingChangesetFilter, RepositoryFilterMixin)
             elif not authCheckOnly:
                 url, sizes = result
                 url = self._localUrl(url)
-                self._saveFileContents(capsuleBasedFileList, url, sizes)
+                self._saveFileContents(capsuleBasedFileList, url, sizes,
+                        forceProxy=caller._lastProxy)
         if otherFileList:
             result = caller.getFileContents(clientVersion, otherFileList,
                 authCheckOnly)
@@ -1845,7 +1850,8 @@ class CachingRepositoryServer(FileCachingChangesetFilter, RepositoryFilterMixin)
             elif not authCheckOnly:
                 url, sizes = result
                 url = self._localUrl(url)
-                self._saveFileContents(otherFileList, url, sizes)
+                self._saveFileContents(otherFileList, url, sizes,
+                        forceProxy=caller._lastProxy)
         # Now reassemble the results
         if authCheckOnly:
             # The getFileContents calls above will raise an exception if
