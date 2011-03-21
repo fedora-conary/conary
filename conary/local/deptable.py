@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2004-2009 rPath, Inc.
+# Copyright (c) 2011 rPath, Inc.
 #
 # This program is distributed under the terms of the Common Public License,
 # version 1.0. A copy of this license should have been distributed with this
@@ -16,8 +16,6 @@ from conary import dbstore, trove, versions
 from conary.deps import deps
 from conary.lib import graph
 from conary.local import schema
-
-import itertools
 
 DEP_REASON_ORDER = 0
 DEP_REASON_OLD_NEEDS_OLD = 1
@@ -535,7 +533,6 @@ class DependencyChecker:
                                 wasIn):
         from conary.local import sqldb
         flavorCache = sqldb.FlavorCache()
-        versionCache = sqldb.VersionCache()
         def _depItemsToSet(idxList, depInfoList, provInfo = True,
                            wasIn = None):
             failedSets = [ None ] * len(self.nodes)
@@ -788,7 +785,6 @@ class DependencyChecker:
         def _findRelatedJobs(job):
             # return jobs that must be updated before or after job
             # due to dependencies in order to have a consistent system.
-            jobs = []
             if job[2][0]:
                 nodeId = self.newInfoToNodeId[job[0], job[2][0], job[2][1]]
             else:
@@ -839,8 +835,6 @@ class DependencyChecker:
         # no dependency reason to order them a particular way.
         jobComp = {}
         for jobSet in jobSets:
-            value = []
-
             isCritical = 0
             for idx, jobSetList in enumerate(reversed(criticalJobSetsList)):
                 if jobSet in jobSetList:
@@ -1005,13 +999,8 @@ class DependencyChecker:
         return self.g
 
 
-    def _findOrdering(self, result, brokenByErase, satisfied, linkedJobSets,
-                      criticalJobs, finalJobs):
+    def _findOrdering(self, criticalJobs):
         changeSetList = []
-        self._createDepGraph(result, brokenByErase, satisfied, linkedJobSets,
-                             criticalJobs, finalJobs,
-                             createCollectionEdges=True)
-
         componentLists, criticalUpdates = self._stronglyConnect(criticalJobs)
 
         for componentList in componentLists:
@@ -1065,9 +1054,6 @@ class DependencyChecker:
                 (provides, requires) = allDeps.pop(0)
 
                 newNodeId = self._addJob(job)
-                #requires = requires - provides
-                r1 = requires.copy()
-
                 newRequires = self._findNewDependencies(newNodeId, requires,
                                                         self.requiresToNodeId)
 
@@ -1115,7 +1101,7 @@ class DependencyChecker:
         self.cu.execute(stmt)
 
         # it's a shame we instantiate this, but merging _gatherResoltion
-        # and _findOrdering doesn't seem like any fun
+        # and _createDepGraph doesn't seem like any fun
         sqlResult = self.cu.fetchall()
 
         # None in depList means the dependency got resolved; we track
@@ -1155,40 +1141,19 @@ class DependencyChecker:
                     continue
                 l.add(reqDepNum)
 
-        self.cu.execute("update tmprequires set satisfied=1 where "
+            self.cu.execute("update tmprequires set satisfied=1 where "
                         "depNum in (%s)" % ",".join(["%d" % x for x in l]))
 
-        class _CheckResult:
-            def getChangeSetList(self):
-                self._order()
-                return self._changeSetList
-
-            def getCriticalUpdates(self):
-                self._order()
-                return self._criticalUpdates
-
-            def _order(self):
-                if self._changeSetList is None:
-                    a, b = self.orderer()
-                    self._changeSetList = a
-                    self._criticalUpdates = b
-
-            def __init__(self, unsatisfiedList, unresolveableList,
-                         depGraph, orderer):
-                self.unsatisfiedList = unsatisfiedList
-                self.unresolveableList = unresolveableList
-                self.depGraph = depGraph
-                self._changeSetList = None
-                self._criticalUpdates = None
-                self._linkedJobs = set()
-                self.orderer = orderer
-
         if createGraph or self.findOrdering:
-            orderer = lambda : self._findOrdering(sqlResult,
-                                                  brokenByErase, satisfied,
-                                                  linkedJobSets = linkedJobs,
-                                                  criticalJobs = criticalJobs,
-                                                  finalJobs = finalJobs)
+            # During the dependency resolution process this method is invoked
+            # several times, each time with a disjoint set of edges. Therefore
+            # we need to merge the edges we're given each time around in order
+            # to calculate the ordering later.
+            self._createDepGraph(sqlResult, brokenByErase, satisfied,
+                    linkedJobs, criticalJobs, finalJobs,
+                    createCollectionEdges=True)
+
+            orderer = lambda : self._findOrdering(criticalJobs)
         else:
             orderer = lambda : ([], [])
 
@@ -1205,21 +1170,6 @@ class DependencyChecker:
         return self._check(linkedJobs=linkedJobs,
                            createGraph=False, criticalJobs=criticalJobs,
                            finalJobs=finalJobs)
-
-    def createDepGraph(self, linkedJobs=None):
-        result = self._check(linkedJobs=linkedJobs, createGraph=True)
-
-        externalDepGraph = graph.DirectedGraph()
-        for nodeId in depGraph.iterNodes():
-            # translate from nodeId -> job for external consumption
-            job = self.nodes[nodeId][0]
-            externalDepGraph.addNode(job)
-        for fromNode, toNode in depGraph.iterEdges():
-            externalDepGraph.addEdge(self.nodes[fromNode][0],
-                                     self.nodes[toNode][0])
-
-        return (result.unsatisfiedList, result.unresolveableList,
-                result.externalDepGraph)
 
     def done(self):
         if self.inTransaction:
@@ -1642,3 +1592,29 @@ class DependencyDatabase(DependencyTables):
     def resolve(self, label, depSetList, leavesOnly=False,
                 troveIdList = None):
         return self.resolveToIds(list(depSetList), troveIdList = troveIdList)
+
+
+class _CheckResult(object):
+
+    def __init__(self, unsatisfiedList, unresolveableList, depGraph, orderer):
+        self.unsatisfiedList = unsatisfiedList
+        self.unresolveableList = unresolveableList
+        self.depGraph = depGraph
+        self._changeSetList = None
+        self._criticalUpdates = None
+        self._linkedJobs = set()
+        self.orderer = orderer
+
+    def getChangeSetList(self):
+        self._order()
+        return self._changeSetList
+
+    def getCriticalUpdates(self):
+        self._order()
+        return self._criticalUpdates
+
+    def _order(self):
+        if self._changeSetList is None:
+            a, b = self.orderer()
+            self._changeSetList = a
+            self._criticalUpdates = b
