@@ -162,6 +162,10 @@ class MetaCapsuleOperations(CapsuleOperation):
         self.capsuleClasses = {}
 
     def apply(self, justDatabase = False, noScripts = False):
+        tmpDir = os.path.join(self.root, 'var/tmp')
+        if not os.path.isdir(tmpDir):
+            util.mkdirChain(tmpDir)
+            os.chmod(tmpDir, 01777)
         fileDict = {}
         for kind, obj in sorted(self.capsuleClasses.items()):
             fileDict.update(
@@ -169,8 +173,8 @@ class MetaCapsuleOperations(CapsuleOperation):
 
         try:
             for ((pathId, fileId, sha1), path) in sorted(fileDict.items()):
-                tmpfd, tmpname = tempfile.mkstemp(prefix = path,
-                                                  suffix = '.conary')
+                tmpfd, tmpname = tempfile.mkstemp(dir=tmpDir, prefix=path,
+                        suffix='.conary')
                 fObj = self.changeSet.getFileContents(pathId, fileId)[1].get()
                 d = digestlib.sha1()
                 util.copyfileobj(fObj, os.fdopen(tmpfd, "w"), digest = d)

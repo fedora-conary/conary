@@ -367,15 +367,8 @@ class HttpHandler(WebHandler):
             troves = sorted(parentTrove.iterTroveList(strongRefs=True))
             return self._write("group_contents", troveName = t, troves = troves)
         fileIters = []
-        # XXX: Needs to be optimized
-        # the walkTroveSet() will request a changeset for every
-        # trove in the chain.  then iterFilesInTrove() will
-        # request it again just to retrieve the filelist.
-        for trv in self.repos.walkTroveSet(parentTrove, withFiles = False):
-            files = self.repos.iterFilesInTrove(
-                trv[0],
-                trv[1],
-                trv[2],
+        for n, v, f in self.repos.walkTroveSet(parentTrove, withFiles = False):
+            files = self.repos.iterFilesInTrove(n, v, f,
                 withFiles = True,
                 sortByPath = True)
             fileIters.append(files)
