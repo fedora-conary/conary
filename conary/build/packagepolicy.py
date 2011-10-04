@@ -1987,14 +1987,10 @@ class _dependency(policy.Policy):
         else:
             sysPath = [x.strip() for x in stdout.split('\0') if x.strip()]
 
-        if sysPath == []:
+        if not sysPath and not useDestDir:
             # probably a cross-build -- let's try a decent assumption
             # for the syspath.
-            if useDestDir:
-                self.info("Failed to detect system python path in destdir, "
-                        "using fallback")
-            else:
-                self.info("Failed to detect system python path, using fallback")
+            self.info("Failed to detect system python path, using fallback")
             pyVer = self._getPythonVersionFromPath(pythonPath, destdir)
             if not pyVer and self.bootstrapPythonFlags is not None:
                 pyVer = self._getPythonVersionFromFlags(
@@ -2876,7 +2872,10 @@ class Provides(_dependency):
                 # hopefully we'll find this init as a deeper import at some
                 # other point in the sysPath
                 continue
-            elif 'site-packages' in newDepPath:
+            elif ('site-packages' in newDepPath
+                    or 'lib-dynload' in newDepPath
+                    or 'plat-linux' in newDepPath
+                    ):
                 # site-packages should be specifically excluded since both it
                 # and its parent are always in sys.path. However, invalid
                 # python package names in general are allowed due to certain
