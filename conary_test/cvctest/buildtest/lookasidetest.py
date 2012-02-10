@@ -135,6 +135,7 @@ class TestLookaside(PackageRecipe):
 
 
     def testRefresh(self):
+        # Using 2?param specifically to verify CNY-3722
         recipeStr = """
 class RefreshTest(PackageRecipe):
     name = 'test'
@@ -143,7 +144,7 @@ class RefreshTest(PackageRecipe):
 
     def setup(r):
         r.addSource('%s1', dir='/foo/')
-        r.addSource('%s2', dir='/foo/')
+        r.addSource('%s2?param', dir='/foo/')
 """
         self.resetRepository()
         cfg = self.cfg
@@ -162,18 +163,18 @@ class RefreshTest(PackageRecipe):
                 contentURL, contentURL))
             self.addfile('test.recipe')
             self.logCheck(self.commit, (),
-                [ '. Trying http://localhost:[0-9]*/1...',
-                  '. Downloading http://localhost:[0-9]*/1...',
-                  '. Trying http://localhost:[0-9]*/2...',
-                  '. Downloading http://localhost:[0-9]*/2...' ],
+                [ '. Trying http://localhost:[0-9]*/1\.\.\.',
+                  '. Downloading http://localhost:[0-9]*/1\.\.\.',
+                  '. Trying http://localhost:[0-9]*/2\?param\.\.\.',
+                  '. Downloading http://localhost:[0-9]*/2\?param\.\.\.' ],
                 regExp = True)
             self.cookItem(self.repos, cfg, 'test')
             self.updatePkg(self.workDir, 'test')
             self.verifyFile(self.workDir + '/foo/1', '/1:1\n')
-            self.verifyFile(self.workDir + '/foo/2', '/2:1\n')
-            self.logCheck(self.refresh, ('2',),
-                [ '. Trying http://localhost:[0-9]*/2...',
-                  '. Downloading http://localhost:[0-9]*/2...' ],
+            self.verifyFile(self.workDir + '/foo/2?param', '/2?param:1\n')
+            self.logCheck(self.refresh, ('2*',),
+                [ '. Trying http://localhost:[0-9]*/2\?param\.\.\.',
+                  '. Downloading http://localhost:[0-9]*/2\?param\.\.\.' ],
                 regExp = True)
             self.cookItem(self.repos, cfg, 'test.recipe')
             self.logCheck(self.commit, (),
@@ -181,20 +182,20 @@ class RefreshTest(PackageRecipe):
             self.cookItem(self.repos, cfg, 'test')
             self.updatePkg(self.workDir, 'test')
             self.verifyFile(self.workDir + '/foo/1', '/1:1\n')
-            self.verifyFile(self.workDir + '/foo/2', '/2:2\n')
+            self.verifyFile(self.workDir + '/foo/2?param', '/2?param:2\n')
             self.logCheck(self.refresh, (),
                 [
-                  '. Trying http://localhost:[0-9]*/1...',
-                  '. Downloading http://localhost:[0-9]*/1...',
-                  '. Trying http://localhost:[0-9]*/2...',
-                  '. Downloading http://localhost:[0-9]*/2...' ],
+                  '. Trying http://localhost:[0-9]*/1\.\.\.',
+                  '. Downloading http://localhost:[0-9]*/1\.\.\.',
+                  '. Trying http://localhost:[0-9]*/2\?param\.\.\.',
+                  '. Downloading http://localhost:[0-9]*/2\?param\.\.\.' ],
                 regExp = True)
             self.cookItem(self.repos, cfg, 'test.recipe')
             self.commit()
             self.cookItem(self.repos, cfg, 'test')
             self.updatePkg(self.workDir, 'test')
             self.verifyFile(self.workDir + '/foo/1', '/1:2\n')
-            self.verifyFile(self.workDir + '/foo/2', '/2:3\n')
+            self.verifyFile(self.workDir + '/foo/2?param', '/2?param:3\n')
 
         finally:
             contentServer.kill()
@@ -227,10 +228,10 @@ class RefreshTest(PackageRecipe):
                 contentURL, contentURL))
             self.addfile('test.recipe')
             self.logCheck(self.commit, (),
-                [ '. Trying http://localhost:[0-9]*/1...',
-                  '. Downloading http://localhost:[0-9]*/1...',
-                  '. Trying http://localhost:[0-9]*/2...',
-                  '. Downloading http://localhost:[0-9]*/2...' ],
+                [ '. Trying http://localhost:[0-9]*/1\.\.\.',
+                  '. Downloading http://localhost:[0-9]*/1\.\.\.',
+                  '. Trying http://localhost:[0-9]*/2\.\.\.',
+                  '. Downloading http://localhost:[0-9]*/2\.\.\.' ],
                 regExp = True)
             self.cookItem(self.repos, cfg, 'test')
 
@@ -240,8 +241,8 @@ class RefreshTest(PackageRecipe):
             file(negativePath, "w")
 
             self.logCheck(self.refresh, ('1', ),
-                [ '. Trying http://localhost:[0-9]*/1...',
-                  '. Downloading http://localhost:[0-9]*/1...', ],
+                [ '. Trying http://localhost:[0-9]*/1\.\.\.',
+                  '. Downloading http://localhost:[0-9]*/1\.\.\.', ],
                 regExp = True)
             self.failIf(os.path.exists(negativePath))
         finally:
@@ -529,22 +530,18 @@ class ArchiveTest(PackageRecipe):
             self.logFilter.add()
 
             # first, look for a file that does not exist
-            assert(lookaside.findAll(self.cfg, repCache,
-                                     'http://example.conary.com/thisdir/foo', 'test', (testdir,),
-                                     allowNone=True) is None)
+            assert lookaside.findAll(self.cfg, repCache,
+                    contentURL + '/404/foo', 'test', (testdir,), allowNone=True
+                ) is None
             # make sure that we got a negative cache entry
-            assert(os.stat('/'.join((self.cacheDir, 
-                                     'NEGATIVE/test/example.conary.com/thisdir/foo')
-                                    )))
+            assert os.stat(self.cacheDir + '/NEGATIVE/test/404/foo')
 
             # now look for a file that does exist
-            assert(lookaside.findAll(self.cfg, repCache,
-                                     'http://www.google.com/intl/en/help/customize.html', 'test',
-                                     (testdir,), allowNone=True) is not None)
+            assert lookaside.findAll(self.cfg, repCache,
+                    contentURL + '/200/foo', 'test', (testdir,), allowNone=True
+                ) is not None
             # make sure that we got a the cache entry
-            assert(os.stat('/'.join((self.cacheDir, 
-                                     'test/www.google.com/intl/en/help/customize.html')
-                                    )))
+            assert os.stat(self.cacheDir + '/test/200/foo')
 
             # put two different files with the same name name in the cache 
             fooDir = os.path.join(self.cacheDir,'test/foo.conary.com/foo/')
@@ -666,7 +663,10 @@ def getRequester():
             else:
                 accessed[self.path] = 1
             response = '%s:%d\n' %(self.path, accessed[self.path])
-            self.send_response(200)
+            if '404' in self.path:
+                self.send_response(404)
+            else:
+                self.send_response(200)
             self.send_header("Content-type", "text/unknown")
             self.send_header("Content-Length", len(response))
             self.end_headers()

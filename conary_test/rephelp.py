@@ -88,7 +88,7 @@ class _NoneArg:
 NoneArg = _NoneArg()
 
 _File = filetypes._File
-server_path = os.path.abspath(cny_server.__file__)
+server_path = os.path.abspath(cny_server.__file__).replace('.pyc', '.py')
 
 def _isIndividual():
 # Make it compatible with testsuites that are not class-based yet
@@ -1120,7 +1120,7 @@ class RepositoryHelper(testhelp.TestCase):
                                           **kwargs)
             # We keep this open to stop others from reusing the port; tell the
             # code which tracks fd leaks so this doesn't reported
-            if hasattr(server, 'socket'):
+            if getattr(server, 'socket', None):
                 self._expectedFdLeak(server.socket.fileno())
         else:
             server.setNeedsReset()
@@ -1245,7 +1245,7 @@ class RepositoryHelper(testhelp.TestCase):
                 try:
                     repos.addNewAsciiPGPKey(label, 'test', ascKey)
                     break
-                except errors.InsufficientPermission:
+                except repo_errors.InsufficientPermission:
                     # This seems to be the #1 cause of transient test failures.
                     time.sleep(0.1)
             else:
@@ -1346,7 +1346,11 @@ class RepositoryHelper(testhelp.TestCase):
 
         level = log.getVerbosity()
         log.setVerbosity(logLevel)
-        cvccmd.sourceCommand(self.cfg, [ "refresh", globs ], None,
+        if globs:
+            args = [globs]
+        else:
+            args = []
+        cvccmd.sourceCommand(self.cfg, ["refresh"] + args, None,
                              callback=callback)
         log.setVerbosity(level)
 
@@ -3456,7 +3460,7 @@ cache_log %(cacheLog)s
 cache_store_log %(storeLog)s
 pid_filename %(pidFile)s
 
-auth_param basic program %(libdir)s/squid/ncsa_auth %(passwdFile)s
+auth_param basic program %(authprog)s %(passwdFile)s
 auth_param basic children 5
 auth_param basic realm Squid proxy-caching web server
 auth_param basic credentialsttl 2 hours
@@ -3560,6 +3564,13 @@ visible_hostname localhost.localdomain
         from distutils import sysconfig
         libdir = sysconfig.get_config_vars()['LIBDIR']
 
+        for name in ('basic_ncsa_auth', 'ncsa_auth'):
+            authprog = os.path.join(libdir, 'squid', name)
+            if os.path.exists(authprog):
+                break
+        else:
+            raise RuntimeError("Couldn't find basic_ncsa_auth for squid")
+
         opts = dict(port = self.port, authPort = self.authPort,
                     cacheDir = self.cacheDir,
                     accessLog = self.accessLog, storeLog = self.storeLog,
@@ -3568,7 +3579,9 @@ visible_hostname localhost.localdomain
                     acls = "\n".join(acls),
                     libdir = libdir,
                     user = os_utils.effectiveUser,
-                    group = os_utils.effectiveGroup)
+                    group = os_utils.effectiveGroup,
+                    authprog = authprog,
+                    )
         open(self.configFile, "w+").write(self.configTemplate % opts)
 
         # Write password file too
@@ -3653,24 +3666,32 @@ class HTTPServerController(base_server.BaseServer):
             return
 
         try:
-            if ssl:
-                klass = SecureHTTPServer
-                ctx = SSL.Context("sslv23")
-                if isinstance(ssl, tuple):
-                    # keypair
-                    sslCert, sslKey = ssl
+            try:
+                if ssl:
+                    klass = SecureHTTPServer
+                    ctx = SSL.Context("sslv23")
+                    if isinstance(ssl, tuple):
+                        # keypair
+                        sslCert, sslKey = ssl
+                    else:
+                        # defaults
+                        sslCert, sslKey = 'ssl-cert.crt', 'ssl-cert.key'
+                    sslCert = os.path.join(resources.get_archive(sslCert))
+                    sslKey = os.path.join(resources.get_archive(sslKey))
+                    ctx.load_cert_chain(sslCert, sslKey)
+                    args = (ctx,)
                 else:
-                    # defaults
-                    sslCert, sslKey = 'ssl-cert.crt', 'ssl-cert.key'
-                sslCert = os.path.join(resources.get_archive(sslCert))
-                sslKey = os.path.join(resources.get_archive(sslKey))
-                ctx.load_cert_chain(sslCert, sslKey)
-                args = (ctx,)
-            else:
-                klass = BaseHTTPServer.HTTPServer
-                args = ()
-            httpServer = klass(("127.0.0.1", self.port), requestHandler, *args)
-            httpServer.serve_forever()
+                    klass = BaseHTTPServer.HTTPServer
+                    args = ()
+                # Sorry for modifying a stdlib class, but this is in a dead-end
+                # forked process after all! Need to bind to "IPv6 all" so that
+                # both IPv4 and IPv6 connections to "localhost" succeed.
+                klass.address_family = socket.AF_INET6
+                httpServer = klass(('::', self.port), requestHandler, *args)
+                httpServer.serve_forever()
+                os._exit(0)
+            except:
+                traceback.print_exc()
         finally:
             os._exit(1)
 
