@@ -82,7 +82,8 @@ class ConaryRouter(object):
             if request.path_info_pop() != elem:
                 return self.notFound(environ, start_response)
         try:
-            return self.handleRequest(request, start_response)
+            response = self.handleRequest(request, start_response)
+            return response(environ, start_response)
         except:
             exc_info = sys.exc_info()
             return self.handleError(request, exc_info, start_response)
@@ -355,7 +356,11 @@ class ConaryHandler(object):
 
         localAddr = '%s:%s' % (self.request.server_name,
                 self.request.server_port)
-        request = self.requestFilter.fromWire(params)
+        try:
+            request = self.requestFilter.fromWire(params)
+        except (TypeError, ValueError, IndexError):
+            return self._makeError('400 Bad Request',
+                    "Malformed XMLRPC arguments")
 
         # Execution phase -- locate and call the target method
         try:

@@ -2389,6 +2389,9 @@ class TimestampedMap(object):
             if stale or now <= v[1] ]
         return ret
 
+    def __reduce__(self):
+        return (type(self), (self.delta,))
+
 
 def statFile(pathOrFile, missingOk=False, inodeOnly=False):
     """Return a (dev, inode, size, mtime, ctime) tuple of the given file.
@@ -2429,3 +2432,29 @@ def iterFileChunks(fobj):
         if not data:
             break
         yield data
+
+
+class cachedProperty(object):
+    """A decorator that creates a memoized property. The first time the
+    property is accessed, the decorated function is called and the return value
+    is used as the value of the property. It is also stored so that future
+    accesses bypass the function.
+
+    The memoized value is stored into the instance dictionary. Because __set__
+    is not implemented, this is a "non-data descriptor" and thus the instance
+    dictionary overrides the descriptor.
+    """
+
+    def __init__(propself, func):
+        propself.func = func
+        try:
+            propself.__doc__ = func.__doc__
+        except AttributeError:
+            pass
+
+    def __get__(propself, ownself, owncls):
+        if ownself is None:
+            return propself
+        ret = propself.func(ownself)
+        setattr(ownself, propself.func.func_name, ret)
+        return ret
