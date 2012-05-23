@@ -232,6 +232,11 @@ class ConaryHandler(object):
                     break
         self.isSecure = req.scheme == 'https'
 
+        if req.environ.get('PYTHONPATH'):
+            # Allow SetEnv to propagate, so that commit hooks can have the
+            # proper environment
+            os.environ['PYTHONPATH'] = req.environ['PYTHONPATH']
+
         urlBase = req.application_url
         if cfg.closed:
             # Closed repository -- returns an exception for all requests
@@ -352,7 +357,7 @@ class ConaryHandler(object):
 
         try:
             params, method = util.xmlrpcLoad(stream)
-        except (xmlrpclib.ResponseError, ValueError, UnicodeDecodeError):
+        except:
             return self._makeError('400 Bad Request',
                     "Malformed XMLRPC request")
 
