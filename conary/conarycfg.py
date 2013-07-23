@@ -655,6 +655,8 @@ class ConaryContext(ConfigSection):
                                             '/media', '/initrd' ))
     windowsBuildService   = CfgString
 
+    systemIdScript        = CfgPath
+
     def _resetSigMap(self):
         self.resetToDefault('signatureKeyMap')
 
