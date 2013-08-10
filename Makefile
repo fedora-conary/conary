@@ -60,13 +60,13 @@ dist:
 	$(MAKE) forcedist
 
 archive:
-	@rm -rf /tmp/rmake-$(VERSION) /tmp/rmake$(VERSION)-tmp
-	@mkdir -p /tmp/rmake-$(VERSION)-tmp
-	@git archive --format tar $(VERSION) | (cd /tmp/rmake-$(VERSION)-tmp/ ; tar x )
-	@mv /tmp/rmake-$(VERSION)-tmp/ /tmp/rmake-$(VERSION)/
-	@dir=$$PWD; cd /tmp; tar -c --bzip2 -f $$dir/rmake-$(VERSION).tar.bz2 rmake-$(VERSION)
+	@rm -rf /tmp/conary-$(VERSION) /tmp/conary$(VERSION)-tmp
+	@mkdir -p /tmp/conary-$(VERSION)-tmp
+	@git archive --format tar $(VERSION) | (cd /tmp/conary-$(VERSION)-tmp/ ; tar x )
+	@mv /tmp/conary-$(VERSION)-tmp/ /tmp/conary-$(VERSION)/
+	@dir=$$PWD; cd /tmp; tar -c --bzip2 -f $$dir/conary-$(VERSION).tar.bz2 conary-$(VERSION)
 	@rm -rf /tmp/pesign-$(VERSION)
-	@echo "The archive is in rmake-$(VERSION).tar.bz2"
+	@echo "The archive is in conary-$(VERSION).tar.bz2"
 
 version:
 	$(SED) -i 's/@NEW@/$(VERSION)/g' NEWS
