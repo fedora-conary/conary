@@ -19,7 +19,6 @@ all: subdirs
 
 export TOPDIR = $(shell pwd)
 export VERSION = 2.5.0
-export CHANGESET = $(shell ./scripts/hg-version.sh)
 export DISTDIR = $(TOPDIR)/conary-$(VERSION)
 export prefix = /usr
 export lib = $(shell uname -m | $(SED) -r '/x86_64|ppc64|s390x|sparc64/{s/.*/lib64/;q};s/.*/lib/')
@@ -61,12 +60,13 @@ dist:
 	$(MAKE) forcedist
 
 archive:
-	rm -rf $(DISTDIR)
-	mkdir $(DISTDIR)
-	hg archive -t tbz2 \
-		-r conary-$(VERSION) \
-		-X conary_test \
-		conary-$(VERSION).tar.bz2
+	@rm -rf /tmp/rmake-$(VERSION) /tmp/rmake$(VERSION)-tmp
+	@mkdir -p /tmp/rmake-$(VERSION)-tmp
+	@git archive --format tar $(VERSION) | (cd /tmp/rmake-$(VERSION)-tmp/ ; tar x )
+	@mv /tmp/rmake-$(VERSION)-tmp/ /tmp/rmake-$(VERSION)/
+	@dir=$$PWD; cd /tmp; tar -c --bzip2 -f $$dir/rmake-$(VERSION).tar.bz2 rmake-$(VERSION)
+	@rm -rf /tmp/pesign-$(VERSION)
+	@echo "The archive is in rmake-$(VERSION).tar.bz2"
 
 version:
 	$(SED) -i 's/@NEW@/$(VERSION)/g' NEWS
@@ -90,7 +90,7 @@ smoketest: archive
 forcedist: $(dist_files) smoketest
 
 tag:
-	hg tag -f conary-$(VERSION)
+	git tag $(VERSION) refs/heads/master
 
 docs:
 	cd scripts; ./gendocs
