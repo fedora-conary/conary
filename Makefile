@@ -65,7 +65,7 @@ archive:
 	@git archive --format tar $(VERSION) | (cd /tmp/conary-$(VERSION)-tmp/ ; tar x )
 	@mv /tmp/conary-$(VERSION)-tmp/ /tmp/conary-$(VERSION)/
 	@dir=$$PWD; cd /tmp; tar -c --bzip2 -f $$dir/conary-$(VERSION).tar.bz2 conary-$(VERSION)
-	@rm -rf /tmp/pesign-$(VERSION)
+	@rm -rf /tmp/conary-$(VERSION)
 	@echo "The archive is in conary-$(VERSION).tar.bz2"
 
 version:
